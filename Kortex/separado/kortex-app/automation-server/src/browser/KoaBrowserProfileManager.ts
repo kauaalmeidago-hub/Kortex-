@@ -193,22 +193,35 @@ export class KoaBrowserProfileManager {
   }
 
   private async validateHapvidaSession(page: Page) {
-    if (!this.config.hapvidaAuthenticatedSelector) {
-      throw new AutomationError("SESSION_VALIDATION_NOT_CONFIGURED", "Validacao de sessao Hapvida nao configurada.", {
-        safeDetails: "Configure HAPVIDA_AUTHENTICATED_SELECTOR com um seletor visivel somente apos login.",
-        retryable: false,
-      });
-    }
-
     if (this.config.hapvidaPortalUrl && page.url() === "about:blank") {
       await page.goto(this.config.hapvidaPortalUrl, { waitUntil: "domcontentloaded" });
     }
 
     try {
-      await page.locator(this.config.hapvidaAuthenticatedSelector).first().waitFor({
-        state: "visible",
-        timeout: this.config.authTimeoutMs,
-      });
+      const configuredLocator = this.config.hapvidaAuthenticatedSelector
+        ? page.locator(this.config.hapvidaAuthenticatedSelector).first()
+        : undefined;
+      const cardPeriodLocator = page.getByText(/datas?\s+de\s+ades[aã]o/i).first();
+
+      if (configuredLocator) {
+        await configuredLocator
+          .waitFor({
+            state: "visible",
+            timeout: Math.min(this.config.authTimeoutMs, 5_000),
+          })
+          .catch(async () => {
+            await cardPeriodLocator.waitFor({
+              state: "visible",
+              timeout: this.config.authTimeoutMs,
+            });
+          });
+      } else {
+        await cardPeriodLocator.waitFor({
+          state: "visible",
+          timeout: this.config.authTimeoutMs,
+        });
+      }
+
       await this.writeStatus({
         initialized: true,
         hapvidaSessionValidated: true,
