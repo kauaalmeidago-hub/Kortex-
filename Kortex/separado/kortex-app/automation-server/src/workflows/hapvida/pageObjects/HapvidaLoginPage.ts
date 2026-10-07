@@ -21,22 +21,33 @@ export class HapvidaLoginPage {
 
   companyField() {
     return this.page
-      .getByLabel(/empresa|c[oó]digo|login|usu[aá]rio|usuario|email/i)
+      .locator("#p_cd_empresa, input[name='p_cd_empresa']")
+      .or(this.page.getByLabel(/empresa|c[oó]digo|login|usu[aá]rio|usuario|email/i))
       .or(this.page.getByPlaceholder(/empresa|c[oó]digo|login|usu[aá]rio|usuario|email/i))
       .or(this.page.getByRole("textbox").first());
   }
 
   passwordField() {
     return this.page
-      .getByLabel(/senha/i)
+      .locator("#p_cd_senha, input[name='p_cd_senha']")
+      .or(this.page.getByLabel(/senha/i))
       .or(this.page.getByPlaceholder(/senha/i))
       .or(this.page.locator('input[type="password"]').first());
   }
 
   submitButton() {
     return this.page
-      .getByRole("button", { name: /entrar|acessar|login|ok/i })
+      .locator("#btn_entrar")
+      .or(this.page.getByRole("button", { name: /entrar|acessar|login|ok/i }))
       .or(this.page.locator('input[type="submit"][value="OK"], input[type="button"][value="OK"], input[value*="entrar" i], input[value*="acessar" i]').first());
+  }
+
+  invalidIdentificationMessage() {
+    return this.page.getByText(/identifica[cç][aã]o\s+inv[aá]lida/i);
+  }
+
+  passwordStillVisible() {
+    return this.passwordField().first().isVisible().catch(() => false);
   }
 
   async login(credential: PortalCredential) {

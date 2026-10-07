@@ -110,6 +110,22 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
 
       const sessionAfterLogin = await context.browserManager.validatePortalSession("hapvida", page);
       if (!sessionAfterLogin) {
+        if (await loginPage.invalidIdentificationMessage().isVisible().catch(() => false)) {
+          throw new AutomationError("AUTHENTICATION_FAILED", "Credencial Hapvida nao aceita pelo portal.", {
+            safeDetails: "O portal retornou Identificacao invalida para o codigo/senha cadastrados.",
+            step: "authenticate",
+            retryable: false,
+          });
+        }
+
+        if (await loginPage.passwordStillVisible()) {
+          throw new AutomationError("AUTHENTICATION_FAILED", "Credencial Hapvida nao confirmou acesso ao portal.", {
+            safeDetails: "O portal continuou na tela de login apos o envio da credencial.",
+            step: "authenticate",
+            retryable: false,
+          });
+        }
+
         throw createReauthRequiredError("Login executado, mas o portal Hapvida nao confirmou uma sessao autenticada.");
       }
 
