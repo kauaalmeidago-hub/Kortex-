@@ -36,6 +36,17 @@ function Mask-Username([string]$Value) {
   return "$($Value.Substring(0, 2))***$($Value.Substring($Value.Length - 2))"
 }
 
+function Protect-LocalSecret([string]$Value) {
+  Add-Type -AssemblyName System.Security
+  $bytes = [System.Text.Encoding]::UTF8.GetBytes($Value)
+  $protected = [Security.Cryptography.ProtectedData]::Protect(
+    $bytes,
+    $null,
+    [Security.Cryptography.DataProtectionScope]::CurrentUser
+  )
+  return [Convert]::ToBase64String($protected)
+}
+
 if (-not (Test-Path -LiteralPath $CsvPath)) {
   throw "CSV nao encontrado: $CsvPath"
 }
@@ -46,8 +57,8 @@ $matches = @()
 foreach ($row in $rows) {
   $url = [string]$row.url
   $name = [string]$row.name
-  $host = Get-HostFromUrl $url
-  $searchText = "$name $url $host".ToLowerInvariant()
+  $entryHost = Get-HostFromUrl $url
+  $searchText = "$name $url $entryHost".ToLowerInvariant()
   $hasAllowedHost = $false
 
   foreach ($term in $AllowedHostTerms) {
@@ -60,7 +71,7 @@ foreach ($row in $rows) {
   if ($hasAllowedHost -and -not [string]::IsNullOrWhiteSpace([string]$row.username) -and -not [string]::IsNullOrWhiteSpace([string]$row.password)) {
     $matches += [PSCustomObject]@{
       Name = $name
-      Host = $host
+      Host = $entryHost
       Username = [string]$row.username
       Password = [string]$row.password
     }
@@ -108,8 +119,7 @@ try {
     password = $selected.Password
   } | ConvertTo-Json -Compress
 
-  $securePayload = ConvertTo-SecureString $payload -AsPlainText -Force
-  $encrypted = ConvertFrom-SecureString $securePayload
+  $encrypted = Protect-LocalSecret $payload
   $file = Join-Path $secretsDir "$(ConvertTo-SafeFileName $ref).credential.dpapi"
   Set-Content -LiteralPath $file -Value $encrypted -NoNewline
 

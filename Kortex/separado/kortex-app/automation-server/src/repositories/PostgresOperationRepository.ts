@@ -207,7 +207,8 @@ export class PostgresOperationRepository implements PersistentAutomationQueueRep
       leaseSeconds,
     ]);
 
-    return result.rows[0] ? this.toOperation(result.rows[0]) : undefined;
+    const row = result.rows[0];
+    return row?.id ? this.toOperation(row) : undefined;
   }
 
   async renewLease(operationId: string, workerId: string, leaseSeconds: number) {

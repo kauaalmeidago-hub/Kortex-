@@ -25,7 +25,7 @@ NODE_ENV=production
 AUTOMATION_MODE=local-worker
 DATABASE_URL=
 SUPABASE_URL=
-SUPABASE_SERVICE_ROLE_KEY=
+SUPABASE_SECRET_KEY=
 ARTIFACT_BUCKET=koa-artifacts
 
 KOA_WORKER_ID=koa-relacionamento-01
@@ -48,7 +48,7 @@ HAPVIDA_CARD_PORTAL_URL=https://webhap.hapvida.com.br/pls/webhap/pk_carteira_pro
 HAPVIDA_AUTHENTICATED_SELECTOR=
 ```
 
-Nunca coloque `SUPABASE_SERVICE_ROLE_KEY`, senhas, cookies ou storageState em variaveis `VITE_*`.
+Nunca coloque `SUPABASE_SECRET_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, senhas, cookies ou storageState em variaveis `VITE_*`.
 
 ## Preparar sessao Hapvida
 

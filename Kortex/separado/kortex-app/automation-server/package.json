@@ -11,6 +11,7 @@
     "test": "vitest run src",
     "browser:onboard": "tsx src/scripts/koa-browser-onboard.ts",
     "browser:check": "tsx src/scripts/koa-browser-check.ts",
+    "credential:register": "tsx src/scripts/register-portal-credential.ts",
     "session:bootstrap": "tsx src/scripts/session-bootstrap.ts",
     "check": "npm run typecheck && npm test"
   },

@@ -11,6 +11,8 @@ export interface AutomationConfig {
   repositoryMode: "sqlite" | "postgres";
   automationMode: "api-worker" | "api" | "worker" | "local-worker";
   supabaseUrl?: string;
+  supabaseSecretKey?: string;
+  /** @deprecated Use supabaseSecretKey/SUPABASE_SECRET_KEY for backend workers. */
   supabaseServiceRoleKey?: string;
   artifactBucket: string;
   secretProviderMode: "dpapi" | "remote" | "mock";
@@ -153,6 +155,8 @@ export function loadConfig(): AutomationConfig {
   const requestedProvider = process.env.BROWSER_PROVIDER as AutomationConfig["browserProvider"] | undefined;
   const browserProvider =
     requestedProvider ?? (browserMode === "onboarding" || browserMode === "debug" ? "persistent-chrome" : "headless-local");
+  const supabaseSecretKey =
+    optionalEnv(process.env.SUPABASE_SECRET_KEY) ?? optionalEnv(process.env.SUPABASE_SERVICE_ROLE_KEY);
 
   return {
     host,
@@ -162,7 +166,8 @@ export function loadConfig(): AutomationConfig {
     repositoryMode: process.env.DATABASE_URL ? "postgres" : "sqlite",
     automationMode: (process.env.AUTOMATION_MODE as AutomationConfig["automationMode"]) ?? "api-worker",
     supabaseUrl: process.env.SUPABASE_URL,
-    supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
+    supabaseSecretKey,
+    supabaseServiceRoleKey: supabaseSecretKey,
     artifactBucket: process.env.ARTIFACT_BUCKET ?? "koa-artifacts",
     secretProviderMode: (process.env.SECRET_PROVIDER as AutomationConfig["secretProviderMode"]) ?? "dpapi",
     workerId: process.env.KOA_WORKER_ID ?? process.env.WORKER_ID ?? `local-${process.pid}`,

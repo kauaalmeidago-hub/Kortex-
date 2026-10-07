@@ -27,8 +27,8 @@ export class PostgresCredentialResolver implements CredentialResolver {
        FROM public.automation_credentials
        WHERE company_id = $1
          AND operator = $2
-         AND status = 'active'
-       ORDER BY last_verified_at DESC NULLS LAST, created_at DESC
+         AND status IN ('active', 'needs_verification')
+       ORDER BY (status = 'active') DESC, last_verified_at DESC NULLS LAST, created_at DESC
        LIMIT 1`,
       [input.companyId, input.operator],
     );

@@ -30,9 +30,11 @@ function runPowerShell(script: string, input: string) {
 export async function protectWithDpapi(plaintext: string) {
   const script = [
     "$ErrorActionPreference = 'Stop'",
+    "Add-Type -AssemblyName System.Security",
     "$plaintext = [Console]::In.ReadToEnd()",
-    "$secure = ConvertTo-SecureString $plaintext -AsPlainText -Force",
-    "[Console]::Out.Write((ConvertFrom-SecureString $secure))",
+    "$bytes = [Text.Encoding]::UTF8.GetBytes($plaintext)",
+    "$protected = [Security.Cryptography.ProtectedData]::Protect($bytes, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)",
+    "[Console]::Out.Write([Convert]::ToBase64String($protected))",
   ].join("; ");
 
   return runPowerShell(script, plaintext);
@@ -41,11 +43,11 @@ export async function protectWithDpapi(plaintext: string) {
 export async function unprotectWithDpapi(encryptedPayload: string) {
   const script = [
     "$ErrorActionPreference = 'Stop'",
-    "$encrypted = [Console]::In.ReadToEnd()",
-    "$secure = ConvertTo-SecureString $encrypted",
-    "$ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)",
-    "try { [Console]::Out.Write([Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)) }",
-    "finally { if ($ptr -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) } }",
+    "Add-Type -AssemblyName System.Security",
+    "$encrypted = [Console]::In.ReadToEnd().Trim()",
+    "$protected = [Convert]::FromBase64String($encrypted)",
+    "$bytes = [Security.Cryptography.ProtectedData]::Unprotect($protected, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)",
+    "[Console]::Out.Write([Text.Encoding]::UTF8.GetString($bytes))",
   ].join("; ");
 
   return runPowerShell(script, encryptedPayload);

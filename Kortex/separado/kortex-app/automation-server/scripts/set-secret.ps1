@@ -14,6 +14,17 @@ function ConvertTo-SafeFileName([string]$Value) {
   return $base64.Replace("+", "-").Replace("/", "_").TrimEnd("=")
 }
 
+function Protect-LocalSecret([string]$Value) {
+  Add-Type -AssemblyName System.Security
+  $bytes = [System.Text.Encoding]::UTF8.GetBytes($Value)
+  $protected = [Security.Cryptography.ProtectedData]::Protect(
+    $bytes,
+    $null,
+    [Security.Cryptography.DataProtectionScope]::CurrentUser
+  )
+  return [Convert]::ToBase64String($protected)
+}
+
 $root = Split-Path -Parent $PSScriptRoot
 $secretsDir = Join-Path $root "automation\secrets"
 New-Item -ItemType Directory -Force -Path $secretsDir | Out-Null
@@ -28,8 +39,7 @@ try {
     password = $plainPassword
   } | ConvertTo-Json -Compress
 
-  $securePayload = ConvertTo-SecureString $payload -AsPlainText -Force
-  $encrypted = ConvertFrom-SecureString $securePayload
+  $encrypted = Protect-LocalSecret $payload
   $file = Join-Path $secretsDir "$(ConvertTo-SafeFileName $Ref).credential.dpapi"
   Set-Content -LiteralPath $file -Value $encrypted -NoNewline
   Write-Host "Credencial salva para ref: $Ref"

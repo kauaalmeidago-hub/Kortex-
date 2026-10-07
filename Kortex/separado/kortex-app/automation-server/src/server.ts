@@ -100,8 +100,8 @@ function operationResponse(operation: OperationRecord) {
 export async function createServer({ config, repository, eventBus, queue, credentialResolver }: ServerDeps) {
   const app = fastify({ logger: false });
   const authClient: SupabaseClient | undefined =
-    config.supabaseUrl && config.supabaseServiceRoleKey
-      ? createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
+    config.supabaseUrl && config.supabaseSecretKey
+      ? createClient(config.supabaseUrl, config.supabaseSecretKey, {
           auth: { persistSession: false, autoRefreshToken: false },
         })
       : undefined;
@@ -140,7 +140,7 @@ export async function createServer({ config, repository, eventBus, queue, creden
 
   app.get("/ready", async () => ({
     database: "ok",
-    storage: config.supabaseUrl && config.supabaseServiceRoleKey ? "ok" : "local",
+    storage: config.supabaseUrl && config.supabaseSecretKey ? "ok" : "local",
     secrets: config.secretProviderMode === "remote" ? "remote" : "configured",
     worker: "ok",
   }));

@@ -28,8 +28,8 @@ const browserManager = new BrowserManager(config);
 const secretProvider: SecretProvider =
   config.secretProviderMode === "remote" ? new RemoteSecretProvider() : new DpapiSecretProvider(config.secretsDir);
 const artifactStorage: ArtifactStorage =
-  config.supabaseUrl && config.supabaseServiceRoleKey
-    ? new SupabaseArtifactStorage(config.supabaseUrl, config.supabaseServiceRoleKey, config.artifactBucket)
+  config.supabaseUrl && config.supabaseSecretKey
+    ? new SupabaseArtifactStorage(config.supabaseUrl, config.supabaseSecretKey, config.artifactBucket)
     : new LocalArtifactStorage(config.artifactsDir);
 const credentialResolver: CredentialResolver =
   config.repositoryMode === "postgres" && config.databaseUrl
