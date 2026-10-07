@@ -1,0 +1,32 @@
+{
+  "name": "@kortex/automation-server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run src",
+    "browser:onboard": "tsx src/scripts/koa-browser-onboard.ts",
+    "browser:check": "tsx src/scripts/koa-browser-check.ts",
+    "session:bootstrap": "tsx src/scripts/session-bootstrap.ts",
+    "check": "npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.2",
+    "@supabase/supabase-js": "^2.117.2",
+    "fastify": "^5.2.0",
+    "pg": "^8.23.1",
+    "playwright": "^1.49.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.9.1",
+    "@types/pg": "^8.23.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.3",
+    "vitest": "^5.0.3"
+  }
+}

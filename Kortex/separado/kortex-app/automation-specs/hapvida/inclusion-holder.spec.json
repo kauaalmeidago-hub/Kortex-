@@ -1,0 +1,19 @@
+{
+  "operationType": "INCLUSION_HOLDER",
+  "operator": "hapvida",
+  "source": {
+    "type": "telegram",
+    "chat": "Koa / @alaive_bot",
+    "collectionDate": "2026-10-06",
+    "confidence": "low"
+  },
+  "status": "unsupported_until_real_mapping",
+  "enabled": false,
+  "blockingGaps": [
+    "portal menu not mapped",
+    "required fields not confirmed",
+    "documents not confirmed",
+    "health questionnaire not mapped",
+    "submit/review/status validation not mapped"
+  ]
+}

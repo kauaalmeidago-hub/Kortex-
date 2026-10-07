@@ -1,0 +1,43 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+supabase/.temp/
+.env
+.env.*
+!.env.example
+*.local
+*.tsbuildinfo
+.tmp-*
+
+# Koa local automation runtime data
+automation-server/automation/.auth/
+automation-server/automation/browser-profile/
+automation-server/automation/browser-profile-status.json
+automation-server/automation/*.lock
+automation-server/automation/*.lock.json
+automation-server/automation/secrets/
+automation-server/automation/data/*.sqlite
+automation-server/automation/data/*.sqlite-*
+automation-server/automation/data/artifacts/
+automation-server/automation/data/downloads/
+automation-server/automation/logs/
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

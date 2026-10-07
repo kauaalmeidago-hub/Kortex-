@@ -1,0 +1,210 @@
+import os from "node:os";
+import type { AutomationConfig } from "../config.js";
+import type { BrowserManager } from "../browser/BrowserManager.js";
+import type { OperationEventBus } from "../events/EventBus.js";
+import type { SecretProvider } from "../secrets/SecretProvider.js";
+import type { PersistentAutomationQueueRepository } from "../repositories/AutomationOperationRepository.js";
+import { runWorkflow } from "../workflows/WorkflowRunner.js";
+import { AutomationError, isAbortError } from "../errors.js";
+import type { OperationError, OperationRecord, OperationStatus } from "../types.js";
+import type { ArtifactStorage } from "../storage/ArtifactStorage.js";
+import type { WorkflowContext } from "../workflows/WorkflowContext.js";
+
+interface PersistentWorkerDeps {
+  config: AutomationConfig;
+  repository: PersistentAutomationQueueRepository;
+  eventBus: OperationEventBus;
+  browserManager: BrowserManager;
+  secretProvider: SecretProvider;
+  artifactStorage: ArtifactStorage;
+}
+
+export class PersistentWorker {
+  private stopping = false;
+  private currentController?: AbortController;
+  private heartbeatTimer?: NodeJS.Timeout;
+
+  constructor(private readonly deps: PersistentWorkerDeps) {}
+
+  stop() {
+    this.stopping = true;
+    this.currentController?.abort();
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+  }
+
+  async run() {
+    await this.heartbeat("online", { mode: this.deps.config.automationMode });
+    this.heartbeatTimer = setInterval(() => {
+      void this.heartbeat("online", { mode: this.deps.config.automationMode });
+    }, this.deps.config.workerHeartbeatIntervalMs);
+
+    try {
+      while (!this.stopping) {
+        await this.deps.repository.markStaleOperationsForReview().catch(() => 0);
+        const operation = await this.deps.repository.claimNext(this.deps.config.workerId, this.deps.config.workerLeaseSeconds);
+        if (!operation) {
+          await this.sleep(this.deps.config.workerPollIntervalMs);
+          continue;
+        }
+
+        await this.execute(operation);
+      }
+    } finally {
+      if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+      await this.deps.repository.markWorkerOffline?.(this.deps.config.workerId).catch(() => undefined);
+    }
+  }
+
+  private async execute(operation: OperationRecord) {
+    const controller = new AbortController();
+    this.currentController = controller;
+    const lockKey = `${operation.portal}:company:${operation.companyId}`;
+    let leaseTimer: NodeJS.Timeout | undefined;
+    let cancelWatchTimer: NodeJS.Timeout | undefined;
+
+    try {
+      if (operation.status === "cancelling" || operation.cancelRequestedAt) {
+        await this.updateStatus(operation.id, "cancelled", "Operacao cancelada antes de iniciar");
+        return;
+      }
+
+      const lockAcquired = await this.deps.repository.acquireLock(
+        lockKey,
+        operation.id,
+        this.deps.config.workerId,
+        this.deps.config.workerLeaseSeconds,
+      );
+
+      if (!lockAcquired) {
+        throw new AutomationError("LOCK_NOT_ACQUIRED", "Nao foi possivel adquirir lock da empresa.", {
+          safeDetails: `Lock: ${lockKey}`,
+          retryable: true,
+        });
+      }
+
+      leaseTimer = setInterval(() => {
+        void this.deps.repository.renewLease(operation.id, this.deps.config.workerId, this.deps.config.workerLeaseSeconds);
+      }, Math.max(5000, Math.floor((this.deps.config.workerLeaseSeconds * 1000) / 3)));
+
+      cancelWatchTimer = setInterval(() => {
+        void this.abortIfCancelRequested(operation.id, controller);
+      }, Math.max(1500, this.deps.config.workerPollIntervalMs));
+
+      await runWorkflow(operation, controller.signal, {
+        config: this.deps.config,
+        repository: this.deps.repository,
+        browserManager: this.deps.browserManager,
+        secretProvider: this.deps.secretProvider,
+        artifactStorage: this.deps.artifactStorage,
+        updateStatus: (status, step, data) => this.updateStatus(operation.id, status, step, data),
+        emitEvent: (event) => this.emitEvent({ ...event, operationId: event.operationId ?? operation.id }),
+      });
+    } catch (error) {
+      if (controller.signal.aborted || isAbortError(error)) {
+        await this.updateStatus(operation.id, "cancelled", "Operacao cancelada pelo usuario");
+      } else {
+        await this.fail(operation.id, this.toOperationError(error));
+      }
+    } finally {
+      if (leaseTimer) clearInterval(leaseTimer);
+      if (cancelWatchTimer) clearInterval(cancelWatchTimer);
+      await this.deps.repository.releaseLock(lockKey, operation.id, this.deps.config.workerId).catch(() => undefined);
+      this.currentController = undefined;
+    }
+  }
+
+  private async abortIfCancelRequested(operationId: string, controller: AbortController) {
+    if (controller.signal.aborted) return;
+    const operation = await Promise.resolve(this.deps.repository.get(operationId)).catch(() => undefined);
+    if (operation?.status === "cancelling" || operation?.cancelRequestedAt) {
+      controller.abort();
+    }
+  }
+
+  private async heartbeat(status: "online" | "draining" | "offline", metadata?: Record<string, unknown>) {
+    const heartbeat = this.deps.repository.upsertWorkerHeartbeat;
+    if (!heartbeat) return;
+    await heartbeat.call(this.deps.repository, this.deps.config.workerId, status, {
+      ...metadata,
+      host: os.hostname(),
+      repositoryMode: this.deps.config.repositoryMode,
+      browserProvider: this.deps.config.browserProvider,
+      cardIssueEnabled: this.deps.config.features.cardIssue,
+    }).catch(() => undefined);
+  }
+
+  private async updateStatus(operationId: string, status: OperationStatus, step: string, data?: Record<string, unknown>) {
+    const operation = await this.deps.repository.setStatus(operationId, status, step, this.deps.config.workerId);
+    const event = await this.deps.repository.appendEvent({
+      operationId,
+      type: status === "cancelled" ? "operation.cancelled" : status === "success" ? "operation.success" : "operation.status",
+      status,
+      step,
+      data,
+      createdAt: new Date().toISOString(),
+    });
+    this.deps.eventBus.publish(event);
+
+    return operation ?? this.deps.repository.get(operationId);
+  }
+
+  private async emitEvent(event: Parameters<WorkflowContext["emitEvent"]>[0]) {
+    const created = await this.deps.repository.appendEvent({
+      ...event,
+      createdAt: event.createdAt ?? new Date().toISOString(),
+    });
+    this.deps.eventBus.publish(created);
+    return created;
+  }
+
+  private async fail(operationId: string, error: OperationError) {
+    await this.deps.repository.update(operationId, {
+      status: "error",
+      error,
+      currentStep: error.step ?? "worker_error",
+      finishedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const event = await this.deps.repository.appendEvent({
+      operationId,
+      type: "operation.error",
+      status: "error",
+      step: error.step,
+      data: { error, hostname: os.hostname() },
+      createdAt: new Date().toISOString(),
+    });
+    this.deps.eventBus.publish(event);
+  }
+
+  private toOperationError(error: unknown): OperationError {
+    if (error instanceof AutomationError) {
+      return {
+        code: error.code,
+        message: error.message,
+        safeDetails: error.safeDetails,
+        step: error.step,
+        retryable: error.retryable,
+      };
+    }
+
+    if (error instanceof Error) {
+      return {
+        code: "WORKER_ERROR",
+        message: "Nao foi possivel concluir a movimentacao.",
+        safeDetails: error.message,
+        retryable: false,
+      };
+    }
+
+    return {
+      code: "WORKER_ERROR",
+      message: "Nao foi possivel concluir a movimentacao.",
+      retryable: false,
+    };
+  }
+
+  private sleep(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "kortex-workspace",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix Kortex/separado/kortex-app run dev -- --host 0.0.0.0 --port 5173",
+    "build": "npm --prefix Kortex/separado/kortex-app run build",
+    "test": "npm --prefix Kortex/separado/kortex-app test",
+    "lint": "npm --prefix Kortex/separado/kortex-app run lint",
+    "preview": "npm --prefix Kortex/separado/kortex-app run preview -- --host 0.0.0.0 --port 4173",
+    "automation:dev": "npm --prefix Kortex/separado/kortex-app/automation-server run dev",
+    "automation:build": "npm --prefix Kortex/separado/kortex-app/automation-server run build",
+    "automation:test": "npm --prefix Kortex/separado/kortex-app/automation-server test"
+  }
+}

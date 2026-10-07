@@ -1,0 +1,23 @@
+{
+  "operationType": "EXCLUSION_DEPENDENT",
+  "operator": "hapvida",
+  "source": {
+    "type": "telegram",
+    "chat": "Koa / @alaive_bot",
+    "collectionDate": "2026-10-06",
+    "confidence": "low"
+  },
+  "status": "unsupported_until_real_mapping",
+  "enabled": false,
+  "productRules": [
+    "Do not request manual exclusion date.",
+    "Do not infer dependent cancellation selectors from titular cancellation."
+  ],
+  "blockingGaps": [
+    "Pré-cancelamento Dependente Ativo screen not mapped",
+    "dependent lookup fields not confirmed",
+    "titular responsible fields not confirmed",
+    "relationship field/options not confirmed",
+    "final confirmation/status validation not mapped"
+  ]
+}

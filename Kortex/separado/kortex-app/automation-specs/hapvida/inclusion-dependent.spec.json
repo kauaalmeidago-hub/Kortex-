@@ -1,0 +1,20 @@
+{
+  "operationType": "INCLUSION_DEPENDENT",
+  "operator": "hapvida",
+  "source": {
+    "type": "telegram",
+    "chat": "Koa / @alaive_bot",
+    "collectionDate": "2026-10-06",
+    "confidence": "low"
+  },
+  "status": "unsupported_until_real_mapping",
+  "enabled": false,
+  "blockingGaps": [
+    "dependent inclusion screen not mapped",
+    "titular lookup not confirmed",
+    "dependent fields not confirmed",
+    "relationship options not confirmed",
+    "documents not confirmed",
+    "submit/review/status validation not mapped"
+  ]
+}

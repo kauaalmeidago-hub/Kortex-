@@ -1,0 +1,41 @@
+{
+  "operationType": "CARD_ISSUE",
+  "operator": "hapvida",
+  "source": {
+    "type": "telegram",
+    "chat": "Koa / @alaive_bot",
+    "collectionDate": "2026-10-06",
+    "confidence": "partial"
+  },
+  "status": "needs_portal_mapping",
+  "enabled": false,
+  "frontendPayload": {
+    "required": ["companyId", "beneficiaryName", "periodStart", "periodEnd"],
+    "forbidden": ["password", "token", "cookie", "authorization"]
+  },
+  "backendResolution": {
+    "required": ["credentialRef", "companyMetadata", "portalSession"],
+    "credentialHandling": "SecretProvider or dedicated Chrome session only"
+  },
+  "steps": [
+    "ensureAuthenticated",
+    "selectCompany",
+    "openCardIssueArea",
+    "searchBeneficiary",
+    "validateBeneficiary",
+    "applyPeriod",
+    "requestOrDownloadCard",
+    "validatePdf",
+    "storeArtifact",
+    "verifyResult",
+    "success"
+  ],
+  "blockingGaps": [
+    "HAPVIDA_PORTAL_URL not configured",
+    "HAPVIDA_AUTHENTICATED_SELECTOR not configured",
+    "real card issue menu not mapped",
+    "real beneficiary lookup fields not mapped",
+    "real download behavior not validated"
+  ],
+  "successRule": "Only mark success after a real PDF artifact is downloaded, validated and persisted."
+}

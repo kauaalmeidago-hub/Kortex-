@@ -1,0 +1,487 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* ═══ Light Theme ═══ */
+  :root {
+    --background: 0 0% 97%;
+    --foreground: 220 20% 15%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 220 20% 15%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 20% 15%;
+
+    --primary: 212 72% 50%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 220 20% 15%;
+
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 9% 56%;
+    --muted-dimmer: 220 9% 42%;
+
+    --accent: 212 72% 95%;
+    --accent-foreground: 212 72% 40%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
+    --ring: 212 72% 50%;
+
+    --radius: 0.5rem;
+
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 220 5% 41%;
+    --sidebar-primary: 212 92% 54%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 207 100% 96%;
+    --sidebar-accent-foreground: 220 5% 41%;
+    --sidebar-border: 214 32% 90%;
+    --sidebar-ring: 212 92% 54%;
+    --sidebar-section-label: 220 14% 55%;
+    --sidebar-item-hover: 220 14% 90%;
+
+    --success: 120 45% 55%;
+    --success-foreground: 0 0% 100%;
+    --warning: 40 90% 55%;
+    --warning-foreground: 220 20% 15%;
+    --info: 212 72% 50%;
+    --info-foreground: 0 0% 100%;
+
+    --stage-gray: 0 0% 76%;
+    --stage-yellow-light: 59 100% 85%;
+    --stage-yellow: 59 100% 75%;
+    --stage-yellow-strong: 54 100% 50%;
+    --stage-orange: 36 100% 70%;
+    --stage-pink: 290 100% 90%;
+    --stage-red: 0 70% 78%;
+    --stage-blue: 213 100% 80%;
+    --stage-green: 90 60% 70%;
+  }
+
+  /* ═══ Dark Theme ═══ */
+  .dark {
+    --background: 220 9% 7%;
+    --foreground: 220 14% 90%;
+
+    --card: 220 7% 11%;
+    --card-foreground: 220 14% 90%;
+
+    --popover: 220 7% 11%;
+    --popover-foreground: 220 14% 90%;
+
+    --primary: 212 72% 50%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 8% 14%;
+    --secondary-foreground: 220 14% 80%;
+
+    --muted: 220 8% 14%;
+    --muted-foreground: 220 9% 56%;
+    --muted-dimmer: 220 9% 42%;
+
+    --accent: 212 72% 20%;
+    --accent-foreground: 212 72% 80%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 6% 18%;
+    --input: 220 6% 18%;
+    --ring: 212 72% 50%;
+
+    --sidebar-background: 220 7% 11%;
+    --sidebar-foreground: 220 9% 64%;
+    --sidebar-primary: 212 72% 50%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 212 52% 19%;
+    --sidebar-accent-foreground: 220 14% 82%;
+    --sidebar-border: 220 6% 18%;
+    --sidebar-ring: 212 72% 50%;
+    --sidebar-section-label: 220 14% 55%;
+    --sidebar-item-hover: 220 14% 90%;
+
+    --success: 120 45% 55%;
+    --success-foreground: 0 0% 100%;
+    --warning: 40 90% 55%;
+    --warning-foreground: 220 20% 15%;
+    --info: 212 72% 50%;
+    --info-foreground: 0 0% 100%;
+
+    --stage-gray: 0 0% 76%;
+    --stage-yellow-light: 59 100% 85%;
+    --stage-yellow: 59 100% 75%;
+    --stage-yellow-strong: 54 100% 50%;
+    --stage-orange: 36 100% 70%;
+    --stage-pink: 290 100% 90%;
+    --stage-red: 0 70% 78%;
+    --stage-blue: 213 100% 80%;
+    --stage-green: 90 60% 70%;
+  }
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    width: 100%;
+    min-height: 100%;
+    margin: 0;
+  }
+
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    font-weight: 400;
+    letter-spacing: 0;
+    overflow-x: hidden;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 4px;
+  }
+
+  .koa-symbol-motion {
+    animation: koa-symbol-presence 4s ease-in-out infinite;
+    transform-origin: center;
+    transform: translateZ(0);
+    will-change: transform;
+  }
+
+  .koa-animated-logo {
+    contain: paint;
+    display: inline-block;
+    isolation: isolate;
+    position: relative;
+    transform-origin: center;
+    transform: translateZ(0);
+    vertical-align: middle;
+    will-change: transform, opacity;
+  }
+
+  .koa-animated-logo__body,
+  .koa-animated-logo__eyes {
+    display: block;
+    height: 100%;
+    inset: 0;
+    object-fit: contain;
+    pointer-events: none;
+    position: absolute;
+    width: 100%;
+    will-change: transform, opacity;
+  }
+
+  .koa-animated-logo__body {
+    animation: koa-logo-breathe 4.8s ease-in-out infinite;
+    transform: translateZ(0);
+  }
+
+  .koa-animated-logo__eyes {
+    animation: koa-eyes-look 3.8s ease-in-out infinite;
+    transform: translate3d(0, 0, 0);
+  }
+
+  .koa-animated-logo--processing .koa-animated-logo__body {
+    animation-duration: 2.8s;
+  }
+
+  .koa-animated-logo--processing .koa-animated-logo__eyes {
+    animation-duration: 2.4s;
+  }
+
+  .koa-panel-enter {
+    animation: koa-panel-slide-in 280ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+
+  .koa-panel-exit {
+    animation: koa-panel-slide-out 220ms cubic-bezier(0.4, 0, 0.2, 1) both;
+  }
+
+  @keyframes koa-symbol-presence {
+    0% {
+      transform: translate3d(0, 0, 0) scale(1);
+    }
+    50% {
+      transform: translate3d(0, -1px, 0) scale(1.025);
+    }
+    100% {
+      transform: translate3d(0, 0, 0) scale(1);
+    }
+  }
+
+  @keyframes koa-logo-breathe {
+    0%,
+    100% {
+      opacity: 0.98;
+      transform: translate3d(0, 0, 0) scale(1);
+    }
+    50% {
+      opacity: 1;
+      transform: translate3d(0, -1.5%, 0) scale(1.018);
+    }
+  }
+
+  @keyframes koa-eyes-look {
+    0%,
+    100% {
+      transform: translate3d(0, 0, 0);
+    }
+    25% {
+      transform: translate3d(-4%, 0, 0);
+    }
+    50% {
+      transform: translate3d(0, 0, 0);
+    }
+    75% {
+      transform: translate3d(4%, 0, 0);
+    }
+  }
+
+  @keyframes koa-panel-slide-in {
+    from {
+      opacity: 0.96;
+      transform: translateX(24px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  @keyframes koa-panel-slide-out {
+    from {
+      opacity: 1;
+      transform: translateX(0);
+    }
+    to {
+      opacity: 0.96;
+      transform: translateX(24px);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .koa-symbol-motion,
+    .koa-animated-logo__body,
+    .koa-animated-logo__eyes,
+    .koa-panel-enter,
+    .koa-panel-exit {
+      animation: none;
+    }
+
+    .koa-animated-logo__body,
+    .koa-animated-logo__eyes {
+      transform: translate3d(0, 0, 0);
+    }
+  }
+}
+
+@layer components {
+  .kortex-app-main {
+    font-size: 14px;
+  }
+
+  .kortex-app-main > * {
+    min-width: 0;
+  }
+
+  .inbox-message-composer {
+    container-type: inline-size;
+  }
+
+  .inbox-message-send-label {
+    display: none;
+  }
+
+  @container (min-width: 480px) {
+    .inbox-message-send {
+      width: auto !important;
+      padding-left: 1.25rem !important;
+      padding-right: 1.25rem !important;
+    }
+
+    .inbox-message-send-label {
+      display: inline !important;
+    }
+  }
+
+  .kortex-app-main h1,
+  .kortex-app-main .text-3xl,
+  .kortex-app-main [class~="text-[32px]"] {
+    font-size: 1.25rem !important;
+    line-height: 1.75rem !important;
+  }
+
+  .kortex-app-main h2,
+  .kortex-app-main .text-2xl,
+  .kortex-app-main .text-4xl,
+  .kortex-app-main [class~="text-[40px]"],
+  .kortex-app-main [class~="text-[48px]"],
+  .kortex-app-main [class~="text-[56px]"] {
+    font-size: 1.125rem !important;
+    line-height: 1.5rem !important;
+  }
+
+  .kortex-app-main .text-xl,
+  .kortex-app-main [class~="text-[24px]"],
+  .kortex-app-main [class~="text-[25px]"] {
+    font-size: 1rem !important;
+    line-height: 1.4rem !important;
+  }
+
+  .kortex-app-main .text-lg,
+  .kortex-app-main [class~="text-[18px]"],
+  .kortex-app-main [class~="text-[19px]"],
+  .kortex-app-main [class~="text-[20px]"] {
+    font-size: 0.925rem !important;
+    line-height: 1.3rem !important;
+  }
+
+  .kortex-app-main .px-8,
+  .kortex-app-main .px-7 {
+    padding-left: 1.25rem !important;
+    padding-right: 1.25rem !important;
+  }
+
+  .kortex-app-main .py-8,
+  .kortex-app-main .py-7,
+  .kortex-app-main .py-6 {
+    padding-top: 1rem !important;
+    padding-bottom: 1rem !important;
+  }
+
+  .kortex-app-main .p-8,
+  .kortex-app-main .p-7 {
+    padding: 1.25rem !important;
+  }
+
+  .kortex-app-main .gap-8,
+  .kortex-app-main .gap-7,
+  .kortex-app-main .gap-6 {
+    gap: 1rem !important;
+  }
+
+  .kortex-app-main .mb-8,
+  .kortex-app-main .mb-7,
+  .kortex-app-main .mb-6 {
+    margin-bottom: 1rem !important;
+  }
+
+  .kortex-app-main .mt-8,
+  .kortex-app-main .mt-7,
+  .kortex-app-main .mt-6 {
+    margin-top: 1rem !important;
+  }
+
+  .kortex-app-main .h-16,
+  .kortex-app-main .h-14,
+  .kortex-app-main [class~="h-[66px]"],
+  .kortex-app-main [class~="h-[68px]"] {
+    height: 2.5rem !important;
+  }
+
+  .kortex-app-main .w-16,
+  .kortex-app-main .w-14,
+  .kortex-app-main [class~="w-[70px]"],
+  .kortex-app-main [class~="w-[80px]"] {
+    width: 2.5rem !important;
+  }
+
+  .kortex-app-main .h-20,
+  .kortex-app-main [class~="h-[70px]"],
+  .kortex-app-main [class~="h-[80px]"] {
+    height: 2.75rem !important;
+  }
+
+  .kortex-app-main .w-20,
+  .kortex-app-main [class~="w-[70px]"],
+  .kortex-app-main [class~="w-[80px]"] {
+    width: 2.75rem !important;
+  }
+
+  .kortex-app-main [class~="min-h-[150px]"],
+  .kortex-app-main [class~="min-h-[180px]"] {
+    min-height: 7rem !important;
+  }
+
+  .kortex-app-main [class~="h-[330px]"] {
+    height: 13.5rem !important;
+  }
+
+  .kortex-app-main [class~="w-[430px]"] {
+    width: 19rem !important;
+  }
+
+  .kortex-app-main table th {
+    padding-top: 0.85rem !important;
+    padding-bottom: 0.85rem !important;
+  }
+
+  .kortex-app-main table td {
+    padding-top: 0.75rem !important;
+    padding-bottom: 0.75rem !important;
+  }
+
+  .kortex-app-main .rounded-3xl {
+    border-radius: 1rem !important;
+  }
+
+  .kortex-app-main .rounded-2xl {
+    border-radius: 0.875rem !important;
+  }
+
+  .kortex-app-main [class*="bg-[#020c16]"],
+  .kortex-app-main [class*="bg-[#031827]"],
+  .kortex-app-main [class*="bg-[radial-gradient"],
+  .kortex-app-main [class~="bg-slate-950/45"],
+  .kortex-app-main [class~="bg-slate-950/52"],
+  .kortex-app-main [class~="bg-slate-950/35"],
+  .kortex-app-main [class~="bg-slate-900/70"],
+  .kortex-app-main [class~="bg-slate-900/85"] {
+    background: hsl(var(--card)) !important;
+  }
+
+  .kortex-app-main .text-slate-50,
+  .kortex-app-main .text-slate-100,
+  .kortex-app-main .text-slate-200 {
+    color: hsl(var(--foreground)) !important;
+  }
+
+  .kortex-app-main .text-slate-300,
+  .kortex-app-main .text-slate-400,
+  .kortex-app-main .text-slate-500 {
+    color: hsl(var(--muted-foreground)) !important;
+  }
+
+  .kortex-app-main [class~="border-white/10"],
+  .kortex-app-main [class~="border-white/12"],
+  .kortex-app-main [class~="border-white/15"],
+  .kortex-app-main [class~="border-white/20"],
+  .kortex-app-main [class~="border-white/30"] {
+    border-color: hsl(var(--border)) !important;
+  }
+}

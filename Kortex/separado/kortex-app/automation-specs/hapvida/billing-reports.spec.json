@@ -1,0 +1,34 @@
+{
+  "operationType": "BILLING_REPORTS",
+  "operator": "hapvida",
+  "source": {
+    "type": "telegram",
+    "chat": "Koa / @alaive_bot",
+    "collectionDate": "2026-10-06",
+    "confidence": "high_for_training_content"
+  },
+  "status": "documented_not_current_movement_scope",
+  "enabled": false,
+  "entryPath": [
+    "Kit faturamento",
+    "6 - Hapvida Relatório - Kit",
+    "Hapvida Relatório - Kit",
+    "CPF/CNPJ",
+    "select company key",
+    "PROSSEGUIR"
+  ],
+  "requiredReports": [
+    "Relatório de mensalidade",
+    "Relatório de coparticipação"
+  ],
+  "paths": {
+    "primary": "BAIXAR ARQUIVOS - DOWNLOAD (Novo)",
+    "copartFallback": "BAIXAR ARQUIVOS - DOWNLOAD (Anterior)"
+  },
+  "validationRules": [
+    "Validate description and competence before download.",
+    "Use _PSICO.PDF as coparticipation candidate signal, not as the only validation.",
+    "If only one report is available, download and validate the available report and signal the missing one separately.",
+    "Do not mark success until files are downloaded, saved, opened and validated."
+  ]
+}
