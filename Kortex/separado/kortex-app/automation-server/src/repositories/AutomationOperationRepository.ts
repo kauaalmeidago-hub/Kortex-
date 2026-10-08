@@ -5,7 +5,7 @@ export interface AutomationOperationRepository {
   get(id: string): OperationRecord | undefined | Promise<OperationRecord | undefined>;
   update(
     id: string,
-    patch: Partial<Pick<OperationRecord, "status" | "currentStep" | "result" | "error" | "artifacts" | "finishedAt" | "updatedAt">>,
+    patch: Partial<Pick<OperationRecord, "status" | "currentStep" | "result" | "error" | "artifacts" | "finishedAt" | "updatedAt" | "credentialRef" | "credentialId" | "input">>,
   ): OperationRecord | undefined | Promise<OperationRecord | undefined>;
   appendEvent(event: OperationEvent): OperationEvent | Promise<OperationEvent>;
   getEvents(operationId: string, afterId?: number | string): OperationEvent[] | Promise<OperationEvent[]>;
@@ -27,3 +27,4 @@ export interface PersistentAutomationQueueRepository extends AutomationOperation
   ): Promise<void>;
   markWorkerOffline?(workerId: string): Promise<void>;
 }
+

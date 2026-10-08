@@ -35,7 +35,6 @@ import {
   cancelOperation,
   createOperation,
   getOperation,
-  getArtifactUrl,
   submitOperationAuthentication,
   subscribeToOperation,
   type AutomationOperationResponse,
@@ -44,6 +43,7 @@ import {
 import type { OperationConnectionState } from "@/services/operationMonitoring";
 import { useAuth } from "@/contexts/AuthContext";
 import { validateKoaPeriod } from "@/utils/koaDate";
+import { KoaArtifactDownload } from "@/components/KoaArtifactDownload";
 
 type ConversationStatus = "active" | "pending" | "resolved";
 type ConversationTab = "all" | ConversationStatus;
@@ -680,7 +680,6 @@ type KoaOperation = {
     status?: string;
     protocol?: string;
     fileName?: string;
-    artifactUrl?: string;
   };
   error?: {
     code?: string;
@@ -851,8 +850,6 @@ function safeKoaErrorMessage(code?: string) {
 
 function mapAutomationOperation(response: AutomationOperationResponse, type: KoaOperationType): KoaOperation {
   const firstArtifact = response.artifacts[0];
-  const localArtifactUrl = firstArtifact ? getArtifactUrl(response.operationId, firstArtifact.fileName) : "";
-  const artifactUrl = firstArtifact ? localArtifactUrl || firstArtifact.url : undefined;
 
   return {
     id: response.operationId,
@@ -887,10 +884,9 @@ function mapAutomationOperation(response: AutomationOperationResponse, type: Koa
                 : undefined,
           protocol: typeof response.result.protocol === "string" ? response.result.protocol : undefined,
           fileName: firstArtifact?.fileName,
-          artifactUrl,
         }
       : firstArtifact
-        ? { fileName: firstArtifact.fileName, artifactUrl }
+        ? { fileName: firstArtifact.fileName }
         : undefined,
     error: response.error
       ? {
@@ -994,6 +990,7 @@ function KoaPanel({
   const historyEndRef = useRef<HTMLDivElement>(null);
   const cancelInFlightRef = useRef(false);
   const operationUnsubscribeRef = useRef<(() => void) | null>(null);
+  const activeOperationIdRef = useRef<string | null>(null);
   const flows = [
     { id: "inclusao" as const, label: "Inclusão", icon: UserPlus },
     { id: "exclusao" as const, label: "Exclusão", icon: UserMinus },
@@ -1013,6 +1010,9 @@ function KoaPanel({
   }, []);
 
   const openFlow = (flow: KoaFlow, sourceText = "") => {
+    operationUnsubscribeRef.current?.();
+    operationUnsubscribeRef.current = null;
+    activeOperationIdRef.current = null;
     const text = normalizeIntentText(sourceText);
     setSelectedFlow(flow);
     setPhase("form");
@@ -1165,16 +1165,18 @@ function KoaPanel({
         data: operationPayload,
       });
       const nextOperation = mapAutomationOperation(response, type);
+      activeOperationIdRef.current = response.operationId;
 
       operationUnsubscribeRef.current?.();
       operationUnsubscribeRef.current = null;
       const unsubscribe = await subscribeToOperation(response.operationId, {
         onEvent: () => {
           void getOperation(response.operationId).then((updated) => {
+            if (activeOperationIdRef.current !== response.operationId) return;
             const mapped = mapAutomationOperation(updated, type);
             setOperation(mapped);
             setPhase(phaseFromOperationStatus(mapped.status));
-          });
+          }).catch(() => undefined);
         },
         onConnectionState: setOperationConnectionState,
       });
@@ -1287,6 +1289,8 @@ function KoaPanel({
         if (result.error === "AUTHENTICATION_ATTEMPTS_EXCEEDED") return "Limite de tentativas atingido. O Koa interrompeu o fluxo para revisão.";
         return "Não foi possível autenticar. Confira a senha e tente novamente.";
       }
+
+      setValues((current) => ({ ...current, contractCode: input.companyCode?.trim() || current.contractCode, password: "" }));
 
       if (result.operation) {
         const mapped = mapAutomationOperation(result.operation, operation.type);
@@ -1564,14 +1568,13 @@ function KoaAuthenticationCard({
 }) {
   const [companyCode, setCompanyCode] = useState(defaultCompanyCode?.trim() ?? "");
   const [password, setPassword] = useState("");
-  const [rememberOnDevice, setRememberOnDevice] = useState(false);
+  const [rememberOnDevice, setRememberOnDevice] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const needsCompanyCode = !defaultCompanyCode?.trim();
 
   const handleSubmit = async () => {
     if (submitting) return;
-    if (needsCompanyCode && !companyCode.trim()) {
+    if (!companyCode.trim()) {
       setError("Informe o código da empresa.");
       return;
     }
@@ -1603,28 +1606,21 @@ function KoaAuthenticationCard({
       <div className="max-w-[84%] rounded-2xl rounded-bl-md bg-secondary/80 px-4 py-3 text-left shadow-sm">
         <p className="text-sm font-semibold text-foreground">Preciso autenticar o acesso Hapvida para continuar.</p>
         <p className="mt-1 text-sm text-muted-foreground">
-          A senha será usada somente para validar o portal e retomar esta emissão.
+          Informe o acesso deste código. Com "Lembrar" ativado, ele será salvo de forma protegida neste computador após o login.
         </p>
 
         <div className="mt-4 space-y-3">
-          {needsCompanyCode ? (
-            <KoaTextField
-              icon={Building2}
-              label="Código da empresa"
-              value={companyCode}
-              error={error?.includes("código") ? error : undefined}
-              placeholder="Digite o código"
-              onChange={(value) => {
-                setCompanyCode(value);
-                setError(null);
-              }}
-            />
-          ) : (
-            <div>
-              <p className="text-xs font-medium text-muted-foreground">Empresa</p>
-              <p className="text-sm font-semibold text-foreground">{defaultCompanyCode}</p>
-            </div>
-          )}
+          <KoaTextField
+            icon={Building2}
+            label="Código da empresa"
+            value={companyCode}
+            error={error?.includes("código") ? error : undefined}
+            placeholder="Digite o código"
+            onChange={(value) => {
+              setCompanyCode(value);
+              setError(null);
+            }}
+          />
 
           <KoaPasswordField
             label="Senha"
@@ -1849,15 +1845,8 @@ function KoaOperationResult({
           ))}
         </div>
       )}
-      {operation.result?.artifactUrl && (
-        <a
-          href={operation.result.artifactUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="mt-3 inline-flex h-9 items-center justify-center rounded-xl bg-primary px-3 text-xs font-semibold text-primary-foreground transition hover:bg-primary/90"
-        >
-          {operation.type === "card" ? "Baixar carteirinha" : "Ver comprovante"}
-        </a>
+      {operation.result?.fileName && (
+        <KoaArtifactDownload operationId={operation.id} fileName={operation.result.fileName} label={operation.type === "card" ? "Baixar carteirinha" : "Baixar comprovante"} />
       )}
     </div>
   );

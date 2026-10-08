@@ -20,6 +20,8 @@ export interface SavedArtifact {
 
 export interface ArtifactStorage {
   save(input: SaveArtifactInput): Promise<SavedArtifact>;
+  read(storagePath: string): Promise<Buffer>;
   getSignedUrl(storagePath: string, expiresInSeconds?: number): Promise<string>;
   delete(storagePath: string): Promise<void>;
 }
+

@@ -75,7 +75,19 @@ Antes de pedir a credencial, o worker verifica se a API do reCAPTCHA carregou. D
 
 Depois de atualizar o codigo no computador do worker, encerre a instancia antiga, execute `npm ci`, `npm run build` e inicie uma unica instancia com `npm start`. Valide uma emissao de teste pela interface: mesma `operationId`, um login no worker, status `success` e PDF do beneficiario correto. Os testes automatizados nao substituem essa validacao no portal real.
 
+## Novos codigos e download pelo chat
+
+Na carteirinha, a credencial e selecionada pelo cadastro da empresa e pelo codigo Hapvida informado. Um novo codigo recebe uma referencia separada; a senha e a sessao de outro codigo nao sao reutilizadas. Corrigir o codigo na reautenticacao atualiza o payload e a referencia da mesma operacao antes de devolve-la para a fila, tanto em Postgres quanto em SQLite.
+
+O formulario permite editar o codigo e inicia com `Lembrar neste computador` marcado. Depois do login validado, a senha fica criptografada por DPAPI no dispositivo e o banco recebe o cadastro e a referencia desse acesso. Desmarcar a opcao mantem a senha somente em memoria para aquela execucao.
+
+O botao do chat baixa o PDF para o computador do usuario. No modo local, a requisicao inclui a autenticacao atual do Kortex e o worker devolve os bytes do bucket privado com `Content-Disposition: attachment`. No modo Supabase, o aplicativo gera uma nova URL assinada ao clicar. Uma falha de download permite tentar baixar o mesmo arquivo novamente, sem emitir outra carteirinha.
+
+Na pasta `kortex-app`, `npm run test:card-download` testa o botao real do chat em Chrome usando API, autenticacao e PDF sinteticos locais. Inclui download autenticado, falha temporaria com nova tentativa, repeticao e worker indisponivel. Nao envia credenciais nem acessa a Hapvida. Usa Chrome instalado ou `KOA_TEST_BROWSER_EXECUTABLE`.
+
 ## Scripts
+
+`npm start` recompila o worker antes de iniciar para evitar executar um `dist` antigo depois de `git pull`. Na pasta `kortex-app`, `npm run automation:start` inicia esse mesmo processo. Mantenha o terminal aberto enquanto o worker estiver em uso.
 
 ```bash
 npm install

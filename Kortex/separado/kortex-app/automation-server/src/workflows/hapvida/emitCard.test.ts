@@ -33,7 +33,7 @@ function fixture(remember: boolean) {
     artifacts: [], createdAt: now, updatedAt: now };
   const events: OperationEvent[] = [];
   const page = { pdf: vi.fn(async () => Buffer.from("%PDF-1.7\n1 0 obj << /Type /Page >> endobj\n%%EOF")) } as unknown as Page;
-  const browserContext = {} as BrowserContext;
+  const browserContext = { clearCookies: vi.fn(async () => undefined) } as unknown as BrowserContext;
   mocks.requestCards.mockResolvedValue(page);
   const validate = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
   const saveSession = vi.fn(async () => undefined);
@@ -95,6 +95,27 @@ describe("CARD_ISSUE authentication in the execution context", () => {
     expect(mocks.remember).not.toHaveBeenCalled();
     expect(f.artifactSave).not.toHaveBeenCalled();
     expect(f.events.some((event) => event.type === "authentication.succeeded")).toBe(false);
+  });
+
+  it("uses the requested code instead of an earlier valid portal session", async () => {
+    const f = fixture(true);
+    f.operation.input.contractCode = "0NEW";
+    f.validate.mockReset().mockResolvedValue(true);
+    f.getSecret.mockResolvedValue({ username: "0NEW", password: "new-password", metadata: { rememberOnDevice: true } });
+    await emitCard(f.operation, new AbortController().signal, f.context);
+    expect(f.browserContext.clearCookies).toHaveBeenCalledOnce();
+    expect(mocks.login).toHaveBeenCalledWith(expect.objectContaining({ username: "0NEW", password: "new-password" }));
+    expect(mocks.remember).toHaveBeenCalledOnce();
+    expect(f.operation.status).toBe("success");
+  });
+
+  it("asks for the requested access without submitting another code's saved password", async () => {
+    const f = fixture(false);
+    f.operation.input.contractCode = "0NEW";
+    await expect(emitCard(f.operation, new AbortController().signal, f.context)).rejects.toMatchObject({ code: "REAUTH_REQUIRED" });
+    expect(mocks.login).not.toHaveBeenCalled();
+    expect(mocks.remember).not.toHaveBeenCalled();
+    expect(f.artifactSave).not.toHaveBeenCalled();
   });
 
   it("checks portal verification before requesting or consuming a password", async () => {

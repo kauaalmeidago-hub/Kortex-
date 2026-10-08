@@ -178,9 +178,22 @@ async function authTokenForSse() {
 async function parseResponse<T>(response: Response): Promise<T> {
   const data = await response.json().catch(() => undefined);
   if (!response.ok) {
-    throw new Error(data?.error ?? "Falha na API de automacao.");
+    if (response.status === 401) throw new Error("Não foi possível autorizar o acesso ao Koa Worker. Entre novamente no Kortex e confira a conexão do worker.");
+    throw new Error(data?.message ?? data?.error ?? "Falha na API de automacao.");
   }
   return data as T;
+}
+
+async function localFetch(url: string, options: RequestInit) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch {
+    throw new Error("Não consegui conectar ao Koa Worker deste computador. Inicie o worker e tente novamente.");
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function assertOnlineOperationAllowed(type: AutomationOperationType) {
@@ -224,7 +237,7 @@ async function mapSupabaseOperation(row: SupabaseOperationRow, artifacts?: Supab
       mimeType: artifact.mime_type ?? undefined,
       kind: artifact.type,
       createdAt: artifact.created_at,
-      url: await signedArtifactUrl(artifact),
+      url: "",
     })),
   );
 
@@ -260,7 +273,7 @@ async function createLocalOperation(input: {
 }) {
   if (!automationBaseUrl) throw new Error("VITE_AUTOMATION_API_URL e obrigatorio quando VITE_AUTOMATION_PROVIDER=local.");
 
-  const response = await fetch(`${automationBaseUrl}/api/operations`, {
+  const response = await localFetch(`${automationBaseUrl}/api/operations`, {
     method: "POST",
     headers: await headers(),
     body: JSON.stringify({
@@ -307,7 +320,7 @@ export async function createOperation(input: {
 export async function getOperation(operationId: string) {
   if (useLocalApi) {
     if (!automationBaseUrl) throw new Error("VITE_AUTOMATION_API_URL e obrigatorio quando VITE_AUTOMATION_PROVIDER=local.");
-    const response = await fetch(`${automationBaseUrl}/api/operations/${operationId}`, {
+    const response = await localFetch(`${automationBaseUrl}/api/operations/${operationId}`, {
       headers: await headers(),
     });
     return parseResponse<AutomationOperationResponse>(response);
@@ -329,7 +342,7 @@ export async function getOperation(operationId: string) {
 export async function cancelOperation(operationId: string) {
   if (useLocalApi) {
     if (!automationBaseUrl) throw new Error("VITE_AUTOMATION_API_URL e obrigatorio quando VITE_AUTOMATION_PROVIDER=local.");
-    const response = await fetch(`${automationBaseUrl}/api/operations/${operationId}/cancel`, {
+    const response = await localFetch(`${automationBaseUrl}/api/operations/${operationId}/cancel`, {
       method: "POST",
       headers: await headers(),
     });
@@ -362,7 +375,7 @@ export async function submitOperationAuthentication(input: {
   };
   if (input.companyCode?.trim()) body.companyCode = input.companyCode.trim();
 
-  const response = await fetch(`${automationBaseUrl}/api/operations/${input.operationId}/reauth`, {
+  const response = await localFetch(`${automationBaseUrl}/api/operations/${input.operationId}/reauth`, {
     method: "POST",
     headers: await headers(),
     body: JSON.stringify(body),
@@ -380,8 +393,40 @@ export async function submitOperationAuthentication(input: {
 export function getArtifactUrl(operationId: string, fileName: string) {
   if (!useLocalApi) return "";
   const url = new URL(`${automationBaseUrl}/api/operations/${operationId}/artifacts/${encodeURIComponent(fileName)}`);
-  if (automationToken) url.searchParams.set("token", automationToken);
   return url.toString();
+}
+
+export async function downloadOperationArtifact(operationId: string, fileName: string) {
+  let response: Response;
+  if (useLocalApi) {
+    response = await localFetch(getArtifactUrl(operationId, fileName), { headers: await headers() });
+  } else {
+    const artifact = (await loadArtifacts(operationId)).find((item) => item.file_name === fileName);
+    if (!artifact) throw new Error("O arquivo desta operação não foi encontrado.");
+    // Sign only when the user requests the file, so an old chat entry remains downloadable.
+    const signedUrl = await signedArtifactUrl(artifact);
+    try {
+      response = await fetch(signedUrl);
+    } catch {
+      throw new Error("Não foi possível baixar o arquivo. Confira sua conexão e tente novamente.");
+    }
+  }
+  if (!response.ok) {
+    await parseResponse(response);
+    throw new Error("Não foi possível baixar o arquivo. Tente novamente.");
+  }
+  const blob = await response.blob();
+  if (!blob.size || (/\.pdf$/i.test(fileName) && new TextDecoder().decode(await blob.slice(0, 5).arrayBuffer()) !== "%PDF-")) {
+    throw new Error("O download não retornou um PDF válido. Tente baixar novamente.");
+  }
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
 }
 
 export async function subscribeToOperation(operationId: string, handlers: {

@@ -1,0 +1,74 @@
+import assert from "node:assert/strict";
+import { readFile, mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { createServer as createViteServer } from "vite";
+import { createRequire } from "node:module";
+import { createServer } from "../automation-server/dist/server.js";
+import { OperationEventBus } from "../automation-server/dist/events/EventBus.js";
+
+const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const { chromium } = createRequire(path.join(appRoot, "automation-server", "package.json"))("playwright");
+const requireFromApp = createRequire(path.join(appRoot, "package.json"));
+const { default: react } = await import(requireFromApp.resolve("@vitejs/plugin-react-swc"));
+const originalFetch = globalThis.fetch;
+globalThis.fetch = async (input, options) => {
+  const url = typeof input === "string" ? input : input.url ?? input.href;
+  if (url?.startsWith("https://supabase.test/auth/v1/user")) return new Response(JSON.stringify({ id: "test-user" }), { headers: { "content-type": "application/json" } });
+  return originalFetch(input, options);
+};
+const temp = await mkdtemp(path.join(os.tmpdir(), "koa-download-browser-"));
+const browser = await chromium.launch({ headless: true, ...(process.env.KOA_TEST_BROWSER_EXECUTABLE ? { executablePath: process.env.KOA_TEST_BROWSER_EXECUTABLE } : { channel: process.env.KOA_BROWSER_CHANNEL ?? "chrome" }) });
+const context = await browser.newContext({ acceptDownloads: true });
+const page = await context.newPage();
+await page.setContent("<html><body><h1>Carteira Provisoria</h1><p>PESSOA DE TESTE</p></body></html>");
+const pdf = await page.pdf({ format: "A4" });
+const now = new Date().toISOString();
+const operation = { id: "operation-test", type: "CARD_ISSUE", status: "success", requestedBy: "test-user", companyId: "company-test", portal: "hapvida", credentialRef: "ref", input: {}, artifacts: [{ id: "artifact-test", kind: "pdf", fileName: "carteirinha-teste.pdf", mimeType: "application/pdf", path: "operations/test/card.pdf", storageProvider: "supabase", createdAt: now }], createdAt: now, updatedAt: now };
+let failRead = false;
+let reads = 0;
+const server = await createServer({ config: { apiToken: "token-unavailable-to-browser", supabaseUrl: "https://supabase.test", supabaseSecretKey: "synthetic-secret-key", features: {} }, repository: { get: async () => operation }, eventBus: new OperationEventBus(), queue: {}, credentialResolver: {}, artifactStorage: { read: async () => { reads++; if (failRead) throw new Error("offline storage"); return pdf; } } });
+await server.listen({ host: "127.0.0.1", port: 0 });
+const apiUrl = `http://127.0.0.1:${server.server.address().port}`;
+const html = '<html><body><div id="root"></div><script type="module">import React from "react";import {createRoot} from "react-dom/client";import {KoaArtifactDownload} from "/src/components/KoaArtifactDownload.tsx";createRoot(document.getElementById("root")).render(React.createElement(KoaArtifactDownload,{operationId:"operation-test",fileName:"carteirinha-teste.pdf",label:"Baixar carteirinha"}));</script></body></html>';
+const vite = await createViteServer({ root: appRoot, configFile: false, plugins: [react(), { name: "card-download-test", configureServer(dev) { dev.middlewares.use(async (req, res, next) => { if (req.url !== "/card-download-test.html") return next(); res.setHeader("content-type", "text/html"); res.end(await dev.transformIndexHtml(req.url, html)); }); } }], define: { "import.meta.env.VITE_AUTOMATION_PROVIDER": JSON.stringify("local"), "import.meta.env.VITE_AUTOMATION_API_URL": JSON.stringify(apiUrl), "import.meta.env.DEV": "false" }, resolve: { alias: { "@": path.join(appRoot, "src") } }, server: { host: "127.0.0.1", port: 0 } });
+await vite.listen();
+const uiUrl = `http://127.0.0.1:${vite.httpServer.address().port}/card-download-test.html`;
+const requests = [];
+page.on("request", (request) => { if (request.url().startsWith(apiUrl) && request.method() === "GET") requests.push({ url: request.url(), headers: request.headers() }); });
+page.on("pageerror", error => console.error(error.message));
+await page.route("**/src/integrations/supabase/client.ts*", route => route.fulfill({ contentType: "application/javascript", body: 'export const supabase={auth:{getSession:async()=>({data:{session:{access_token:"synthetic-user-jwt"}}})}};' }));
+try {
+  await page.goto(uiUrl);
+  const button = page.getByRole("button", { name: "Baixar carteirinha" });
+  const downloadCard = async (suffix) => {
+    const pending = page.waitForEvent("download");
+    await button.click();
+    const download = await pending;
+    assert.equal(download.suggestedFilename(), "carteirinha-teste.pdf");
+    const target = path.join(temp, suffix + ".pdf");
+    await download.saveAs(target);
+    assert.deepEqual(await readFile(target), pdf);
+  };
+  await downloadCard("first");
+  assert.equal(requests[0].headers.authorization, "Bearer synthetic-user-jwt");
+  assert.equal(new URL(requests[0].url).searchParams.has("token"), false);
+  console.log("AUTHENTICATED_CHAT_DOWNLOAD = OK");
+  failRead = true;
+  await button.click();
+  await page.getByRole("alert").filter({ hasText: "download nao ficou disponivel" }).waitFor();
+  failRead = false;
+  await downloadCard("retry");
+  assert.equal(await page.getByRole("alert").count(), 0);
+  console.log("SAVED_CARD_DOWNLOAD_RETRY = OK");
+  await downloadCard("repeat");
+  assert.equal(reads, 4);
+  console.log("REPEATED_DOWNLOAD_FROM_SAME_CHAT = OK");
+  await server.close();
+  await button.click();
+  await page.getByRole("alert").filter({ hasText: "Inicie o worker" }).waitFor();
+  console.log("OFFLINE_WORKER_ERROR = OK");
+} finally {
+  await browser.close(); await server.close(); await vite.close(); await rm(temp, { recursive: true, force: true }); globalThis.fetch = originalFetch;
+}

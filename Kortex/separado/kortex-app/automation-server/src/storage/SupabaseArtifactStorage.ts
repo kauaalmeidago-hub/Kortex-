@@ -48,6 +48,14 @@ export class SupabaseArtifactStorage implements ArtifactStorage {
     };
   }
 
+  async read(storagePath: string) {
+    const { data, error } = await this.client.storage.from(this.bucket).download(storagePath);
+    if (error || !data) {
+      throw new AutomationError("ARTIFACT_DOWNLOAD_FAILED", "Nao foi possivel baixar o arquivo salvo.", { retryable: true });
+    }
+    return Buffer.from(await data.arrayBuffer());
+  }
+
   async getSignedUrl(storagePath: string, expiresInSeconds = 300) {
     const { data, error } = await this.client.storage.from(this.bucket).createSignedUrl(storagePath, expiresInSeconds);
     if (error || !data?.signedUrl) {
@@ -70,3 +78,4 @@ export class SupabaseArtifactStorage implements ArtifactStorage {
     }
   }
 }
+

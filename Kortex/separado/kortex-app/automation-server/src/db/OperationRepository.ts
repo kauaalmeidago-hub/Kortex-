@@ -115,6 +115,9 @@ export class OperationRepository implements AutomationOperationRepository {
       artifacts: OperationArtifact[];
       finishedAt: string;
       updatedAt: string;
+      credentialRef: string;
+      credentialId: string | undefined;
+      input: Record<string, unknown>;
     }>,
   ) {
     const current = this.get(id);
@@ -125,6 +128,8 @@ export class OperationRepository implements AutomationOperationRepository {
 
     const next: OperationRecord = {
       ...current,
+      credentialRef: patch.credentialRef ?? current.credentialRef,
+      input: patch.input ?? current.input,
       status: nextStatus,
       currentStep: patch.currentStep ?? current.currentStep,
       result: patch.result ?? current.result,
@@ -138,7 +143,7 @@ export class OperationRepository implements AutomationOperationRepository {
       .prepare(
         `UPDATE operations
          SET status = ?, current_step = ?, result_json = ?, error_json = ?,
-             artifacts_json = ?, updated_at = ?, finished_at = ?
+             artifacts_json = ?, updated_at = ?, finished_at = ?, credential_ref = ?, input_json = ?
          WHERE id = ?`,
       )
       .run(
@@ -149,6 +154,8 @@ export class OperationRepository implements AutomationOperationRepository {
         JSON.stringify(next.artifacts),
         next.updatedAt,
         next.finishedAt ?? null,
+        next.credentialRef,
+        JSON.stringify(redact(next.input)),
         id,
       );
 
@@ -250,3 +257,4 @@ export class OperationRepository implements AutomationOperationRepository {
     };
   }
 }
+

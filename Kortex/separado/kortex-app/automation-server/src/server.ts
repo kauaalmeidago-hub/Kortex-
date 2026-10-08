@@ -17,6 +17,7 @@ import { CreateOperationSchema, validatePayload } from "./validation/operationSc
 import { sanitizeDiagnosticText } from "./security/redaction.js";
 import type { EphemeralCredentialStore } from "./secrets/EphemeralCredentialStore.js";
 import type { ArtifactStorage } from "./storage/ArtifactStorage.js";
+import { portalLoginCode } from "./credentials/credentialIdentity.js";
 import { authenticationAttemptLimitError, countAuthenticationFailures } from "./authentication/AuthenticationAttemptPolicy.js";
 
 interface ServerDeps {
@@ -59,10 +60,6 @@ function readString(value: unknown) {
 
 function companyCodeFor(operation: OperationRecord, input: { companyCode?: string }) {
   return input.companyCode?.trim() || readString(operation.input.contractCode) || readString(operation.input.companyCode);
-}
-
-function credentialRefFor(operation: OperationRecord) {
-  return operation.credentialRef || `${operation.portal}:${operation.companyId}`;
 }
 
 function readBearerToken(header: string | undefined) {
@@ -206,6 +203,7 @@ export async function createServer({ config, repository, eventBus, queue, creden
       companyId: payload.companyId,
       operator: payload.operator ?? payload.portal,
       credentialRef: payload.credentialRef,
+      portalLoginCode: payload.type === "CARD_ISSUE" ? portalLoginCode(payload.input ?? {}) : undefined,
     });
 
     const now = new Date().toISOString();
@@ -332,9 +330,14 @@ export async function createServer({ config, repository, eventBus, queue, creden
           operation: reviewed ? operationResponse(reviewed) : undefined,
         });
       }
+      const resolvedCredential = await credentialResolver.resolve({
+        companyId: operation.companyId,
+        operator: operation.portal,
+        portalLoginCode: companyCode,
+      });
       credentialGeneration = ephemeralCredentialStore.put(
         operation.id,
-        credentialRefFor(operation),
+        resolvedCredential.credentialRef,
         {
           username: companyCode,
           password: parsed.data.password,
@@ -355,6 +358,9 @@ export async function createServer({ config, repository, eventBus, queue, creden
 
       const resumed = await repository.update(operation.id, {
         status: "queued",
+        credentialRef: resolvedCredential.credentialRef,
+        credentialId: resolvedCredential.credentialId,
+        input: { ...operation.input, contractCode: companyCode },
         currentStep: "authentication_submitted",
         updatedAt: new Date().toISOString(),
       });
@@ -404,20 +410,24 @@ export async function createServer({ config, repository, eventBus, queue, creden
     const artifact = operation.artifacts.find((item) => item.fileName === fileName);
     if (!artifact) return reply.code(404).send({ error: "artifact_not_found" });
 
+    const attachment = () => reply.header("cache-control", "private, no-store")
+      .header("content-type", artifact.mimeType ?? "application/octet-stream")
+      .header("content-disposition", `attachment; filename*=UTF-8''${encodeURIComponent(artifact.fileName)}`);
     if (artifact.storageProvider === "supabase") {
       const storagePath = artifact.storagePath ?? artifact.path;
       if (!storagePath || !artifactStorage) return reply.code(404).send({ error: "artifact_not_found" });
-      const signedUrl = await artifactStorage.getSignedUrl(storagePath, 5 * 60);
-      return reply.redirect(signedUrl);
+      try {
+        const bytes = await artifactStorage.read(storagePath);
+        return attachment().send(bytes);
+      } catch {
+        return reply.code(502).send({ error: "ARTIFACT_DOWNLOAD_FAILED", message: "A carteirinha foi salva, mas o download nao ficou disponivel. Tente baixar novamente." });
+      }
     }
 
     const localPath = artifact.storagePath ?? artifact.path;
     if (!existsSync(localPath)) return reply.code(404).send({ error: "artifact_not_found" });
 
-    return reply
-      .header("content-type", artifact.mimeType ?? "application/octet-stream")
-      .header("content-disposition", `attachment; filename="${encodeURIComponent(artifact.fileName)}"`)
-      .send(createReadStream(localPath));
+    return attachment().send(createReadStream(localPath));
   });
 
   return app;

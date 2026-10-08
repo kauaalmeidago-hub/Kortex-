@@ -11,7 +11,9 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:card-download": "npm run automation:build && node scripts/check-card-download.mjs",
     "automation:dev": "npm --prefix automation-server run dev",
+    "automation:start": "npm --prefix automation-server start",
     "automation:build": "npm --prefix automation-server run build",
     "automation:test": "npm --prefix automation-server test"
   },

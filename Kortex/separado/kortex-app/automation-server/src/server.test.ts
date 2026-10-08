@@ -7,6 +7,7 @@ import type { OperationQueue } from "./queue/OperationQueue.js";
 import { OperationEventBus } from "./events/EventBus.js";
 import { EphemeralCredentialStore } from "./secrets/EphemeralCredentialStore.js";
 import { createServer } from "./server.js";
+import { ExplicitCredentialResolver } from "./credentials/CredentialResolver.js";
 
 describe("Koa reauthentication handoff", () => {
   let operation: OperationRecord;
@@ -33,7 +34,7 @@ describe("Koa reauthentication handoff", () => {
     app = await createServer({
       config: { apiToken: "test-api", repositoryMode: "postgres", authMaxAttempts: 3, authChallengeTtlMinutes: 30, features: {} } as AutomationConfig,
       repository, eventBus: new OperationEventBus(), queue: { enqueue: vi.fn() } as unknown as OperationQueue,
-      credentialResolver: { resolve: async () => ({ credentialRef: "hapvida:company-1" }) }, ephemeralCredentialStore: store,
+      credentialResolver: new ExplicitCredentialResolver(), ephemeralCredentialStore: store,
     });
   });
 
@@ -68,6 +69,20 @@ describe("Koa reauthentication handoff", () => {
     expect(operation.status).toBe("manual_review");
     expect(store.get(operation.id, operation.credentialRef)).toBeUndefined();
     expect(launch).not.toHaveBeenCalled();
+  });
+
+  it("rebinds a corrected company code to the queued operation and its ephemeral password", async () => {
+    const oldRef = operation.credentialRef;
+    const response = await app.inject({
+      method: "POST", url: "/api/operations/operation-1/reauth", headers: { "x-koa-automation-token": "test-api" },
+      payload: { companyCode: "0NEW", password: "new-synthetic-password", rememberOnDevice: true },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(operation.input.contractCode).toBe("0NEW");
+    expect(operation.credentialRef).toBe("hapvida:company-1:login:0NEW");
+    expect(store.get(operation.id, operation.credentialRef)).toMatchObject({ username: "0NEW", password: "new-synthetic-password" });
+    expect(store.get(operation.id, oldRef)).toBeUndefined();
+    expect(JSON.stringify({ operation, events, response: response.json() })).not.toContain("new-synthetic-password");
   });
 
   it("does not count database update errors as failed portal logins", async () => {

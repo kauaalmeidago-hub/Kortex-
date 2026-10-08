@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { ArtifactStorage, SaveArtifactInput } from "./ArtifactStorage.js";
 
@@ -28,7 +28,12 @@ export class LocalArtifactStorage implements ArtifactStorage {
     return `file://${storagePath}`;
   }
 
+  async read(storagePath: string) {
+    return readFileSync(storagePath);
+  }
+
   async delete(storagePath: string) {
     rmSync(storagePath, { force: true });
   }
 }
+

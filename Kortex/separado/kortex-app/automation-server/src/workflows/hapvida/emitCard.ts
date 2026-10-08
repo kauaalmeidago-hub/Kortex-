@@ -11,6 +11,7 @@ import { HapvidaMovementAccessPage } from "./pageObjects/HapvidaMovementAccessPa
 import { HapvidaMovementMainMenuPage } from "./pageObjects/HapvidaMovementMainMenuPage.js";
 import { HapvidaActiveUsersPage } from "./pageObjects/HapvidaActiveUsersPage.js";
 import { validateCardPdfBytes } from "./downloadValidation.js";
+import { portalLoginCode } from "../../credentials/credentialIdentity.js";
 
 function readString(input: Record<string, unknown>, keys: string[]) {
   for (const key of keys) {
@@ -71,6 +72,7 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
   const periodEnd = toPortalDate(readString(operation.input, ["periodEnd", "endDate"]), "Data final");
   const cpf = readString(operation.input, ["cpf"]);
   const birthDate = readString(operation.input, ["birthDate"]);
+  const requestedCompanyCode = portalLoginCode(operation.input);
 
   if (!beneficiaryName) {
     throw new AutomationError("MISSING_REQUIRED_DATA", "Nome do beneficiario nao informado.", {
@@ -106,6 +108,9 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
           "Nao foi possivel renovar a sessao Hapvida sem uma credencial segura cadastrada para o Koa.",
         );
       });
+      if (requestedCompanyCode && credential.username.trim() !== requestedCompanyCode) {
+        throw createReauthRequiredError("Informe a senha do codigo de empresa solicitado. O acesso salvo pertence a outro codigo.");
+      }
       assertNotAborted(signal);
       return credential;
     };
@@ -147,11 +152,13 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
       : undefined;
 
     await context.updateStatus("authenticating", "Abrindo portal de carteirinha Hapvida");
+    // A saved portal session cannot establish which contract the user requested.
+    if (requestedCompanyCode) await browserContext.clearCookies();
     await loginPage.open();
     assertNotAborted(signal);
 
     await context.updateStatus("authenticating", "Validando sessao Hapvida do perfil Koa");
-    const hasValidSession = !(await loginPage.passwordStillVisible()) &&
+    const hasValidSession = !requestedCompanyCode && !(await loginPage.passwordStillVisible()) &&
       await context.browserManager.validatePortalSession("hapvida", page);
     assertNotAborted(signal);
 

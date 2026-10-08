@@ -101,7 +101,10 @@ export const UPDATE_OPERATION_SQL = `UPDATE public.automation_operations
              ELSE attempt
            END,
            updated_at = $7,
-           finished_at = $8
+           finished_at = $8,
+           credential_ref = $9,
+           credential_id = $10,
+           payload = $11::jsonb
        WHERE id = $1
        RETURNING *`;
 
@@ -225,6 +228,9 @@ export class PostgresOperationRepository implements PersistentAutomationQueueRep
       artifacts: OperationArtifact[];
       finishedAt: string;
       updatedAt: string;
+      credentialRef: string;
+      credentialId: string | undefined;
+      input: Record<string, unknown>;
     }>,
   ) {
     const current = await this.get(id);
@@ -246,6 +252,9 @@ export class PostgresOperationRepository implements PersistentAutomationQueueRep
         shouldClearError ? null : patch.error?.message ?? current.error?.message ?? null,
         patch.updatedAt ?? new Date().toISOString(),
         nextFinishedAt,
+        patch.credentialRef ?? current.credentialRef,
+        "credentialId" in patch ? patch.credentialId ?? null : current.credentialId ?? null,
+        JSON.stringify(redact(patch.input ?? current.input)),
       ],
     );
 
@@ -524,3 +533,4 @@ export class PostgresOperationRepository implements PersistentAutomationQueueRep
     };
   }
 }
+

@@ -1,5 +1,6 @@
 import pg from "pg";
 import type { CredentialResolver } from "./CredentialResolver.js";
+import { credentialRefForLogin } from "./credentialIdentity.js";
 
 const { Pool } = pg;
 
@@ -18,7 +19,7 @@ export class PostgresCredentialResolver implements CredentialResolver {
     await this.pool.end();
   }
 
-  async resolve(input: { companyId: string; operator: string }) {
+  async resolve(input: { companyId: string; operator: string; portalLoginCode?: string }) {
     const result = await this.pool.query<{
       id: string;
       credential_ref: string;
@@ -27,16 +28,17 @@ export class PostgresCredentialResolver implements CredentialResolver {
        FROM public.automation_credentials
        WHERE company_id = $1
          AND operator = $2
+         AND ($3::text IS NULL OR metadata->>'portalLoginCode' = $3::text)
          AND status IN ('active', 'needs_verification')
        ORDER BY (status = 'active') DESC, last_verified_at DESC NULLS LAST, created_at DESC
        LIMIT 1`,
-      [input.companyId, input.operator],
+      [input.companyId, input.operator, input.portalLoginCode?.trim() || null],
     );
 
     const credential = result.rows[0];
     if (!credential) {
       return {
-        credentialRef: `${input.operator}:${input.companyId}`,
+        credentialRef: credentialRefForLogin(input.companyId, input.operator, input.portalLoginCode),
       };
     }
 
@@ -46,3 +48,4 @@ export class PostgresCredentialResolver implements CredentialResolver {
     };
   }
 }
+
