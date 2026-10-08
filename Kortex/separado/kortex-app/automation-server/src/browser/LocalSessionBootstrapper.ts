@@ -106,22 +106,19 @@ export class LocalSessionBootstrapper {
       headless: true,
     });
 
+    let context: BrowserContext | undefined;
     try {
-      const context = await browser.newContext({
+      context = await browser.newContext({
         storageState,
         viewport: { width: 1366, height: 900 },
       });
       const page = await context.newPage();
       await page.goto(url, { waitUntil: "domcontentloaded" });
-      const selector = this.config.hapvidaAuthenticatedSelector;
-      if (!selector) return false;
-
-      await page.locator(selector).first().waitFor({ state: "visible", timeout: this.config.authTimeoutMs });
-      await context.close().catch(() => undefined);
-      return true;
+      return await this.profileManager.validatePortalSession("hapvida", page);
     } catch {
       return false;
     } finally {
+      await context?.close().catch(() => undefined);
       await browser.close().catch(() => undefined);
     }
   }
