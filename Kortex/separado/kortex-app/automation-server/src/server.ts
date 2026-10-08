@@ -316,6 +316,7 @@ export async function createServer({ config, repository, eventBus, queue, creden
     });
     eventBus.publish(submitted);
 
+    let authenticationValidated = false;
     try {
       await repository.update(operation.id, {
         status: "authenticating",
@@ -333,6 +334,7 @@ export async function createServer({ config, repository, eventBus, queue, creden
       eventBus.publish(started);
 
       const result = await authenticationService.authenticateCardIssue(operation, parsed.data);
+      authenticationValidated = true;
 
       const succeeded = await repository.appendEvent({
         operationId: operation.id,
@@ -382,7 +384,12 @@ export async function createServer({ config, repository, eventBus, queue, creden
         operation: resumed ? operationResponse(resumed) : undefined,
       });
     } catch (error) {
-      const code = error instanceof AutomationError ? error.code : "AUTHENTICATION_FAILED";
+      const code =
+        error instanceof AutomationError
+          ? error.code
+          : authenticationValidated
+            ? "DATABASE_OPERATION_UPDATE_FAILED"
+            : "AUTHENTICATION_FAILED";
       const nextAttempts = failedAttempts + 1;
       const failed = await repository.appendEvent({
         operationId: operation.id,
@@ -422,7 +429,12 @@ export async function createServer({ config, repository, eventBus, queue, creden
       });
       return reply.send({
         ok: false,
-        error: code === "COMPANY_CODE_REQUIRED" ? "COMPANY_CODE_REQUIRED" : "AUTHENTICATION_FAILED",
+        error:
+          code === "COMPANY_CODE_REQUIRED"
+            ? "COMPANY_CODE_REQUIRED"
+            : code === "DATABASE_OPERATION_UPDATE_FAILED"
+              ? "DATABASE_OPERATION_UPDATE_FAILED"
+              : "AUTHENTICATION_FAILED",
         operation: waiting ? operationResponse(waiting) : undefined,
       });
     } finally {
