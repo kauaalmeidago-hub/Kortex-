@@ -8,6 +8,14 @@ const BLOCKED_AUTOMATION_HOSTS = new Set([
   "passwords.google.com",
   "myaccount.google.com",
 ]);
+// Required by the portal's own login handler. These are resource origins,
+// not additional destinations for top-level browser navigation.
+const RECAPTCHA_RESOURCE_HOSTS = new Set([
+  "www.google.com",
+  "www.gstatic.com",
+  "recaptcha.google.com",
+  "www.recaptcha.net",
+]);
 
 export class DomainAllowlist {
   private readonly hosts: Set<string>;
@@ -42,4 +50,23 @@ export class DomainAllowlist {
       retryable: false,
     });
   }
+
+  isAllowedHapvidaRecaptchaResource(rawUrl: string, pageUrl: string) {
+    try {
+      const resource = new URL(rawUrl);
+      const page = new URL(pageUrl);
+      return (
+        page.protocol === "https:" &&
+        page.hostname === "webhap.hapvida.com.br" &&
+        this.isAllowed(pageUrl) &&
+        resource.protocol === "https:" &&
+        !resource.username && !resource.password && !resource.port &&
+        RECAPTCHA_RESOURCE_HOSTS.has(resource.hostname) &&
+        resource.pathname.startsWith("/recaptcha/")
+      );
+    } catch {
+      return false;
+    }
+  }
 }
+

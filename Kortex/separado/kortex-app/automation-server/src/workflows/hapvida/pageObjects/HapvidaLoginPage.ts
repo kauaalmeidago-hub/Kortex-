@@ -1,4 +1,4 @@
-import type { Page } from "playwright";
+import type { Page, Request } from "playwright";
 import { AutomationError } from "../../../errors.js";
 import type { PortalCredential } from "../../../types.js";
 
@@ -6,6 +6,7 @@ export class HapvidaLoginPage {
   constructor(
     private readonly page: Page,
     private readonly portalUrl?: string,
+    private readonly authTimeoutMs = 20_000,
   ) {}
 
   async open() {
@@ -50,9 +51,61 @@ export class HapvidaLoginPage {
     return this.passwordField().first().isVisible().catch(() => false);
   }
 
+  async waitForReady() {
+    if (!(await this.page.locator("#pTokenCaptcha").count())) return;
+
+    await this.page.waitForFunction(() => {
+      const captcha = (globalThis as { grecaptcha?: { ready?: unknown; execute?: unknown } }).grecaptcha;
+      return typeof captcha?.ready === "function" && typeof captcha?.execute === "function";
+    }, undefined, { timeout: this.authTimeoutMs }).catch(() => {
+      throw this.portalUnavailable("O reCAPTCHA do portal nao carregou. Verifique o acesso aos recursos de verificacao do portal.");
+    });
+  }
+
   async login(credential: PortalCredential) {
+    await this.waitForReady();
     await this.companyField().fill(credential.username);
     await this.passwordField().fill(credential.password);
+
+    const form = this.page.locator("#cd_form_login_emp");
+    if (!(await form.count())) {
+      await this.submitButton().click();
+      return;
+    }
+
+    const action = await form.getAttribute("action");
+    if (!action) throw this.portalUnavailable("O formulario de login do portal nao informou o destino de envio.");
+    const target = new URL(action, this.page.url());
+    const isLoginRequest = (request: Request) => {
+      const url = new URL(request.url());
+      return request.method() === "POST" && request.isNavigationRequest() &&
+        url.origin === target.origin && url.pathname === target.pathname;
+    };
+
+    // Arm both listeners before clicking. The portal obtains its own reCAPTCHA
+    // token and submits the form asynchronously; a click alone proves nothing.
+    const submitted = this.page.waitForRequest(isLoginRequest, { timeout: this.authTimeoutMs }).catch(() => undefined);
+    const responded = this.page.waitForResponse((response) => isLoginRequest(response.request()), {
+      timeout: this.authTimeoutMs,
+    }).catch(() => undefined);
     await this.submitButton().click();
+
+    if (!(await submitted)) {
+      throw this.portalUnavailable("O portal nao enviou o formulario de login apos o clique. A verificacao do portal pode estar indisponivel; a senha nao foi rejeitada.");
+    }
+    const response = await responded;
+    if (!response || response.status() >= 400) {
+      throw this.portalUnavailable("O envio do login nao recebeu uma resposta valida do portal. A falha nao foi classificada como senha incorreta.");
+    }
+    await this.page.waitForLoadState("domcontentloaded", { timeout: this.authTimeoutMs }).catch(() => {
+      throw this.portalUnavailable("O portal nao terminou de carregar a resposta do login.");
+    });
+  }
+
+  private portalUnavailable(safeDetails: string) {
+    return new AutomationError("PORTAL_AUTH_UNAVAILABLE", "Verificacao de acesso ao portal Hapvida indisponivel.", {
+      safeDetails, step: "authenticate", retryable: false,
+    });
   }
 }
+

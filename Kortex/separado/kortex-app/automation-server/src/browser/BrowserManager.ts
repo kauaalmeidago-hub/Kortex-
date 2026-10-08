@@ -122,9 +122,23 @@ export class BrowserManager {
 
   private async installDomainGuard(managed: ManagedBrowserContext, operation: OperationRecord) {
     await managed.context.route("**/*", async (route: Route) => {
-      const url = route.request().url();
-      if (this.domainAllowlist.isAllowed(url)) {
-        await route.continue();
+      const request = route.request();
+      const url = request.url();
+      let allowed = this.domainAllowlist.isAllowed(url);
+
+      if (!allowed && operation.type === "CARD_ISSUE" && operation.portal === "hapvida") {
+        try {
+          const frame = request.frame();
+          const page = frame.page();
+          const topLevelNavigation = request.isNavigationRequest() && frame === page.mainFrame();
+          allowed = !topLevelNavigation && this.domainAllowlist.isAllowedHapvidaRecaptchaResource(url, page.url());
+        } catch {
+          // Requests without an owning page do not receive this exception.
+        }
+      }
+
+      if (allowed) {
+        await route.fallback();
         return;
       }
 
@@ -147,3 +161,4 @@ export class BrowserManager {
     });
   }
 }
+

@@ -65,6 +65,10 @@ Com `rememberOnDevice=false`, a senha nao e gravada em arquivo ou no Supabase. C
 
 `KOA_AUTH_MAX_ATTEMPTS` limita as falhas de login por operacao (padrao: 3). Antes de atingir o limite, uma falha volta para `awaiting_authentication`; ao atingir o limite, a operacao passa para `manual_review`. Falhas tecnicas identificadas como `DATABASE_OPERATION_UPDATE_FAILED` nao consomem uma tentativa de login.
 
+O formulario de carteirinha Hapvida depende do reCAPTCHA para enviar o login. O worker permite somente recursos HTTPS no caminho `/recaptcha/` dos dominios oficiais do Google/reCAPTCHA, iniciados pela pagina Hapvida durante `CARD_ISSUE`. Essa excecao nao libera navegacao principal para esses dominios. Nao adicione dominios Google inteiros a `KOA_AUTOMATION_ALLOWED_HOSTS` para resolver esse problema.
+
+Antes de pedir a credencial, o worker verifica se a API do reCAPTCHA carregou. Depois do clique, aguarda o POST do formulario e a resposta do portal. Uma verificacao indisponivel, um formulario que nao foi enviado ou um retorno silencioso ao login retorna `PORTAL_AUTH_UNAVAILABLE`, sem registrar falha de senha nem abrir outro desafio de autenticacao. `AUTHENTICATION_FAILED` exige uma rejeicao de credencial reconhecida no portal. A sessao autenticada continua sendo validada antes da emissao e do armazenamento opcional da credencial.
+
 Depois de atualizar o codigo no computador do worker, encerre a instancia antiga, execute `npm ci`, `npm run build` e inicie uma unica instancia com `npm start`. Valide uma emissao de teste pela interface: mesma `operationId`, um login no worker, status `success` e PDF do beneficiario correto. Os testes automatizados nao substituem essa validacao no portal real.
 
 ## Scripts

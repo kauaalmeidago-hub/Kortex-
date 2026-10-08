@@ -81,6 +81,24 @@ describe("worker authentication recovery", () => {
     expect(f.store.get("operation-1", "hapvida:company-1")?.username).toBe("new");
   });
 
+  it.each(["postgres", "sqlite"])("stops an unavailable portal in %s without another password challenge", async (mode) => {
+    const f = fixture();
+    mocks.workflow.mockRejectedValue(new AutomationError("PORTAL_AUTH_UNAVAILABLE", "Verificacao indisponivel.", {
+      safeDetails: "O formulario de login nao foi enviado.", step: "authenticate",
+    }));
+    if (mode === "postgres") {
+      const worker = new PersistentWorker(f.deps);
+      vi.mocked(f.repository.releaseLock).mockImplementation(async () => { worker.stop(); return true; });
+      await worker.run();
+    } else {
+      new OperationQueue(f.deps).enqueue("operation-1");
+      await vi.waitFor(() => expect(f.getOperation().status).toBe("error"));
+    }
+    expect(f.getOperation().status).toBe("error");
+    expect(f.getOperation().error?.code).toBe("PORTAL_AUTH_UNAVAILABLE");
+    expect(f.events.some((event) => event.type === "authentication.failed" || event.type === "authentication.required")).toBe(false);
+  });
+
   it("resumes the same SQLite operation even when reauth arrives before the old execution finishes", async () => {
     const f = fixture();
     const queue = new OperationQueue(f.deps);

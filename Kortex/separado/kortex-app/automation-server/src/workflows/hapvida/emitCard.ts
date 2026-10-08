@@ -81,7 +81,7 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
   }
 
   await context.browserManager.withContext(operation, signal, async (browserContext, page) => {
-    const loginPage = new HapvidaLoginPage(page, context.config.hapvidaCardPortalUrl ?? context.config.hapvidaPortalUrl);
+    const loginPage = new HapvidaLoginPage(page, context.config.hapvidaCardPortalUrl ?? context.config.hapvidaPortalUrl, context.config.authTimeoutMs);
     const cardPage = new HapvidaCardPage(page);
     const portalUrl = context.config.hapvidaCardPortalUrl ?? context.config.hapvidaPortalUrl;
     const movementPortalUrl = context.config.hapvidaMovementPortalUrl;
@@ -151,13 +151,15 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
     assertNotAborted(signal);
 
     await context.updateStatus("authenticating", "Validando sessao Hapvida do perfil Koa");
-    const hasValidSession = await context.browserManager.validatePortalSession("hapvida", page);
+    const hasValidSession = !(await loginPage.passwordStillVisible()) &&
+      await context.browserManager.validatePortalSession("hapvida", page);
     assertNotAborted(signal);
 
     if (hasValidSession) {
       await context.browserManager.saveSession(browserContext, "hapvida");
     } else {
       await context.browserManager.invalidateSession("hapvida");
+      await loginPage.waitForReady();
       await context.updateStatus("authenticating", "Autenticando no portal");
       await context.emitEvent({
         operationId: operation.id,
@@ -180,14 +182,17 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
         }
 
         if (await loginPage.passwordStillVisible()) {
-          throw new AutomationError("AUTHENTICATION_FAILED", "Credencial Hapvida nao confirmou acesso ao portal.", {
-            safeDetails: "O portal continuou na tela de login apos o envio da credencial.",
+          throw new AutomationError("PORTAL_AUTH_UNAVAILABLE", "O portal Hapvida permaneceu na tela de login.", {
+            safeDetails: "O formulario foi enviado, mas o portal nao confirmou acesso nem apresentou uma rejeicao de credencial reconhecida. Verifique a verificacao de acesso do portal.",
             step: "authenticate",
             retryable: false,
           });
         }
 
-        throw createReauthRequiredError("Login executado, mas o portal Hapvida nao confirmou uma sessao autenticada.");
+        throw new AutomationError("PORTAL_AUTH_UNAVAILABLE", "O portal Hapvida nao confirmou o resultado do login.", {
+          safeDetails: "A resposta do portal nao apresentou a area autenticada nem uma rejeicao de credencial reconhecida.",
+          step: "authenticate", retryable: false,
+        });
       }
 
       await context.browserManager.saveSession(browserContext, "hapvida");
