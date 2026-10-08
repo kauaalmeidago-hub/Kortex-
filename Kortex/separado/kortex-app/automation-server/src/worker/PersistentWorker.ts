@@ -9,6 +9,7 @@ import { AutomationError, isAbortError } from "../errors.js";
 import type { OperationError, OperationRecord, OperationStatus } from "../types.js";
 import type { ArtifactStorage } from "../storage/ArtifactStorage.js";
 import type { WorkflowContext } from "../workflows/WorkflowContext.js";
+import { sanitizeDiagnosticText } from "../security/redaction.js";
 
 interface PersistentWorkerDeps {
   config: AutomationConfig;
@@ -182,7 +183,7 @@ export class PersistentWorker {
       return {
         code: error.code,
         message: error.message,
-        safeDetails: error.safeDetails,
+        safeDetails: sanitizeDiagnosticText(error.safeDetails),
         step: error.step,
         retryable: error.retryable,
       };
@@ -192,7 +193,7 @@ export class PersistentWorker {
       return {
         code: "WORKER_ERROR",
         message: "Nao foi possivel concluir a movimentacao.",
-        safeDetails: error.message,
+        safeDetails: sanitizeDiagnosticText(error.message),
         retryable: false,
       };
     }
