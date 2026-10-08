@@ -71,9 +71,20 @@ describe("remembering a validated worker credential", () => {
     expect(mocks.end).toHaveBeenCalledOnce();
   });
 
-  it("rejects an unsupported portal before writing a Hapvida credential", async () => {
-    operation.portal = "ndi";
+  it("rejects a movement before writing a card portal credential", async () => {
+    operation.type = "INCLUSION_HOLDER";
     await expect(service.saveValidatedCredential(operation, credential)).rejects.toMatchObject({ code: "AUTHENTICATION_NOT_SUPPORTED" });
     expect(mocks.protect).not.toHaveBeenCalled();
+  });
+
+  it("stores validated NDI access separately and registers the correct operator", async () => {
+    operation.portal = "ndi";
+    operation.credentialRef = "ndi:company-1:login:0ABC1234";
+    const ndiFile = path.join(dir, Buffer.from(operation.credentialRef).toString("base64url") + ".credential.dpapi");
+    expect(await service.saveValidatedCredential(operation, credential)).toEqual({ rememberedOnDevice: true, metadataRegistered: true });
+    expect(await readFile(ndiFile, "utf8")).toBe("dpapi-ciphertext");
+    await expect(readFile(target)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(mocks.query.mock.calls[0]?.[1]).toEqual(expect.arrayContaining([operation.credentialRef, "NDI - company-1", "ndi"]));
+    expect(JSON.stringify(mocks.query.mock.calls)).not.toContain(credential.password);
   });
 });

@@ -237,8 +237,9 @@ export function loadConfig(): AutomationConfig {
     hapvidaMovementPortalUrl: optionalEnv(process.env.HAPVIDA_MOVEMENT_PORTAL_URL) ?? optionalEnv(process.env.HAPVIDA_PORTAL_URL),
     receitaCpfLookupUrl: optionalEnv(process.env.RECEITA_CPF_LOOKUP_URL),
     cnsLookupUrl: optionalEnv(process.env.CNS_LOOKUP_URL),
-    ndiCardPortalUrl: optionalEnv(process.env.NDI_CARD_PORTAL_URL),
+    ndiCardPortalUrl: optionalEnv(process.env.NDI_CARD_PORTAL_URL) ?? "https://sigo.sh.srv.br/pls/webmin/pk_carteira_provisoria.login_empresa_form",
     ndiMovementPortalUrl: optionalEnv(process.env.NDI_MOVEMENT_PORTAL_URL),
     hapvidaAuthenticatedSelector: optionalEnv(process.env.HAPVIDA_AUTHENTICATED_SELECTOR),
   };
 }
+

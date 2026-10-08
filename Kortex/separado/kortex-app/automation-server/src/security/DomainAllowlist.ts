@@ -1,4 +1,4 @@
-import type { OperationType } from "../types.js";
+import type { OperationType, PortalName } from "../types.js";
 import { AutomationError } from "../errors.js";
 
 const INTERNAL_SCHEMES = new Set(["about:", "data:", "blob:"]);
@@ -51,13 +51,14 @@ export class DomainAllowlist {
     });
   }
 
-  isAllowedHapvidaRecaptchaResource(rawUrl: string, pageUrl: string) {
+  isAllowedCardRecaptchaResource(rawUrl: string, pageUrl: string, portal?: PortalName) {
     try {
       const resource = new URL(rawUrl);
       const page = new URL(pageUrl);
       return (
         page.protocol === "https:" &&
-        page.hostname === "webhap.hapvida.com.br" &&
+        ["webhap.hapvida.com.br", "sigo.sh.srv.br"].includes(page.hostname) &&
+        (!portal || page.hostname === (portal === "ndi" ? "sigo.sh.srv.br" : "webhap.hapvida.com.br")) &&
         this.isAllowed(pageUrl) &&
         resource.protocol === "https:" &&
         !resource.username && !resource.password && !resource.port &&

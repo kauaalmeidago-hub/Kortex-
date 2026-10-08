@@ -83,5 +83,11 @@ export class OperationScopedSecretProvider implements SecretProvider {
   async get(ref: string) {
     return this.ephemeralCredentials.consume(this.operationId, ref, this.generation) ?? this.fallback.get(ref);
   }
+
+  takeAutomaticSearchCredential(ref: string) {
+    const credential = this.ephemeralCredentials.get(this.operationId, ref, this.generation);
+    if (credential?.metadata?.autoPortalCredential !== true) return undefined;
+    return this.ephemeralCredentials.consume(this.operationId, ref, this.generation);
+  }
 }
 

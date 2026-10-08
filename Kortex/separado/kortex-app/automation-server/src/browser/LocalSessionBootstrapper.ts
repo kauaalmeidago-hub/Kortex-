@@ -81,10 +81,10 @@ export class LocalSessionBootstrapper {
       const storageState: StorageState = { cookies, origins: [] };
       await this.profileManager.saveStorageState(portal, storageState);
 
-      const validated = portal === "hapvida" ? await this.validateHapvidaStorageState(url, storageState) : false;
+      const validated = await this.validateStorageState(portal, url, storageState);
       await this.profileManager.writeStatus({
         initialized: true,
-        hapvidaSessionValidated: portal === "hapvida" ? validated : undefined,
+        ...(portal === "ndi" ? { ndiSessionValidated: validated } : { hapvidaSessionValidated: validated }),
         lastValidatedAt: validated ? new Date().toISOString() : undefined,
         lastValidationError: validated ? undefined : "Sessao copiada, mas nao validada em headless.",
       });
@@ -100,7 +100,7 @@ export class LocalSessionBootstrapper {
     }
   }
 
-  private async validateHapvidaStorageState(url: string, storageState: StorageState) {
+  private async validateStorageState(portal: PortalName, url: string, storageState: StorageState) {
     const browser = await chromium.launch({
       channel: this.config.browserChannel,
       headless: true,
@@ -114,7 +114,7 @@ export class LocalSessionBootstrapper {
       });
       const page = await context.newPage();
       await page.goto(url, { waitUntil: "domcontentloaded" });
-      return await this.profileManager.validatePortalSession("hapvida", page);
+      return await this.profileManager.validatePortalSession(portal, page);
     } catch {
       return false;
     } finally {
@@ -123,3 +123,4 @@ export class LocalSessionBootstrapper {
     }
   }
 }
+

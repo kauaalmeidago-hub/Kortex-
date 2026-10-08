@@ -196,14 +196,18 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
     });
   }
 
+  const portal = operation.portal;
+  const portalLabel = portal === "ndi" ? "NDI" : "Hapvida";
+  const portalUrl = portal === "ndi"
+    ? context.config.ndiCardPortalUrl
+    : context.config.hapvidaCardPortalUrl ?? context.config.hapvidaPortalUrl;
   let credential: PortalCredential | undefined;
 
   for (let portalAttempt = 1; portalAttempt <= CARD_PORTAL_AUTH_MAX_ATTEMPTS; portalAttempt += 1) {
     try {
       await context.browserManager.withContext(operation, signal, async (browserContext, page) => {
-    const loginPage = new HapvidaLoginPage(page, context.config.hapvidaCardPortalUrl ?? context.config.hapvidaPortalUrl, context.config.authTimeoutMs);
+    const loginPage = new HapvidaLoginPage(page, portalUrl, context.config.authTimeoutMs, portalLabel);
     const cardPage = new HapvidaCardPage(page);
-    const portalUrl = context.config.hapvidaCardPortalUrl ?? context.config.hapvidaPortalUrl;
     const movementPortalUrl = context.config.hapvidaMovementPortalUrl;
     const movementAccessPage = new HapvidaMovementAccessPage(page, movementPortalUrl);
     const menuPage = new HapvidaMovementMainMenuPage(page);
@@ -213,7 +217,7 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
       context.browserManager.validateAllowedUrl(portalUrl, operation);
     }
 
-    if (movementPortalUrl) {
+    if (portal === "hapvida" && context.config.features.cardIssueActiveUsersPreflight && movementPortalUrl) {
       context.browserManager.validateAllowedUrl(movementPortalUrl, operation);
     }
 
@@ -222,7 +226,7 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
       await context.updateStatus("authenticating", "Carregando credencial segura");
       credential = await context.secretProvider.get(operation.credentialRef).catch(() => {
         throw createReauthRequiredError(
-          "Nao foi possivel renovar a sessao Hapvida sem uma credencial segura cadastrada para o Koa.",
+          `Nao foi possivel renovar a sessao ${portalLabel} sem uma credencial segura cadastrada para o Koa.`,
         );
       });
       if (requestedCompanyCode && credential.username.trim() !== requestedCompanyCode) {
@@ -232,7 +236,7 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
       return credential;
     };
 
-    const activeUsersCheck = context.config.features.cardIssueActiveUsersPreflight
+    const activeUsersCheck = portal === "hapvida" && context.config.features.cardIssueActiveUsersPreflight
       ? await (async () => {
           await context.updateStatus("authenticating", "Abrindo Sistema de Movimentacao Hapvida");
           await movementAccessPage.open().catch((error) => {
@@ -268,21 +272,21 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
         })()
       : undefined;
 
-    await context.updateStatus("authenticating", "Abrindo portal de carteirinha Hapvida");
+    await context.updateStatus("authenticating", `Abrindo portal de carteirinha ${portalLabel}`);
     // A saved portal session cannot establish which contract the user requested.
     if (requestedCompanyCode) await browserContext.clearCookies();
     await loginPage.open();
     assertNotAborted(signal);
 
-    await context.updateStatus("authenticating", "Validando sessao Hapvida do perfil Koa");
+    await context.updateStatus("authenticating", `Validando sessao ${portalLabel} do perfil Koa`);
     const hasValidSession = !requestedCompanyCode && !(await loginPage.passwordStillVisible()) &&
-      await context.browserManager.validatePortalSession("hapvida", page);
+      await context.browserManager.validatePortalSession(portal, page);
     assertNotAborted(signal);
 
     if (hasValidSession) {
-      await context.browserManager.saveSession(browserContext, "hapvida");
+      await context.browserManager.saveSession(browserContext, portal);
     } else {
-      await context.browserManager.invalidateSession("hapvida");
+      await context.browserManager.invalidateSession(portal);
       await loginPage.waitForReady();
       await context.updateStatus("authenticating", "Autenticando no portal");
       await context.emitEvent({
@@ -295,10 +299,10 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
       await loginPage.login(await loadCredential());
       assertNotAborted(signal);
 
-      const sessionAfterLogin = await context.browserManager.validatePortalSession("hapvida", page);
+      const sessionAfterLogin = await context.browserManager.validatePortalSession(portal, page);
       if (!sessionAfterLogin) {
         if (await loginPage.invalidIdentificationMessage().isVisible().catch(() => false)) {
-          throw new AutomationError("AUTHENTICATION_FAILED", "Credencial Hapvida nao aceita pelo portal.", {
+          throw new AutomationError("AUTHENTICATION_FAILED", `Credencial ${portalLabel} nao aceita pelo portal.`, {
             safeDetails: "O portal retornou Identificacao invalida para o codigo/senha cadastrados.",
             step: "authenticate",
             retryable: false,
@@ -306,20 +310,20 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
         }
 
         if (await loginPage.passwordStillVisible()) {
-          throw new AutomationError("PORTAL_AUTH_UNAVAILABLE", "O portal Hapvida permaneceu na tela de login.", {
+          throw new AutomationError("PORTAL_AUTH_UNAVAILABLE", `O portal ${portalLabel} permaneceu na tela de login.`, {
             safeDetails: "O formulario foi enviado, mas o portal nao confirmou acesso nem apresentou uma rejeicao de credencial reconhecida. Verifique a verificacao de acesso do portal.",
             step: "authenticate",
             retryable: true,
           });
         }
 
-        throw new AutomationError("PORTAL_AUTH_UNAVAILABLE", "O portal Hapvida nao confirmou o resultado do login.", {
+        throw new AutomationError("PORTAL_AUTH_UNAVAILABLE", `O portal ${portalLabel} nao confirmou o resultado do login.`, {
           safeDetails: "A resposta do portal nao apresentou a area autenticada nem uma rejeicao de credencial reconhecida.",
           step: "authenticate", retryable: true,
         });
       }
 
-      await context.browserManager.saveSession(browserContext, "hapvida");
+      await context.browserManager.saveSession(browserContext, portal);
       await context.emitEvent({
         operationId: operation.id,
         type: "authentication.succeeded",
@@ -397,6 +401,7 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
 
     const current = await context.repository.get(operation.id);
     const result: OperationResult = {
+      ...current?.result,
       beneficiaryName,
       companyId: operation.companyId,
       operator: operation.portal,
@@ -436,8 +441,8 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
         throw error;
       }
 
-      await context.browserManager.invalidateSession("hapvida").catch(() => undefined);
-      await context.updateStatus("authenticating", "Reabrindo portal Hapvida para nova tentativa", {
+      await context.browserManager.invalidateSession(portal).catch(() => undefined);
+      await context.updateStatus("authenticating", `Reabrindo portal ${portalLabel} para nova tentativa`, {
         attempt: portalAttempt + 1,
         maxAttempts: CARD_PORTAL_AUTH_MAX_ATTEMPTS,
         reason: "PORTAL_AUTH_UNAVAILABLE",

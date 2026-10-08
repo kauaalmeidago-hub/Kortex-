@@ -7,18 +7,19 @@ export class HapvidaLoginPage {
     private readonly page: Page,
     private readonly portalUrl?: string,
     private readonly authTimeoutMs = 20_000,
+    private readonly portalLabel = "Hapvida",
   ) {}
 
   async open() {
     if (!this.portalUrl) {
-      throw new AutomationError("PORTAL_URL_NOT_CONFIGURED", "URL do portal Hapvida nao configurada.", {
-        safeDetails: "Configure HAPVIDA_CARD_PORTAL_URL para validar o fluxo em modo debug.",
+      throw new AutomationError("PORTAL_URL_NOT_CONFIGURED", `URL do portal ${this.portalLabel} nao configurada.`, {
+        safeDetails: `Configure ${this.portalLabel === "NDI" ? "NDI" : "HAPVIDA"}_CARD_PORTAL_URL para validar o fluxo em modo debug.`,
         retryable: false,
       });
     }
 
     await this.page.goto(this.portalUrl, { waitUntil: "domcontentloaded", timeout: this.authTimeoutMs }).catch(() => {
-      throw this.portalUnavailable("O portal Hapvida nao abriu a tela de login dentro do tempo esperado.");
+      throw this.portalUnavailable(`O portal ${this.portalLabel} nao abriu a tela de login dentro do tempo esperado.`);
     });
   }
 
@@ -115,13 +116,13 @@ export class HapvidaLoginPage {
 
   private describeUnexpectedLoginFailure(error: unknown) {
     if (error instanceof Error && /closed|crash|detached|navigation|timeout/i.test(error.message)) {
-      return "A pagina do portal Hapvida ficou indisponivel durante a autenticacao. A tentativa pode ser refeita com o mesmo acesso.";
+      return `A pagina do portal ${this.portalLabel} ficou indisponivel durante a autenticacao. A tentativa pode ser refeita com o mesmo acesso.`;
     }
-    return "O portal Hapvida falhou durante a autenticacao. A tentativa pode ser refeita com o mesmo acesso.";
+    return `O portal ${this.portalLabel} falhou durante a autenticacao. A tentativa pode ser refeita com o mesmo acesso.`;
   }
 
   private portalUnavailable(safeDetails: string) {
-    return new AutomationError("PORTAL_AUTH_UNAVAILABLE", "Verificacao de acesso ao portal Hapvida indisponivel.", {
+    return new AutomationError("PORTAL_AUTH_UNAVAILABLE", `Verificacao de acesso ao portal ${this.portalLabel} indisponivel.`, {
       safeDetails, step: "authenticate", retryable: true,
     });
   }

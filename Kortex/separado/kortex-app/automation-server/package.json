@@ -11,6 +11,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run src",
     "test:card-preview": "npm run build && node scripts/check-card-preview.mjs",
+    "test:card-portals": "npm run build && node scripts/check-card-portals.mjs",
     "browser:onboard": "tsx src/scripts/koa-browser-onboard.ts",
     "browser:check": "tsx src/scripts/koa-browser-check.ts",
     "credential:register": "tsx src/scripts/register-portal-credential.ts",

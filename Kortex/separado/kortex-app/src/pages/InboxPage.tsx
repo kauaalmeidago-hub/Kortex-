@@ -658,11 +658,13 @@ type KoaFormValues = {
 
 type KoaOperation = {
   id: string;
+  portal?: "hapvida" | "ndi";
   type: KoaOperationType;
   status: KoaOperationStatus;
   createdAt: string;
   updatedAt: string;
   result?: {
+    operator?: "hapvida" | "ndi";
     beneficiaryName?: string;
     beneficiaryCpfMasked?: string;
     contractCode?: string;
@@ -804,7 +806,8 @@ function phaseFromOperationStatus(status: KoaOperationStatus): KoaPanelPhase {
 }
 
 function safeKoaErrorMessage(code?: string) {
-  if (code === "REAUTH_REQUIRED") return "É necessário renovar o acesso à Hapvida.";
+  if (code === "REAUTH_REQUIRED") return "É necessário renovar o acesso ao portal da operadora.";
+  if (code === "CARD_PORTAL_SEARCH_INCOMPLETE") return "Não consegui concluir a busca em Hapvida e NDI. Verifique o acesso ao portal indicado.";
   if (code === "CREDENTIAL_NOT_FOUND") return "Credencial segura não encontrada.";
   if (code === "BENEFICIARY_NOT_FOUND") return "Beneficiário não encontrado.";
   if (code === "BENEFICIARY_NOT_ACTIVE") return "Beneficiário não está ativo na Hapvida.";
@@ -853,12 +856,14 @@ function mapAutomationOperation(response: AutomationOperationResponse, type: Koa
 
   return {
     id: response.operationId,
+    portal: response.portal,
     type,
     status: response.status,
     createdAt: response.createdAt,
     updatedAt: response.updatedAt,
     result: response.result
       ? {
+          operator: response.result.operator === "ndi" || response.result.operator === "hapvida" ? response.result.operator : undefined,
           beneficiaryName: typeof response.result.beneficiaryName === "string" ? response.result.beneficiaryName : undefined,
           beneficiaryCpfMasked: typeof response.result.beneficiaryCpfMasked === "string" ? response.result.beneficiaryCpfMasked : undefined,
           contractCode: typeof response.result.contractCode === "string" ? response.result.contractCode : undefined,
@@ -920,7 +925,7 @@ function operationStatusMessage(status: KoaOperationStatus, type: KoaOperationTy
   if (status === "checking_active_users") return "Validando os usuários ativos da empresa...";
   if (status === "checking_cns") return "Consultando o CNS...";
   if (status === "checking_cpf") return "Validando o CPF na Receita...";
-  if (status === "awaiting_authentication") return "Aguardando autenticação Hapvida...";
+  if (status === "awaiting_authentication") return "Aguardando acesso ao portal da operadora...";
   if (status === "generating_cpf_document") return "Gerando comprovante do CPF...";
   if (status === "validating_documents") return "Validando documentos...";
   if (status === "opening_inclusion") return "Abrindo inclusão de titular...";
@@ -1137,6 +1142,7 @@ function KoaPanel({
       const operationPayload =
         selectedFlow === "carteirinha"
           ? {
+              portalSearch: "auto",
               beneficiaryName: values.beneficiaryName.trim(),
               periodStart: cardPeriod.periodStart,
               periodEnd: cardPeriod.periodEnd,
@@ -1451,7 +1457,7 @@ function KoaPanelComposer({
         <div className="flex min-w-0 items-center gap-3 rounded-full bg-secondary/70 px-4 py-2">
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-muted-foreground">
             {awaitingAuthentication
-              ? "Aguardando autenticação Hapvida..."
+              ? "Aguardando acesso ao portal da operadora..."
               : cancelling
                 ? "Cancelando operação..."
                 : "Koa está processando a movimentação..."}
@@ -1559,10 +1565,12 @@ function KoaProcessingMessage({
 
 function KoaAuthenticationCard({
   defaultCompanyCode,
+  portal,
   onCancelOperation,
   onSubmitAuthentication,
 }: {
   defaultCompanyCode?: string;
+  portal?: "hapvida" | "ndi";
   onCancelOperation: () => void;
   onSubmitAuthentication: (input: { password: string; rememberOnDevice: boolean; companyCode?: string }) => Promise<string | undefined>;
 }) {
@@ -1604,9 +1612,9 @@ function KoaAuthenticationCard({
     <div className="flex items-start gap-2">
       <KoaOperationAnimation className="mt-0.5 h-10 w-10 shrink-0" />
       <div className="max-w-[84%] rounded-2xl rounded-bl-md bg-secondary/80 px-4 py-3 text-left shadow-sm">
-        <p className="text-sm font-semibold text-foreground">Preciso autenticar o acesso Hapvida para continuar.</p>
+        <p className="text-sm font-semibold text-foreground">Preciso autenticar o acesso {portal === "ndi" ? "NDI" : "Hapvida"} para continuar.</p>
         <p className="mt-1 text-sm text-muted-foreground">
-          Informe o acesso deste código. Com "Lembrar" ativado, ele será salvo de forma protegida neste computador após o login.
+          Informe o acesso deste código para buscar em Hapvida e NDI. Com "Lembrar" ativado, ele será salvo de forma protegida neste computador para cada portal em que o login funcionar.
         </p>
 
         <div className="mt-4 space-y-3">
@@ -1692,6 +1700,7 @@ function KoaOperationResult({
     return (
       <KoaAuthenticationCard
         defaultCompanyCode={defaultCompanyCode}
+        portal={operation.portal}
         onCancelOperation={onCancelOperation}
         onSubmitAuthentication={onSubmitAuthentication}
       />
@@ -1817,6 +1826,7 @@ function KoaOperationResult({
   }
 
   const resultRows = [
+    operation.type === "card" && operation.result?.operator ? { label: "Operadora", value: operation.result.operator === "ndi" ? "NDI" : "Hapvida" } : null,
     operation.result?.beneficiaryName ? { label: "Beneficiário", value: operation.result.beneficiaryName } : null,
     operation.result?.portalStatusCode ? { label: "Código Hapvida", value: operation.result.portalStatusCode } : null,
     operation.result?.status ? { label: "Status", value: operation.result.status } : null,

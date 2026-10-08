@@ -34,6 +34,7 @@ export const OperatorSchema = z.enum(["hapvida", "ndi"]).default("hapvida");
 
 export const CardIssuePayloadSchema = z
   .object({
+    portalSearch: z.enum(["auto", "selected"]).default("auto"),
     beneficiaryName: z.string().min(1),
     cpf: z.string().min(1).optional(),
     birthDate: z.string().min(1).optional(),
@@ -188,3 +189,4 @@ export const CreateOperationSchema = z.object({
   credentialRef: z.string().optional(),
   input: z.record(z.string(), z.unknown()).default({}),
 });
+

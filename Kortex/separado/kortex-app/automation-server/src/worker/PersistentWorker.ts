@@ -13,6 +13,8 @@ import type { WorkflowContext } from "../workflows/WorkflowContext.js";
 import { sanitizeDiagnosticText } from "../security/redaction.js";
 import { type EphemeralCredentialStore, OperationScopedSecretProvider } from "../secrets/EphemeralCredentialStore.js";
 
+import type { CredentialResolver } from "../credentials/CredentialResolver.js";
+
 interface PersistentWorkerDeps {
   config: AutomationConfig;
   repository: PersistentAutomationQueueRepository;
@@ -21,6 +23,7 @@ interface PersistentWorkerDeps {
   secretProvider: SecretProvider;
   ephemeralCredentialStore?: EphemeralCredentialStore;
   artifactStorage: ArtifactStorage;
+  credentialResolver?: CredentialResolver;
 }
 
 export class PersistentWorker {
@@ -89,8 +92,13 @@ export class PersistentWorker {
     const controller = new AbortController();
     const credentialGeneration = this.deps.ephemeralCredentialStore?.snapshotGeneration();
     this.currentController = controller;
-    const lockKey = `${operation.portal}:company:${operation.companyId}`;
+    const lockKeys = operation.type === "CARD_ISSUE" && operation.input.portalSearch === "auto"
+      ? [`hapvida:company:${operation.companyId}`, `ndi:company:${operation.companyId}`]
+      : [`${operation.portal}:company:${operation.companyId}`];
+    const acquiredLocks: string[] = [];
     let leaseTimer: NodeJS.Timeout | undefined;
+    let leaseRenewal: Promise<void> | undefined;
+    let leaseLost = false;
     let cancelWatchTimer: NodeJS.Timeout | undefined;
 
     try {
@@ -99,23 +107,31 @@ export class PersistentWorker {
         return;
       }
 
-      const lockAcquired = await this.deps.repository.acquireLock(
-        lockKey,
-        operation.id,
-        this.deps.config.workerId,
-        this.deps.config.workerLeaseSeconds,
-      );
-
-      if (!lockAcquired) {
-        throw new AutomationError("LOCK_NOT_ACQUIRED", "Nao foi possivel adquirir lock da empresa.", {
-          safeDetails: `Lock: ${lockKey}`,
-          retryable: true,
-        });
+      for (const lockKey of lockKeys) {
+        const lockAcquired = await this.deps.repository.acquireLock(
+          lockKey, operation.id, this.deps.config.workerId, this.deps.config.workerLeaseSeconds,
+        );
+        if (!lockAcquired) {
+          throw new AutomationError("LOCK_NOT_ACQUIRED", "Nao foi possivel adquirir lock da empresa.", {
+            safeDetails: `Lock: ${lockKey}`, retryable: true,
+          });
+        }
+        acquiredLocks.push(lockKey);
       }
 
       leaseTimer = setInterval(() => {
-        void this.deps.repository.renewLease(operation.id, this.deps.config.workerId, this.deps.config.workerLeaseSeconds)
-          .then((renewed) => { this.queueConnected = renewed; }, () => { this.queueConnected = false; });
+        if (leaseRenewal) return;
+        leaseRenewal = (async () => {
+          const locks = await Promise.all(acquiredLocks.map(lockKey => this.deps.repository.acquireLock(
+            lockKey, operation.id, this.deps.config.workerId, this.deps.config.workerLeaseSeconds,
+          )));
+          const renewed = locks.every(Boolean) && await this.deps.repository.renewLease(
+            operation.id, this.deps.config.workerId, this.deps.config.workerLeaseSeconds,
+          );
+          this.queueConnected = renewed;
+          if (!renewed) { leaseLost = true; controller.abort(); }
+        })().catch(() => { this.queueConnected = false; leaseLost = true; controller.abort(); })
+          .finally(() => { leaseRenewal = undefined; });
       }, Math.max(5000, Math.floor((this.deps.config.workerLeaseSeconds * 1000) / 3)));
 
       cancelWatchTimer = setInterval(() => {
@@ -130,11 +146,14 @@ export class PersistentWorker {
           ? new OperationScopedSecretProvider(operation.id, this.deps.ephemeralCredentialStore, this.deps.secretProvider, credentialGeneration)
           : this.deps.secretProvider,
         artifactStorage: this.deps.artifactStorage,
+        credentialResolver: this.deps.credentialResolver,
         updateStatus: (status, step, data) => this.updateStatus(operation.id, status, step, data),
         emitEvent: (event) => this.emitEvent({ ...event, operationId: event.operationId ?? operation.id }),
       });
     } catch (error) {
-      if (controller.signal.aborted || isAbortError(error)) {
+      if (leaseLost) {
+        await this.fail(operation.id, { code: "LOCK_LOST", message: "A execucao perdeu a reserva da empresa e foi interrompida.", retryable: true });
+      } else if (controller.signal.aborted || isAbortError(error)) {
         await this.updateStatus(operation.id, "cancelled", "Operacao cancelada pelo usuario");
       } else if (error instanceof AutomationError && error.code === "REAUTH_REQUIRED" && operation.type === "CARD_ISSUE") {
         await this.updateStatus(operation.id, "awaiting_authentication", "authentication_required", {
@@ -160,7 +179,10 @@ export class PersistentWorker {
     } finally {
       if (leaseTimer) clearInterval(leaseTimer);
       if (cancelWatchTimer) clearInterval(cancelWatchTimer);
-      await this.deps.repository.releaseLock(lockKey, operation.id, this.deps.config.workerId).catch(() => undefined);
+      await leaseRenewal;
+      await Promise.all(acquiredLocks.map(lockKey => this.deps.repository.releaseLock(
+        lockKey, operation.id, this.deps.config.workerId,
+      ).catch(() => undefined)));
       this.deps.ephemeralCredentialStore?.clear(operation.id, credentialGeneration);
       this.currentController = undefined;
     }

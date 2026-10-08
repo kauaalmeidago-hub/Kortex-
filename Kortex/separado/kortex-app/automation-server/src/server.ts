@@ -219,7 +219,7 @@ export async function createServer({ config, repository, eventBus, queue, creden
 
     const resolvedCredential = await credentialResolver.resolve({
       companyId: payload.companyId,
-      operator: payload.operator ?? payload.portal,
+      operator: payload.portal,
       credentialRef: payload.credentialRef,
       portalLoginCode: payload.type === "CARD_ISSUE" ? portalLoginCode(payload.input ?? {}) : undefined,
     });
@@ -359,7 +359,7 @@ export async function createServer({ config, repository, eventBus, queue, creden
         {
           username: companyCode,
           password: parsed.data.password,
-          metadata: { rememberOnDevice: parsed.data.rememberOnDevice, submittedAt: new Date().toISOString() },
+          metadata: { rememberOnDevice: parsed.data.rememberOnDevice, autoPortalCredential: operation.input.portalSearch === "auto", submittedAt: new Date().toISOString() },
         },
         config.authChallengeTtlMinutes * 60 * 1000,
       );

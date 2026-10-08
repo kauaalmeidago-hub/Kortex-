@@ -10,7 +10,7 @@ export class HeadlessChromiumBrowserProvider implements BrowserProvider {
     private readonly profileManager: KoaBrowserProfileManager,
   ) {}
 
-  async createContext(_operation: OperationRecord, _signal: AbortSignal, options: BrowserProviderOptions): Promise<ManagedBrowserContext> {
+  async createContext(operation: OperationRecord, _signal: AbortSignal, options: BrowserProviderOptions): Promise<ManagedBrowserContext> {
     const launchOptions: NonNullable<Parameters<typeof chromium.launch>[0]> = {
       downloadsPath: options.downloadsPath,
       headless: this.config.headless,
@@ -22,7 +22,7 @@ export class HeadlessChromiumBrowserProvider implements BrowserProvider {
     }
 
     const browser = await chromium.launch(launchOptions);
-    const storageState = await this.profileManager.readStorageState("hapvida");
+    const storageState = await this.profileManager.readStorageState(operation.portal);
     const context = await browser.newContext({
       acceptDownloads: true,
       storageState,
@@ -36,10 +36,11 @@ export class HeadlessChromiumBrowserProvider implements BrowserProvider {
       context,
       page,
       close: async () => {
-        await this.profileManager.saveSession(context, "hapvida").catch(() => undefined);
+        await this.profileManager.saveSession(context, operation.portal).catch(() => undefined);
         await context.close().catch(() => undefined);
         await browser.close().catch(() => undefined);
       },
     };
   }
 }
+

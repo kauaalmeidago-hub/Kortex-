@@ -45,6 +45,7 @@ const queue = new OperationQueue({
   secretProvider,
   ephemeralCredentialStore,
   artifactStorage,
+  credentialResolver,
 });
 
 let persistentWorker: PersistentWorker | undefined;
@@ -58,6 +59,7 @@ if (config.repositoryMode === "postgres" && config.automationMode !== "api") {
     secretProvider,
     ephemeralCredentialStore,
     artifactStorage,
+    credentialResolver,
   });
 }
 

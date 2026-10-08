@@ -9,7 +9,7 @@ import type { BrowserProvider } from "./BrowserProvider.js";
 import type { KoaBrowserProfileManager } from "./KoaBrowserProfileManager.js";
 import { BrowserManager } from "./BrowserManager.js";
 
-describe("Hapvida login resource routing", () => {
+describe("card portal login resource routing", () => {
   it.each([
     ["portal CAPTCHA script", "CARD_ISSUE", "hapvida", "https://www.google.com/recaptcha/api.js", false, false, true],
     ["CAPTCHA iframe", "CARD_ISSUE", "hapvida", "https://www.google.com/recaptcha/api2/anchor", true, true, true],
@@ -17,7 +17,8 @@ describe("Hapvida login resource routing", () => {
     ["top-level CAPTCHA navigation", "CARD_ISSUE", "hapvida", "https://www.google.com/recaptcha/api.js", true, false, false],
     ["Google account", "CARD_ISSUE", "hapvida", "https://accounts.google.com/", false, false, false],
     ["unrelated Google resource", "CARD_ISSUE", "hapvida", "https://www.google.com/search", false, false, false],
-    ["other operator", "CARD_ISSUE", "ndi", "https://www.google.com/recaptcha/api.js", false, false, false],
+    ["NDI CAPTCHA resource", "CARD_ISSUE", "ndi", "https://www.google.com/recaptcha/api.js", false, false, true],
+    ["NDI top-level CAPTCHA navigation", "CARD_ISSUE", "ndi", "https://www.google.com/recaptcha/api.js", true, false, false],
     ["other operation", "INCLUSION", "hapvida", "https://www.google.com/recaptcha/api.js", false, false, false],
     ["portal navigation", "CARD_ISSUE", "hapvida", "https://webhap.hapvida.com.br/pls/webhap/login", true, false, true],
   ])("routes %s according to its page and operation", async (_label, type, portal, url, navigation, subframe, allowed) => {
@@ -26,7 +27,7 @@ describe("Hapvida login resource routing", () => {
     const mainFrame = {};
     const frame = subframe ? {} : mainFrame;
     const page = {
-      url: () => "https://webhap.hapvida.com.br/pls/webhap/pk_carteira_provisoria.login_empresa_form",
+      url: () => portal === "ndi" ? "https://sigo.sh.srv.br/pls/webmin/pk_carteira_provisoria.login_empresa_form" : "https://webhap.hapvida.com.br/pls/webhap/pk_carteira_provisoria.login_empresa_form",
       mainFrame: () => mainFrame, on: vi.fn(),
     };
     Object.assign(frame, { page: () => page });
@@ -34,7 +35,7 @@ describe("Hapvida login resource routing", () => {
       pages: () => [page], on: vi.fn() };
     const close = vi.fn(async () => undefined);
     const provider = { createContext: async () => ({ context, page, close }) } as unknown as BrowserProvider;
-    const config = { downloadsDir: root, allowedAutomationHosts: ["webhap.hapvida.com.br"] } as AutomationConfig;
+    const config = { downloadsDir: root, allowedAutomationHosts: ["webhap.hapvida.com.br", "sigo.sh.srv.br"] } as AutomationConfig;
     const manager = new BrowserManager(config, provider, {} as KoaBrowserProfileManager);
     const request = { url: () => url, frame: () => frame, isNavigationRequest: () => navigation } as unknown as Request;
     const fallback = vi.fn(async () => undefined);

@@ -310,8 +310,8 @@ async function createLocalOperation(input: {
       workspaceId: input.workspaceId,
       companyId: input.companyId,
       requestedBy: input.requestedBy,
-      portal: input.portal ?? "hapvida",
-      operator: input.operator ?? "hapvida",
+      portal: input.portal ?? input.operator ?? "hapvida",
+      operator: input.portal ?? input.operator ?? "hapvida",
       input: input.data,
     }),
   });
@@ -328,9 +328,10 @@ export async function createOperation(input: {
   operator?: "hapvida" | "ndi";
   data: Record<string, unknown>;
 }) {
-  assertSafePayload(input.data);
+  const payload = input.type === "CARD_ISSUE" ? { portalSearch: "auto", ...input.data } : input.data;
+  assertSafePayload(payload);
 
-  if (useLocalApi) return createLocalOperation(input);
+  if (useLocalApi) return createLocalOperation({ ...input, data: payload });
 
   assertOnlineOperationAllowed(input.type);
   if (!input.workspaceId) throw new Error("Workspace ativo é obrigatório para criar operação online.");
@@ -339,7 +340,7 @@ export async function createOperation(input: {
     _workspace_id: input.workspaceId,
     _company_id: input.companyId,
     _operator: input.operator ?? input.portal ?? "hapvida",
-    _payload: input.data,
+    _payload: payload,
   });
 
   if (error) throw new Error(error.message);

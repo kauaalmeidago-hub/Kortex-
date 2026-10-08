@@ -61,6 +61,14 @@ describe("card file downloads from the chat", () => {
     expect(headers.get("x-koa-automation-token")).toBe("local-worker-token");
     expect(headers.get("authorization")).toBeNull();
   });
+
+  it.each(["auto", "selected"])("sends a card request with the same NDI operator and portal and search=%s", async search => {
+    fetchMock.mockResolvedValueOnce(new Response('{"operationId":"new-operation","status":"queued"}', { status: 202 }));
+    const { createOperation } = await import("./automationApi");
+    await createOperation({ type: "CARD_ISSUE", companyId: "company-1", portal: "ndi", data: { contractCode: "0NEW", ...(search === "selected" ? { portalSearch: "selected" } : {}) } });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ portal: "ndi", operator: "ndi", input: { portalSearch: search, contractCode: "0NEW" } });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
   it("renews a rejected session and sends the same order once with the new JWT", async () => {
     fetchMock.mockResolvedValueOnce(new Response('{"error":"unauthorized"}', { status: 401 }))
       .mockResolvedValueOnce(new Response('{"operationId":"new-operation","status":"queued"}', { status: 202 }));

@@ -13,6 +13,7 @@ export interface KoaBrowserProfileStatus {
   profileDir: string;
   initialized: boolean;
   hapvidaSessionValidated: boolean;
+  ndiSessionValidated?: boolean;
   lastValidatedAt?: string;
   lastValidationError?: string;
   onboardingOpenedAt?: string;
@@ -64,14 +65,14 @@ export class KoaBrowserProfileManager {
     if (!raw) {
       return {
         profileDir: this.config.browserProfileDir,
-        initialized: this.hasAuthState("hapvida"),
+        initialized: this.hasAuthState("hapvida") || this.hasAuthState("ndi"),
         hapvidaSessionValidated: false,
       };
     }
 
     try {
       const parsed = JSON.parse(raw) as Partial<KoaBrowserProfileStatus>;
-      const authStateExists = this.hasAuthState("hapvida");
+      const authStateExists = this.hasAuthState("hapvida") || this.hasAuthState("ndi");
       return {
         ...parsed,
         profileDir: this.config.browserProfileDir,
@@ -81,7 +82,7 @@ export class KoaBrowserProfileManager {
     } catch {
       return {
         profileDir: this.config.browserProfileDir,
-        initialized: this.hasAuthState("hapvida"),
+        initialized: this.hasAuthState("hapvida") || this.hasAuthState("ndi"),
         hapvidaSessionValidated: false,
         lastValidationError: "browser-profile-status.json invalido.",
       };
@@ -165,7 +166,7 @@ export class KoaBrowserProfileManager {
   async markSessionValidated(portal = "hapvida") {
     await this.writeStatus({
       initialized: true,
-      hapvidaSessionValidated: portal === "hapvida" ? true : undefined,
+      ...(portal === "ndi" ? { ndiSessionValidated: true } : { hapvidaSessionValidated: true }),
       lastValidatedAt: new Date().toISOString(),
       lastValidationError: undefined,
     });
@@ -175,30 +176,34 @@ export class KoaBrowserProfileManager {
     await rm(this.getAuthStatePath(portal), { force: true }).catch(() => undefined);
     await rm(this.getProtectedAuthStatePath(portal), { force: true }).catch(() => undefined);
     await this.writeStatus({
-      initialized: this.hasAuthState(portal),
-      hapvidaSessionValidated: portal === "hapvida" ? false : undefined,
+      initialized: this.hasAuthState("hapvida") || this.hasAuthState("ndi"),
+      ...(portal === "ndi" ? { ndiSessionValidated: false } : { hapvidaSessionValidated: false }),
       lastValidationError: "Sessao invalidada.",
     });
   }
 
-  async validatePortalSession(portal: "hapvida", page: Page) {
-    if (portal !== "hapvida") {
+  async validatePortalSession(portal: "hapvida" | "ndi", page: Page) {
+    if (portal !== "hapvida" && portal !== "ndi") {
       throw new AutomationError("PORTAL_NOT_SUPPORTED", "Portal nao suportado para validacao de sessao.", {
         safeDetails: `Portal: ${portal}`,
         retryable: false,
       });
     }
 
-    return this.validateHapvidaSession(page);
+    return this.validateCardSession(portal, page);
   }
 
-  private async validateHapvidaSession(page: Page) {
-    if (this.config.hapvidaPortalUrl && page.url() === "about:blank") {
+  private async validateCardSession(portal: "hapvida" | "ndi", page: Page) {
+    if (portal === "hapvida" && this.config.hapvidaPortalUrl && page.url() === "about:blank") {
       await page.goto(this.config.hapvidaPortalUrl, { waitUntil: "domcontentloaded" });
     }
 
     try {
-      const configuredLocator = this.config.hapvidaAuthenticatedSelector
+      if (portal === "ndi" && (!this.config.ndiCardPortalUrl ||
+        new URL(page.url()).hostname !== new URL(this.config.ndiCardPortalUrl).hostname)) {
+        throw new Error("A pagina atual nao pertence ao portal NDI configurado.");
+      }
+      const configuredLocator = portal === "hapvida" && this.config.hapvidaAuthenticatedSelector
         ? page.locator(this.config.hapvidaAuthenticatedSelector).first()
         : undefined;
       const cardPeriodLocator = page.getByText(/datas?\s+de\s+ades[aã]o/i).first();
@@ -224,24 +229,24 @@ export class KoaBrowserProfileManager {
 
       await this.writeStatus({
         initialized: true,
-        hapvidaSessionValidated: true,
+        ...(portal === "ndi" ? { ndiSessionValidated: true } : { hapvidaSessionValidated: true }),
         lastValidatedAt: new Date().toISOString(),
         lastValidationError: undefined,
       });
       return true;
     } catch (error) {
       await this.writeStatus({
-        hapvidaSessionValidated: false,
-        lastValidationError: error instanceof Error ? error.message : "Sessao Hapvida invalida.",
+        ...(portal === "ndi" ? { ndiSessionValidated: false } : { hapvidaSessionValidated: false }),
+        lastValidationError: error instanceof Error ? error.message : "Sessao do portal invalida.",
       });
       return false;
     }
   }
 
-  async releasePersistentContext(context: BrowserContext, lock: BrowserProfileLockHandle, saveState = true) {
+  async releasePersistentContext(context: BrowserContext, lock: BrowserProfileLockHandle, saveState = true, portal: "hapvida" | "ndi" = "hapvida") {
     try {
       if (saveState) {
-        await this.saveSession(context, "hapvida").catch(() => undefined);
+        await this.saveSession(context, portal).catch(() => undefined);
       }
       await context.close().catch(() => undefined);
     } finally {
@@ -249,3 +254,4 @@ export class KoaBrowserProfileManager {
     }
   }
 }
+

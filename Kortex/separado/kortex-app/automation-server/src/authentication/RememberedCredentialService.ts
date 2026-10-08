@@ -26,12 +26,12 @@ export class RememberedCredentialService {
     if (credential.metadata?.rememberOnDevice !== true) {
       return { rememberedOnDevice: false, metadataRegistered: false };
     }
-    if (operation.type !== "CARD_ISSUE" || operation.portal !== "hapvida") {
+    if (operation.type !== "CARD_ISSUE") {
       throw new AutomationError("AUTHENTICATION_NOT_SUPPORTED", "Persistencia de credencial indisponivel para esta operacao.");
     }
     const companyCode = credential.username;
     const password = credential.password;
-    const credentialRef = operation.credentialRef || `hapvida:${operation.companyId}`;
+    const credentialRef = operation.credentialRef || `${operation.portal}:${operation.companyId}`;
     const payload = JSON.stringify({ username: companyCode, password });
     try {
       const encrypted = await protectWithDpapi(payload);
@@ -75,7 +75,7 @@ export class RememberedCredentialService {
            last_verified_at,
            metadata
          )
-         VALUES ($1, $2, 'hapvida', $3, $4, $5, 'active', now(), $6::jsonb)
+         VALUES ($1, $2, $7, $3, $4, $5, 'active', now(), $6::jsonb)
          ON CONFLICT (credential_ref)
          DO UPDATE SET
            workspace_id = EXCLUDED.workspace_id,
@@ -91,9 +91,10 @@ export class RememberedCredentialService {
           operation.workspaceId,
           operation.companyId,
           credentialRef,
-          `Hapvida - ${operation.companyId}`,
+          `${operation.portal === "ndi" ? "NDI" : "Hapvida"} - ${operation.companyId}`,
           maskUsername(companyCode),
           JSON.stringify(metadata),
+          operation.portal,
         ],
       );
       return { rememberedOnDevice: true, metadataRegistered: true };

@@ -64,15 +64,15 @@ export class BrowserManager {
     return this.profileManager.getStatus();
   }
 
-  async validatePortalSession(portal: "hapvida", page: Page) {
+  async validatePortalSession(portal: "hapvida" | "ndi", page: Page) {
     return this.sessionManager.validateSession(portal, page);
   }
 
-  async saveSession(context: BrowserContext, portal: "hapvida") {
+  async saveSession(context: BrowserContext, portal: "hapvida" | "ndi") {
     await this.sessionManager.saveSession(context, portal);
   }
 
-  async invalidateSession(portal: "hapvida") {
+  async invalidateSession(portal: "hapvida" | "ndi") {
     await this.sessionManager.invalidateSession(portal);
   }
 
@@ -126,12 +126,12 @@ export class BrowserManager {
       const url = request.url();
       let allowed = this.domainAllowlist.isAllowed(url);
 
-      if (!allowed && operation.type === "CARD_ISSUE" && operation.portal === "hapvida") {
+      if (!allowed && operation.type === "CARD_ISSUE") {
         try {
           const frame = request.frame();
           const page = frame.page();
           const topLevelNavigation = request.isNavigationRequest() && frame === page.mainFrame();
-          allowed = !topLevelNavigation && this.domainAllowlist.isAllowedHapvidaRecaptchaResource(url, page.url());
+          allowed = !topLevelNavigation && this.domainAllowlist.isAllowedCardRecaptchaResource(url, page.url(), operation.portal);
         } catch {
           // Requests without an owning page do not receive this exception.
         }

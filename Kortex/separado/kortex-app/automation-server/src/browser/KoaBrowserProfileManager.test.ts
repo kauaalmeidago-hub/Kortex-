@@ -1,7 +1,8 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { Page } from "playwright";
 import type { AutomationConfig } from "../config.js";
 import { KoaBrowserProfileManager } from "./KoaBrowserProfileManager.js";
 
@@ -82,4 +83,29 @@ describe("KoaBrowserProfileManager", () => {
     expect(manager.hasAuthState("hapvida")).toBe(true);
     expect(manager.getAuthStatePath("hapvida")).toContain(".auth");
   });
+
+  it("validates the NDI card session without accepting a Hapvida page or resetting Hapvida status", async () => {
+    const config = await createConfig();
+    config.ndiCardPortalUrl = "https://sigo.sh.srv.br/pls/webmin/pk_carteira_provisoria.login_empresa_form";
+    const manager = new KoaBrowserProfileManager(config);
+    await manager.markSessionValidated("hapvida");
+    const wait = vi.fn(async () => undefined);
+    const page = { url: () => config.ndiCardPortalUrl!, getByText: () => ({ first: () => ({ waitFor: wait }) }) } as unknown as Page;
+    expect(await manager.validatePortalSession("ndi", page)).toBe(true);
+    expect(await manager.getStatus()).toMatchObject({ hapvidaSessionValidated: true, ndiSessionValidated: true });
+    page.url = () => "https://webhap.hapvida.com.br/pls/webhap/period";
+    expect(await manager.validatePortalSession("ndi", page)).toBe(false);
+    expect(wait).toHaveBeenCalledOnce();
+    expect(await manager.getStatus()).toMatchObject({ hapvidaSessionValidated: true, ndiSessionValidated: false });
+  });
+
+  it("loads the NDI storage state without reading a Hapvida session", async () => {
+    const config = await createConfig(); const manager = new KoaBrowserProfileManager(config);
+    await manager.ensureProfileDir();
+    await writeFile(manager.getAuthStatePath("ndi"), JSON.stringify({ cookies: [], origins: [] }), "utf8");
+    expect(await manager.readStorageState("ndi")).toEqual({ cookies: [], origins: [] });
+    expect(await manager.readStorageState("hapvida")).toBeUndefined();
+    expect(await manager.getStatus()).toMatchObject({ initialized: true, hapvidaSessionValidated: false });
+  });
 });
+

@@ -2,14 +2,16 @@ import { AutomationError } from "../errors.js";
 import type { OperationRecord } from "../types.js";
 import type { WorkflowContext } from "./WorkflowContext.js";
 import { HapvidaAdapter } from "./hapvida/HapvidaAdapter.js";
+import { searchCardPortals } from "./CardPortalSearch.js";
 
 export class WorkflowRegistry {
   private readonly hapvida = new HapvidaAdapter();
 
   async run(operation: OperationRecord, signal: AbortSignal, context: WorkflowContext) {
+    if (operation.type === "CARD_ISSUE") return searchCardPortals(operation, signal, context);
     if (operation.portal === "ndi") {
       throw new AutomationError("PORTAL_MAPPING_REQUIRED", "Workflow NDI ainda aguarda mapeamento validado.", {
-        safeDetails: "A URL de carteirinha NDI esta configurada, mas os seletores reais ainda precisam ser validados em modo headed.",
+        safeDetails: "Os fluxos de inclusao e exclusao NDI ainda precisam de mapeamento validado.",
         retryable: false,
       });
     }
@@ -21,7 +23,6 @@ export class WorkflowRegistry {
       });
     }
 
-    if (operation.type === "CARD_ISSUE") return this.hapvida.issueCard(operation, signal, context);
     if (operation.type === "INCLUSION_HOLDER") return this.hapvida.includeHolder(operation, signal, context);
     if (operation.type === "INCLUSION_DEPENDENT") return this.hapvida.includeDependent(operation, signal, context);
     if (operation.type === "EXCLUSION_HOLDER") return this.hapvida.excludeHolder(operation, signal, context);
@@ -32,3 +33,4 @@ export class WorkflowRegistry {
     });
   }
 }
+

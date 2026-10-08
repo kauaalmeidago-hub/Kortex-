@@ -108,6 +108,7 @@ export class OperationRepository implements AutomationOperationRepository {
   update(
     id: string,
     patch: Partial<{
+      portal: OperationRecord["portal"];
       status: OperationStatus;
       currentStep: string;
       result: OperationResult;
@@ -128,6 +129,7 @@ export class OperationRepository implements AutomationOperationRepository {
 
     const next: OperationRecord = {
       ...current,
+      portal: patch.portal ?? current.portal,
       credentialRef: patch.credentialRef ?? current.credentialRef,
       input: patch.input ?? current.input,
       status: nextStatus,
@@ -143,7 +145,7 @@ export class OperationRepository implements AutomationOperationRepository {
       .prepare(
         `UPDATE operations
          SET status = ?, current_step = ?, result_json = ?, error_json = ?,
-             artifacts_json = ?, updated_at = ?, finished_at = ?, credential_ref = ?, input_json = ?
+             artifacts_json = ?, updated_at = ?, finished_at = ?, credential_ref = ?, input_json = ?, portal = ?
          WHERE id = ?`,
       )
       .run(
@@ -156,6 +158,7 @@ export class OperationRepository implements AutomationOperationRepository {
         next.finishedAt ?? null,
         next.credentialRef,
         JSON.stringify(redact(next.input)),
+        next.portal,
         id,
       );
 

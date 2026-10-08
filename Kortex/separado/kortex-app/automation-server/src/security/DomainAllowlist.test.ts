@@ -27,7 +27,7 @@ describe("DomainAllowlist", () => {
       "https://recaptcha.google.com/recaptcha/api2/anchor",
       "https://www.recaptcha.net/recaptcha/api2/reload",
     ]) {
-      expect(allowlist.isAllowedHapvidaRecaptchaResource(url, portal)).toBe(true);
+      expect(allowlist.isAllowedCardRecaptchaResource(url, portal)).toBe(true);
       expect(allowlist.isAllowed(url)).toBe(false);
     }
   });
@@ -40,11 +40,19 @@ describe("DomainAllowlist", () => {
       "https://www.gstatic.com/unrelated.js", "https://www.google.com/recaptcha-other/api.js",
       "https://www.google.com.evil.test/recaptcha/api.js", "http://www.google.com/recaptcha/api.js",
       "https://www.google.com:444/recaptcha/api.js", "https://user:secret@www.google.com/recaptcha/api.js",
-    ]) expect(allowlist.isAllowedHapvidaRecaptchaResource(url, portal)).toBe(false);
+    ]) expect(allowlist.isAllowedCardRecaptchaResource(url, portal)).toBe(false);
     for (const page of ["about:blank", "https://example.test/", "https://sigo.sh.srv.br/", "http://webhap.hapvida.com.br/"]) {
-      expect(allowlist.isAllowedHapvidaRecaptchaResource("https://www.google.com/recaptcha/api.js", page)).toBe(false);
+      expect(allowlist.isAllowedCardRecaptchaResource("https://www.google.com/recaptcha/api.js", page)).toBe(false);
     }
-    expect(new DomainAllowlist([]).isAllowedHapvidaRecaptchaResource("https://www.google.com/recaptcha/api.js", portal)).toBe(false);
+    expect(new DomainAllowlist([]).isAllowedCardRecaptchaResource("https://www.google.com/recaptcha/api.js", portal)).toBe(false);
+  });
+
+  it("allows NDI verification resources only for the NDI card page", () => {
+    const allowlist = new DomainAllowlist(["webhap.hapvida.com.br", "sigo.sh.srv.br"]);
+    const resource = "https://www.google.com/recaptcha/api.js";
+    expect(allowlist.isAllowedCardRecaptchaResource(resource, "https://sigo.sh.srv.br/pls/webmin/login", "ndi")).toBe(true);
+    expect(allowlist.isAllowedCardRecaptchaResource(resource, "https://webhap.hapvida.com.br/pls/webhap/login", "ndi")).toBe(false);
+    expect(allowlist.isAllowed(resource)).toBe(false);
   });
 });
 

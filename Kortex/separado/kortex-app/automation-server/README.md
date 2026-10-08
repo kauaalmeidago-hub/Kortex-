@@ -55,6 +55,16 @@ $env:HAPVIDA_AUTHENTICATED_SELECTOR="text=Datas de adesão"
 
 Se a sessao expirar e nao existir credencial segura no `SecretProvider`, o worker retorna `REAUTH_REQUIRED`.
 
+## Busca de carteirinha em Hapvida e NDI
+
+Novos pedidos de carteirinha usam `portalSearch: "auto"`. O worker consulta o portal inicial e, se o acesso for rejeitado, faltar credencial ou o beneficiario nao for encontrado, consulta o outro portal na mesma operacao. Ao confirmar uma carteirinha e gerar um PDF valido, a busca termina; `operator` no resultado e nos metadados do arquivo identifica a operadora. Uma previa incorreta, nome ambiguo ou PDF invalido interrompe a busca para revisao, sem tentar emitir em outro portal.
+
+Hapvida utiliza `HAPVIDA_CARD_PORTAL_URL`. NDI utiliza `NDI_CARD_PORTAL_URL`, com padrao `https://sigo.sh.srv.br/pls/webmin/pk_carteira_provisoria.login_empresa_form`. As credenciais salvas sao selecionadas separadamente por empresa, operadora e codigo. Somente a senha enviada explicitamente para aquela busca automatica pode ser tentada nos dois portais em memoria; uma senha Hapvida previamente salva nao e reutilizada em NDI. Com "Lembrar", cada acesso confirmado recebe seu proprio arquivo DPAPI e cadastro da operadora correta.
+
+Se apenas um portal precisar de autenticacao, a retomada consulta esse portal sem repetir uma busca ja concluida para o mesmo beneficiario, codigo e periodo. "Beneficiario nao encontrado em Hapvida ou NDI" exige ausencia confirmada nos dois. Se algum portal estiver indisponivel, o pedido informa que a busca ficou incompleta. O pre-check opcional de usuarios ativos Hapvida nao e executado em NDI. Inclusao e exclusao NDI continuam aguardando mapeamento.
+
+`npm run test:card-portals` testa em Chromium os dois formularios, periodo, selecao, geracao real de PDF, troca de operadora, referencia de credencial e falhas sem arquivo, com paginas sinteticas e todas as requisicoes interceptadas. Esse teste nao acessa os portais reais. Depois de atualizar a instalacao permanente, valide uma carteirinha NDI real no computador do worker. Para limitar um pedido ao portal escolhido na API local, informe `portalSearch: "selected"`.
+
 ## Reautenticacao pelo Koa
 
 O formulario do Koa envia a senha somente para `/api/operations/:id/reauth`. Esse endpoint guarda a credencial em memoria e devolve a mesma operacao para `queued`; ele nao abre o navegador nem confirma o login.
@@ -69,7 +79,7 @@ Com `rememberOnDevice=false`, a senha nao e gravada em arquivo ou no Supabase. C
 
 `KOA_AUTH_MAX_ATTEMPTS` limita as falhas de login por operacao (padrao: 3). Antes de atingir o limite, uma falha volta para `awaiting_authentication`; ao atingir o limite, a operacao passa para `manual_review`. Falhas tecnicas identificadas como `DATABASE_OPERATION_UPDATE_FAILED` nao consomem uma tentativa de login.
 
-O formulario de carteirinha Hapvida depende do reCAPTCHA para enviar o login. O worker permite somente recursos HTTPS no caminho `/recaptcha/` dos dominios oficiais do Google/reCAPTCHA, iniciados pela pagina Hapvida durante `CARD_ISSUE`. Essa excecao nao libera navegacao principal para esses dominios. Nao adicione dominios Google inteiros a `KOA_AUTOMATION_ALLOWED_HOSTS` para resolver esse problema.
+O formulario de carteirinha Hapvida depende do reCAPTCHA para enviar o login. O worker permite somente recursos HTTPS no caminho `/recaptcha/` dos dominios oficiais do Google/reCAPTCHA, iniciados pela pagina Hapvida ou NDI correspondente durante `CARD_ISSUE`. Essa excecao nao libera navegacao principal para esses dominios. Nao adicione dominios Google inteiros a `KOA_AUTOMATION_ALLOWED_HOSTS` para resolver esse problema.
 
 Antes de pedir a credencial, o worker verifica se a API do reCAPTCHA carregou. Depois do clique, aguarda o POST do formulario e a resposta do portal. Uma verificacao indisponivel, um formulario que nao foi enviado ou um retorno silencioso ao login retorna `PORTAL_AUTH_UNAVAILABLE`, sem registrar falha de senha nem abrir outro desafio de autenticacao. `AUTHENTICATION_FAILED` exige uma rejeicao de credencial reconhecida no portal. A sessao autenticada continua sendo validada antes da emissao e do armazenamento opcional da credencial.
 

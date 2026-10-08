@@ -12,6 +12,8 @@ import type { WorkflowContext } from "../workflows/WorkflowContext.js";
 import { sanitizeDiagnosticText } from "../security/redaction.js";
 import { type EphemeralCredentialStore, OperationScopedSecretProvider } from "../secrets/EphemeralCredentialStore.js";
 
+import type { CredentialResolver } from "../credentials/CredentialResolver.js";
+
 interface OperationQueueDeps {
   config: AutomationConfig;
   repository: AutomationOperationRepository;
@@ -20,6 +22,7 @@ interface OperationQueueDeps {
   secretProvider: SecretProvider;
   ephemeralCredentialStore?: EphemeralCredentialStore;
   artifactStorage: ArtifactStorage;
+  credentialResolver?: CredentialResolver;
 }
 
 export class OperationQueue {
@@ -128,6 +131,7 @@ export class OperationQueue {
           ? new OperationScopedSecretProvider(nextId, this.deps.ephemeralCredentialStore, this.deps.secretProvider, credentialGeneration)
           : this.deps.secretProvider,
         artifactStorage: this.deps.artifactStorage,
+        credentialResolver: this.deps.credentialResolver,
         updateStatus: (status, step, data) => this.setStatus(nextId, status, step, this.isFinalStatus(status), data),
         emitEvent: (event) => this.emitEvent({ ...event, operationId: event.operationId ?? nextId }),
       });

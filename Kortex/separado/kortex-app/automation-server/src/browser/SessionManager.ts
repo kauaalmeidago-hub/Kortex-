@@ -4,7 +4,7 @@ import type { KoaBrowserProfileManager } from "./KoaBrowserProfileManager.js";
 export class SessionManager {
   constructor(private readonly profileManager: KoaBrowserProfileManager) {}
 
-  getSession(portal: "hapvida") {
+  getSession(portal: "hapvida" | "ndi") {
     return {
       portal,
       storageStatePath: this.profileManager.getAuthStatePath(portal),
@@ -12,15 +12,16 @@ export class SessionManager {
     };
   }
 
-  saveSession(context: BrowserContext, portal: "hapvida") {
+  saveSession(context: BrowserContext, portal: "hapvida" | "ndi") {
     return this.profileManager.saveSession(context, portal);
   }
 
-  validateSession(portal: "hapvida", page: Page) {
+  validateSession(portal: "hapvida" | "ndi", page: Page) {
     return this.profileManager.validatePortalSession(portal, page);
   }
 
-  invalidateSession(portal: "hapvida") {
+  invalidateSession(portal: "hapvida" | "ndi") {
     return this.profileManager.invalidateSession(portal);
   }
 }
+

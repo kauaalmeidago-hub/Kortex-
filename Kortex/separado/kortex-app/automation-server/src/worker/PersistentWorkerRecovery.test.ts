@@ -69,4 +69,43 @@ describe("worker queue connectivity recovery", () => {
     await run;
     expect(mocks.workflow).toHaveBeenCalledTimes(1);
   });
+
+  it("locks and renews both portals for an automatic card search and releases both", async () => {
+    vi.useFakeTimers(); const { worker, repository, operation } = fixture();
+    operation.input.portalSearch = "auto";
+    repository.claimNext.mockResolvedValueOnce(operation as never);
+    let finish!: () => void;
+    mocks.workflow.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const run = worker.run(); await vi.advanceTimersByTimeAsync(5100);
+    expect(repository.acquireLock.mock.calls.map(([key]) => key)).toEqual([
+      "hapvida:company:synthetic-company", "ndi:company:synthetic-company",
+      "hapvida:company:synthetic-company", "ndi:company:synthetic-company",
+    ]);
+    worker.stop(); finish(); await run;
+    expect(repository.releaseLock.mock.calls.map(([key]) => key)).toEqual(["hapvida:company:synthetic-company", "ndi:company:synthetic-company"]);
+    expect(mocks.workflow).toHaveBeenCalledOnce();
+  });
+
+  it("does not start a search if the second portal is locked by another operation", async () => {
+    const { worker, repository, operation } = fixture(); operation.input.portalSearch = "auto";
+    repository.claimNext.mockResolvedValueOnce(operation as never);
+    repository.acquireLock.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    repository.update.mockImplementation(async () => { worker.stop(); return operation; });
+    await worker.run();
+    expect(mocks.workflow).not.toHaveBeenCalled();
+    expect(repository.releaseLock).toHaveBeenCalledOnce();
+    expect(repository.releaseLock).toHaveBeenCalledWith("hapvida:company:synthetic-company", operation.id, "recovery-test");
+  });
+
+  it("interrupts an active search when its portal locks cannot be renewed", async () => {
+    vi.useFakeTimers(); const { worker, repository, operation } = fixture(); operation.input.portalSearch = "auto";
+    repository.claimNext.mockResolvedValueOnce(operation as never);
+    repository.acquireLock.mockResolvedValueOnce(true).mockResolvedValueOnce(true).mockResolvedValue(false);
+    mocks.workflow.mockImplementation((_operation, signal: AbortSignal) => new Promise<void>((_resolve, reject) => {
+      signal.addEventListener("abort", () => { worker.stop(); reject(new DOMException("Operation aborted", "AbortError")); }, { once: true });
+    }));
+    const run = worker.run(); await vi.advanceTimersByTimeAsync(5100); await run;
+    expect(repository.update).toHaveBeenCalledWith(operation.id, expect.objectContaining({ error: expect.objectContaining({ code: "LOCK_LOST" }) }));
+    expect(repository.releaseLock).toHaveBeenCalledTimes(2);
+  });
 });

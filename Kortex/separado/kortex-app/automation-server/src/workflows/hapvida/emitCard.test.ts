@@ -7,10 +7,10 @@ import type { OperationEvent, OperationRecord } from "../../types.js";
 const mocks = vi.hoisted(() => ({
   open: vi.fn(), ready: vi.fn(), login: vi.fn(), passwordVisible: vi.fn(), invalid: vi.fn(),
   periodForm: vi.fn(), fillPeriod: vi.fn(), submitPeriod: vi.fn(), selectBeneficiary: vi.fn(),
-  requestCards: vi.fn(), preview: vi.fn(), remember: vi.fn(), loginPages: [] as unknown[], cardPages: [] as unknown[],
+  requestCards: vi.fn(), preview: vi.fn(), remember: vi.fn(), loginPages: [] as unknown[], cardPages: [] as unknown[], loginOptions: [] as unknown[],
 }));
 vi.mock("./pageObjects/HapvidaLoginPage.js", () => ({ HapvidaLoginPage: class {
-  constructor(page: unknown) { mocks.loginPages.push(page); }
+  constructor(page: unknown, url: unknown, _timeout: unknown, label: unknown) { mocks.loginPages.push(page); mocks.loginOptions.push({ url, label }); }
   open = mocks.open; waitForReady = mocks.ready; login = mocks.login; passwordStillVisible = mocks.passwordVisible;
   invalidIdentificationMessage() { return { isVisible: mocks.invalid }; }
 } }));
@@ -59,7 +59,7 @@ function fixture(remember: boolean) {
 describe("CARD_ISSUE authentication in the execution context", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    mocks.loginPages.length = 0; mocks.cardPages.length = 0;
+    mocks.loginPages.length = 0; mocks.cardPages.length = 0; mocks.loginOptions.length = 0;
     mocks.passwordVisible.mockResolvedValue(false); mocks.invalid.mockResolvedValue(false);
     mocks.remember.mockResolvedValue({ rememberedOnDevice: true, metadataRegistered: true });
   });
@@ -115,6 +115,22 @@ describe("CARD_ISSUE authentication in the execution context", () => {
     expect(f.events.some((event) => event.type === "authentication.started" && event.step === "portal_auth_retrying")).toBe(true);
     expect(f.operation.status).toBe("success");
     expect(JSON.stringify(f.events)).not.toContain("synthetic-password");
+  });
+
+  it("issues through NDI using its URL and session, without Hapvida movement preflight", async () => {
+    const f = fixture(true);
+    f.operation.portal = "ndi"; f.operation.credentialRef = "ndi:company-1";
+    f.context.config.ndiCardPortalUrl = "https://sigo.sh.srv.br/pls/webmin/pk_carteira_provisoria.login_empresa_form";
+    f.context.config.features.cardIssueActiveUsersPreflight = true;
+    f.operation.result = { cardPortalSearch: { notFound: ["hapvida"], visited: ["hapvida", "ndi"] } };
+    await emitCard(f.operation, new AbortController().signal, f.context);
+    expect(mocks.loginOptions).toEqual([{ url: f.context.config.ndiCardPortalUrl, label: "NDI" }]);
+    expect(f.validate).toHaveBeenCalledWith("ndi", f.page);
+    expect(f.saveSession).toHaveBeenCalledWith(f.browserContext, "ndi");
+    expect(f.operation.result).toMatchObject({ operator: "ndi", cardPortalSearch: { notFound: ["hapvida"] } });
+    expect(f.artifactSave).toHaveBeenCalledWith(expect.objectContaining({ metadata: expect.objectContaining({ operator: "ndi" }) }));
+    expect(mocks.remember).toHaveBeenCalledWith(expect.objectContaining({ portal: "ndi", credentialRef: "ndi:company-1" }), expect.any(Object));
+    expect(f.operation.status).toBe("success");
   });
 
   it("does not save the password or announce success when portal authentication fails", async () => {

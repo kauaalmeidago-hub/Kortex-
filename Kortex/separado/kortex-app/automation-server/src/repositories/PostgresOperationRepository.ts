@@ -104,7 +104,8 @@ export const UPDATE_OPERATION_SQL = `UPDATE public.automation_operations
            finished_at = $8,
            credential_ref = $9,
            credential_id = $10,
-           payload = $11::jsonb
+           payload = $11::jsonb,
+           operator = $12
        WHERE id = $1
        RETURNING *`;
 
@@ -225,6 +226,7 @@ export class PostgresOperationRepository implements PersistentAutomationQueueRep
   async update(
     id: string,
     patch: Partial<{
+      portal: OperationRecord["portal"];
       status: OperationStatus;
       currentStep: string;
       result: OperationResult;
@@ -259,6 +261,7 @@ export class PostgresOperationRepository implements PersistentAutomationQueueRep
         patch.credentialRef ?? current.credentialRef,
         "credentialId" in patch ? patch.credentialId ?? null : current.credentialId ?? null,
         JSON.stringify(redact(patch.input ?? current.input)),
+        patch.portal ?? current.portal,
       ],
     );
 

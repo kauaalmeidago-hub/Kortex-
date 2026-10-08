@@ -21,7 +21,8 @@ export class PersistentChromeBrowserProvider implements BrowserProvider {
     return {
       context,
       page,
-      close: () => this.profileManager.releasePersistentContext(context, lock),
+      close: () => this.profileManager.releasePersistentContext(context, lock, true, operation.portal),
     };
   }
 }
+

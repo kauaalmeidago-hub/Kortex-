@@ -85,6 +85,18 @@ describe("Koa reauthentication handoff", () => {
     expect(launch).not.toHaveBeenCalled();
   });
 
+  it("queues automatic NDI reauthentication with portal-scoped identity and RAM-only search metadata", async () => {
+    operation.portal = "ndi"; operation.credentialRef = "ndi:company-1:login:0ABC";
+    operation.input.portalSearch = "auto";
+    const response = await submit(true);
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ operation: { portal: "ndi", operationId: operation.id } });
+    expect(store.get(operation.id, operation.credentialRef)).toMatchObject({ username: "0ABC", metadata: { autoPortalCredential: true, rememberOnDevice: true } });
+    expect(store.get(operation.id, "hapvida:company-1:login:0ABC")).toBeUndefined();
+    expect(JSON.stringify({ operation, events, response: response.json() })).not.toMatch(/synthetic-password|autoPortalCredential/);
+    expect(launch).not.toHaveBeenCalled();
+  });
+
   it("rebinds a corrected company code to the queued operation and its ephemeral password", async () => {
     const oldRef = operation.credentialRef;
     const response = await app.inject({
