@@ -152,6 +152,29 @@ function assertSafePayload(input: Record<string, unknown>) {
   }
 }
 
+async function sessionToken() {
+  const { data, error } = await supabase.auth.getSession();
+  if (error) throw new Error("Não consegui verificar sua sessão do Kortex. Tente novamente.");
+  if (!data.session?.access_token) {
+    throw new Error("Entre no Kortex para enviar o pedido. Use o login do Kortex; a senha da Hapvida será solicitada somente durante a emissão.");
+  }
+  return data.session.access_token;
+}
+
+let sessionRefresh: Promise<string> | undefined;
+function refreshSessionToken() {
+  if (!sessionRefresh) {
+    sessionRefresh = (async () => {
+      const { data, error } = await supabase.auth.refreshSession();
+      if (error || !data.session?.access_token) {
+        throw new Error("Não foi possível renovar sua sessão do Kortex. Entre novamente no Kortex para continuar.");
+      }
+      return data.session.access_token;
+    })().finally(() => { sessionRefresh = undefined; });
+  }
+  return sessionRefresh;
+}
+
 async function headers() {
   const result: HeadersInit = {
     "content-type": "application/json",
@@ -160,10 +183,7 @@ async function headers() {
   if (automationToken) {
     result["x-koa-automation-token"] = automationToken;
   } else {
-    const { data } = await supabase.auth.getSession();
-    if (data.session?.access_token) {
-      result.authorization = `Bearer ${data.session.access_token}`;
-    }
+    result.authorization = `Bearer ${await sessionToken()}`;
   }
 
   return result;
@@ -171,20 +191,19 @@ async function headers() {
 
 async function authTokenForSse() {
   if (automationToken) return automationToken;
-  const { data } = await supabase.auth.getSession();
-  return data.session?.access_token;
+  return sessionToken();
 }
 
 async function parseResponse<T>(response: Response): Promise<T> {
   const data = await response.json().catch(() => undefined);
   if (!response.ok) {
-    if (response.status === 401) throw new Error("Não foi possível autorizar o acesso ao Koa Worker. Entre novamente no Kortex e confira a conexão do worker.");
+    if (response.status === 401) throw new Error("Sua sessão do Kortex não foi aceita pelo worker. Entre novamente no Kortex; se continuar, confira se aplicativo e worker usam o mesmo projeto Supabase.");
     throw new Error(data?.message ?? data?.error ?? "Falha na API de automacao.");
   }
   return data as T;
 }
 
-async function localFetch(url: string, options: RequestInit) {
+async function workerFetch(url: string, options: RequestInit) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15000);
   try {
@@ -194,6 +213,16 @@ async function localFetch(url: string, options: RequestInit) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function localFetch(url: string, options: RequestInit) {
+  const response = await workerFetch(url, options);
+  if (response.status !== 401 || automationToken) return response;
+  // The worker rejects 401 requests in onRequest, before creating an operation or accepting a password.
+  // Retry only that rejection, once. Never repeat a POST after an uncertain network/server failure.
+  const requestHeaders = new Headers(options.headers);
+  requestHeaders.set("authorization", `Bearer ${await refreshSessionToken()}`);
+  return workerFetch(url, { ...options, headers: requestHeaders });
 }
 
 function assertOnlineOperationAllowed(type: AutomationOperationType) {
@@ -436,29 +465,30 @@ export async function subscribeToOperation(operationId: string, handlers: {
 }) {
   if (useLocalApi) {
     if (!automationBaseUrl) throw new Error("VITE_AUTOMATION_API_URL e obrigatorio quando VITE_AUTOMATION_PROVIDER=local.");
-    const url = new URL(`${automationBaseUrl}/api/operations/${operationId}/events`);
-    const token = await authTokenForSse();
-    if (token) url.searchParams.set("token", token);
-
     let closed = false;
+    let connecting = false;
     let source: EventSource | null = null;
 
     const connect = () => {
-      if (closed) return;
+      if (closed || connecting) return;
+      connecting = true;
       source?.close();
-      source = new EventSource(url.toString());
-      source.onopen = () => fallback.stopFallback();
-      source.onmessage = (event) => {
-        try {
-          fallback.stopFallback();
-          handlers.onEvent(JSON.parse(event.data) as AutomationEvent);
-        } catch {
-          fallback.startFallback();
-        }
-      };
-      source.onerror = () => {
-        fallback.startFallback();
-      };
+      return authTokenForSse().then((token) => {
+        if (closed) return;
+        const url = new URL(`${automationBaseUrl}/api/operations/${operationId}/events`);
+        url.searchParams.set("token", token);
+        source = new EventSource(url.toString());
+        source.onopen = () => fallback.stopFallback();
+        source.onmessage = (event) => {
+          try {
+            fallback.stopFallback();
+            handlers.onEvent(JSON.parse(event.data) as AutomationEvent);
+          } catch {
+            fallback.startFallback();
+          }
+        };
+        source.onerror = () => fallback.startFallback();
+      }).catch(() => fallback.startFallback()).finally(() => { connecting = false; });
     };
 
     const fallback = createOperationFallbackMonitor({
@@ -469,7 +499,7 @@ export async function subscribeToOperation(operationId: string, handlers: {
       reconnect: connect,
     });
 
-    connect();
+    await connect();
 
     return () => {
       closed = true;

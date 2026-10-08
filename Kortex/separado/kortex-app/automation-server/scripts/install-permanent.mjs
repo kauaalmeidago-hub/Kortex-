@@ -95,6 +95,12 @@ if (action === "status") {
   if (publicKey.startsWith("sb_secret_") || keyRole === "service_role") {
     throw new Error("A chave do frontend deve ser pública. Use a publishable/anon key do projeto.");
   }
+  if (!config.supabaseUrl || !config.supabaseSecretKey) {
+    throw new Error("Configure SUPABASE_URL e SUPABASE_SECRET_KEY no backend para validar o login do Kortex. Use o mesmo projeto Supabase do aplicativo.");
+  }
+  if (new URL(frontendEnv.VITE_SUPABASE_URL).origin !== new URL(config.supabaseUrl).origin) {
+    throw new Error("VITE_SUPABASE_URL do aplicativo e SUPABASE_URL do worker apontam para projetos diferentes. Ajuste a configuração antes de instalar.");
+  }
   const desktopPort = Number(process.env.KOA_DESKTOP_PORT ?? 8080);
   const supervisorPort = Number(process.env.KOA_SUPERVISOR_PORT ?? 4776);
   if (![config.port, desktopPort, supervisorPort].every((port) => Number.isInteger(port) && port > 0 && port <= 65535) ||

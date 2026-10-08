@@ -157,15 +157,29 @@ export async function createServer({ config, repository, eventBus, queue, creden
     }
 
     const jwt = bearer ?? queryToken;
-    if (jwt && authClient) {
+    if (!jwt) {
+      return reply.code(401).send({ error: "unauthorized", code: "KORTEX_SESSION_REQUIRED" });
+    }
+    if (!authClient) {
+      return reply.code(503).send({ error: "KORTEX_AUTH_NOT_CONFIGURED",
+        message: "O worker não está configurado para validar o login do Kortex. Configure SUPABASE_URL e a chave do backend para o mesmo projeto do aplicativo." });
+    }
+    try {
       const { data, error } = await authClient.auth.getUser(jwt);
       if (!error && data.user) {
         (request as FastifyRequest & { userId?: string }).userId = data.user.id;
         return;
       }
+      if (error && (!error.status || error.status >= 500)) {
+        return reply.code(503).send({ error: "KORTEX_AUTH_UNAVAILABLE",
+          message: "Não consegui verificar o login do Kortex no momento. Confira a conexão e tente novamente." });
+      }
+    } catch {
+      return reply.code(503).send({ error: "KORTEX_AUTH_UNAVAILABLE",
+        message: "Não consegui verificar o login do Kortex no momento. Confira a conexão e tente novamente." });
     }
 
-    return reply.code(401).send({ error: "unauthorized" });
+    return reply.code(401).send({ error: "unauthorized", code: "KORTEX_SESSION_INVALID" });
   });
 
   app.get("/health", async () => ({ status: "ok" }));
