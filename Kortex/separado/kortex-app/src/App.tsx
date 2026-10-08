@@ -26,7 +26,6 @@ import TaskStagesSettingsPage from "./pages/TaskStagesSettingsPage";
 import NotFound from "./pages/NotFound";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { AuthProvider } from "./contexts/AuthContext";
-import AuthPage from "./pages/AuthPage";
 import ProtectedRoute from "./components/ProtectedRoute";
 
 const queryClient = new QueryClient();
@@ -40,7 +39,7 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <Routes>
-          <Route path="/auth/*" element={<AuthPage />} />
+          <Route path="/auth/*" element={<Navigate to="/" replace />} />
           <Route element={<ProtectedRoute />}>
           <Route element={<AppLayout />}>
             <Route path="/" element={<Index />} />

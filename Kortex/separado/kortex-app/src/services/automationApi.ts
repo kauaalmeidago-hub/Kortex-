@@ -130,9 +130,9 @@ type SupabaseAny = {
 const supabaseClient = supabase as unknown as SupabaseAny;
 const explicitProvider = import.meta.env.VITE_AUTOMATION_PROVIDER as "local" | "supabase" | undefined;
 const configuredLocalUrl = import.meta.env.VITE_AUTOMATION_API_URL as string | undefined;
-const useLocalApi = explicitProvider === "local" || (!explicitProvider && import.meta.env.DEV && Boolean(configuredLocalUrl));
+const useLocalApi = explicitProvider === "local" || (!explicitProvider && Boolean(configuredLocalUrl));
 const automationBaseUrl = configuredLocalUrl ?? "";
-const automationToken = import.meta.env.DEV ? import.meta.env.VITE_AUTOMATION_API_TOKEN : undefined;
+const automationToken = import.meta.env.VITE_AUTOMATION_API_TOKEN as string | undefined;
 
 function hasSensitiveKey(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
