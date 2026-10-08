@@ -119,6 +119,8 @@ export class PersistentWorker {
           step: "authentication_required",
           data: { operator: operation.portal, companyId: operation.companyId },
         });
+      } else if (error instanceof AutomationError && error.code === "AUTHENTICATION_FAILED" && operation.type === "CARD_ISSUE") {
+        await this.handleAuthenticationFailed(operation, error);
       } else {
         await this.fail(operation.id, this.toOperationError(error));
       }
@@ -126,7 +128,7 @@ export class PersistentWorker {
       if (leaseTimer) clearInterval(leaseTimer);
       if (cancelWatchTimer) clearInterval(cancelWatchTimer);
       await this.deps.repository.releaseLock(lockKey, operation.id, this.deps.config.workerId).catch(() => undefined);
-      this.deps.ephemeralCredentialStore?.clear(operation.id);
+      await this.clearEphemeralCredentialIfSafe(operation.id);
       this.currentController = undefined;
     }
   }
@@ -178,6 +180,42 @@ export class PersistentWorker {
     });
     this.deps.eventBus.publish(created);
     return created;
+  }
+
+  private async handleAuthenticationFailed(operation: OperationRecord, error: AutomationError) {
+    const operationError = this.toOperationError(error);
+    await this.deps.repository.update(operation.id, {
+      status: "awaiting_authentication",
+      error: operationError,
+      currentStep: "authentication_failed",
+      updatedAt: new Date().toISOString(),
+    });
+
+    await this.emitEvent({
+      operationId: operation.id,
+      type: "authentication.failed",
+      status: "awaiting_authentication",
+      step: "authentication_failed",
+      data: {
+        error: operationError.code,
+        safeDetails: operationError.safeDetails,
+        retryable: true,
+      },
+    });
+  }
+
+  private async clearEphemeralCredentialIfSafe(operationId: string) {
+    if (!this.deps.ephemeralCredentialStore) return;
+
+    const latest = await Promise.resolve(this.deps.repository.get(operationId)).catch(() => undefined);
+    if (
+      latest?.status === "awaiting_authentication" ||
+      (latest?.status === "queued" && latest.currentStep === "authentication_submitted")
+    ) {
+      return;
+    }
+
+    this.deps.ephemeralCredentialStore.clear(operationId);
   }
 
   private async fail(operationId: string, error: OperationError) {

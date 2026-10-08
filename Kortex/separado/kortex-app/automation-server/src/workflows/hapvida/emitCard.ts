@@ -158,6 +158,13 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
     } else {
       await context.browserManager.invalidateSession("hapvida");
       await context.updateStatus("authenticating", "Autenticando no portal");
+      await context.emitEvent({
+        operationId: operation.id,
+        type: "authentication.started",
+        status: "authenticating",
+        step: "authentication_started",
+        data: { source: "worker" },
+      });
       await loginPage.login(await loadCredential());
       assertNotAborted(signal);
 
@@ -183,6 +190,13 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
       }
 
       await context.browserManager.saveSession(browserContext, "hapvida");
+      await context.emitEvent({
+        operationId: operation.id,
+        type: "authentication.succeeded",
+        status: "authenticating",
+        step: "authentication_succeeded",
+        data: { source: "worker" },
+      });
     }
 
     assertNotAborted(signal);

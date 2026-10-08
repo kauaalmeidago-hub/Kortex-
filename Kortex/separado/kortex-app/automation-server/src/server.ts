@@ -14,8 +14,6 @@ import { containsSensitiveKey, redact } from "./security/redaction.js";
 import type { AutomationOperationRepository } from "./repositories/AutomationOperationRepository.js";
 import type { CredentialResolver } from "./credentials/CredentialResolver.js";
 import { CreateOperationSchema, validatePayload } from "./validation/operationSchemas.js";
-import { OperationAuthenticationService } from "./authentication/OperationAuthenticationService.js";
-import { AutomationError } from "./errors.js";
 import { sanitizeDiagnosticText } from "./security/redaction.js";
 import type { EphemeralCredentialStore } from "./secrets/EphemeralCredentialStore.js";
 
@@ -50,6 +48,18 @@ function isOperationType(value: unknown): value is OperationType {
 
 function isPortal(value: unknown): value is PortalName {
   return value === "hapvida" || value === "ndi";
+}
+
+function readString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function companyCodeFor(operation: OperationRecord, input: { companyCode?: string }) {
+  return input.companyCode?.trim() || readString(operation.input.contractCode) || readString(operation.input.companyCode);
+}
+
+function credentialRefFor(operation: OperationRecord) {
+  return operation.credentialRef || `${operation.portal}:${operation.companyId}`;
 }
 
 function readBearerToken(header: string | undefined) {
@@ -119,7 +129,6 @@ function operationResponse(operation: OperationRecord) {
 
 export async function createServer({ config, repository, eventBus, queue, credentialResolver, ephemeralCredentialStore }: ServerDeps) {
   const app = fastify({ logger: false });
-  const authenticationService = new OperationAuthenticationService(config, ephemeralCredentialStore);
   const reauthInFlight = new Set<string>();
   const authClient: SupabaseClient | undefined =
     config.supabaseUrl && config.supabaseSecretKey
@@ -288,86 +297,47 @@ export async function createServer({ config, repository, eventBus, queue, creden
       return reply.code(409).send({ ok: false, error: "AUTHENTICATION_ALREADY_IN_PROGRESS" });
     }
 
-    const events = await repository.getEvents(operation.id);
-    const failedAttempts = events.filter((event) => event.type === "authentication.failed").length;
-    if (failedAttempts >= config.authMaxAttempts) {
-      const reviewed = await repository.update(operation.id, {
-        status: "manual_review",
-        currentStep: "authentication_attempts_exceeded",
-        error: {
-          code: "AUTHENTICATION_ATTEMPTS_EXCEEDED",
-          message: "Limite de tentativas de autenticacao excedido.",
-          retryable: false,
-        },
-        updatedAt: new Date().toISOString(),
-        finishedAt: new Date().toISOString(),
-      });
-      return reply.code(429).send({ ok: false, error: "AUTHENTICATION_ATTEMPTS_EXCEEDED", operation: reviewed ? operationResponse(reviewed) : undefined });
+    if (!ephemeralCredentialStore) {
+      return reply.code(503).send({ ok: false, error: "EPHEMERAL_CREDENTIAL_STORE_UNAVAILABLE", operation: operationResponse(operation) });
     }
 
+    const companyCode = companyCodeFor(operation, parsed.data);
+    if (!companyCode) {
+      return reply.code(400).send({ ok: false, error: "COMPANY_CODE_REQUIRED", operation: operationResponse(operation) });
+    }
+
+    const events = await repository.getEvents(operation.id);
+    const failedAttempts = events.filter((event) => event.type === "authentication.failed").length;
+
     reauthInFlight.add(operation.id);
-    const submitted = await repository.appendEvent({
-      operationId: operation.id,
-      type: "authentication.submitted",
-      status: "awaiting_authentication",
-      step: "authentication_submitted",
-      data: { rememberOnDevice: parsed.data.rememberOnDevice, attemptNumber: failedAttempts + 1 },
-      createdAt: new Date().toISOString(),
-    });
-    eventBus.publish(submitted);
-
-    let authenticationValidated = false;
     try {
-      await repository.update(operation.id, {
-        status: "authenticating",
-        currentStep: "authentication_started",
-        updatedAt: new Date().toISOString(),
-      });
-      const started = await repository.appendEvent({
+      ephemeralCredentialStore.put(
+        operation.id,
+        credentialRefFor(operation),
+        { username: companyCode, password: parsed.data.password },
+        config.authChallengeTtlMinutes * 60 * 1000,
+      );
+
+      const submitted = await repository.appendEvent({
         operationId: operation.id,
-        type: "authentication.started",
-        status: "authenticating",
-        step: "authentication_started",
-        data: { attemptNumber: failedAttempts + 1 },
+        type: "authentication.submitted",
+        status: "awaiting_authentication",
+        step: "authentication_submitted",
+        data: { rememberOnDevice: false, attemptNumber: failedAttempts + 1 },
         createdAt: new Date().toISOString(),
       });
-      eventBus.publish(started);
-
-      const result = await authenticationService.authenticateCardIssue(operation, parsed.data);
-      authenticationValidated = true;
-
-      const succeeded = await repository.appendEvent({
-        operationId: operation.id,
-        type: "authentication.succeeded",
-        status: "authenticating",
-        step: "authentication_succeeded",
-        data: { rememberedOnDevice: result.rememberedOnDevice },
-        createdAt: new Date().toISOString(),
-      });
-      eventBus.publish(succeeded);
-
-      if (result.rememberedOnDevice) {
-        const saved = await repository.appendEvent({
-          operationId: operation.id,
-          type: "authentication.saved_on_device",
-          status: "authenticating",
-          step: "authentication_saved_on_device",
-          data: { rememberedOnDevice: true },
-          createdAt: new Date().toISOString(),
-        });
-        eventBus.publish(saved);
-      }
+      eventBus.publish(submitted);
 
       const resumed = await repository.update(operation.id, {
         status: "queued",
-        currentStep: "authentication_completed",
+        currentStep: "authentication_submitted",
         updatedAt: new Date().toISOString(),
       });
       const queued = await repository.appendEvent({
         operationId: operation.id,
         type: "operation.queued",
         status: "queued",
-        step: "authentication_completed",
+        step: "authentication_submitted",
         data: { resumed: true },
         createdAt: new Date().toISOString(),
       });
@@ -379,62 +349,21 @@ export async function createServer({ config, repository, eventBus, queue, creden
 
       return reply.send({
         ok: true,
-        status: "authenticated",
+        status: "queued",
         operationId: operation.id,
         operation: resumed ? operationResponse(resumed) : undefined,
       });
     } catch (error) {
-      const code =
-        error instanceof AutomationError
-          ? error.code
-          : authenticationValidated
-            ? "DATABASE_OPERATION_UPDATE_FAILED"
-            : "AUTHENTICATION_FAILED";
-      const nextAttempts = failedAttempts + 1;
-      const failed = await repository.appendEvent({
-        operationId: operation.id,
-        type: "authentication.failed",
-        status: "awaiting_authentication",
-        step: "authentication_failed",
-        data: {
-          error: code,
-          attemptNumber: nextAttempts,
-          safeDetails: sanitizeDiagnosticText(
-            error instanceof AutomationError ? error.safeDetails : error instanceof Error ? error.message : undefined,
-          ),
-        },
-        createdAt: new Date().toISOString(),
-      });
-      eventBus.publish(failed);
-
-      if (nextAttempts >= config.authMaxAttempts) {
-        const reviewed = await repository.update(operation.id, {
-          status: "manual_review",
-          currentStep: "authentication_attempts_exceeded",
-          error: {
-            code: "AUTHENTICATION_ATTEMPTS_EXCEEDED",
-            message: "Limite de tentativas de autenticacao excedido.",
-            retryable: false,
-          },
-          updatedAt: new Date().toISOString(),
-          finishedAt: new Date().toISOString(),
-        });
-        return reply.code(429).send({ ok: false, error: "AUTHENTICATION_ATTEMPTS_EXCEEDED", operation: reviewed ? operationResponse(reviewed) : undefined });
-      }
-
+      ephemeralCredentialStore.clear(operation.id);
       const waiting = await repository.update(operation.id, {
         status: "awaiting_authentication",
-        currentStep: "authentication_failed",
+        currentStep: "authentication_submit_failed",
         updatedAt: new Date().toISOString(),
       });
       return reply.send({
         ok: false,
-        error:
-          code === "COMPANY_CODE_REQUIRED"
-            ? "COMPANY_CODE_REQUIRED"
-            : code === "DATABASE_OPERATION_UPDATE_FAILED"
-              ? "DATABASE_OPERATION_UPDATE_FAILED"
-              : "AUTHENTICATION_FAILED",
+        error: "DATABASE_OPERATION_UPDATE_FAILED",
+        safeDetails: sanitizeDiagnosticText(error instanceof Error ? error.message : undefined),
         operation: waiting ? operationResponse(waiting) : undefined,
       });
     } finally {

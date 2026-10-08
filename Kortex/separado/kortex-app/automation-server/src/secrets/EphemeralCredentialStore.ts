@@ -38,6 +38,12 @@ export class EphemeralCredentialStore {
     };
   }
 
+  consume(operationId: string, ref: string) {
+    const credential = this.get(operationId, ref);
+    if (credential) this.entries.delete(this.key(operationId, ref));
+    return credential;
+  }
+
   clear(operationId: string) {
     const prefix = `${operationId}:`;
     for (const key of this.entries.keys()) {
@@ -65,6 +71,6 @@ export class OperationScopedSecretProvider implements SecretProvider {
   ) {}
 
   async get(ref: string) {
-    return this.ephemeralCredentials.get(this.operationId, ref) ?? this.fallback.get(ref);
+    return this.ephemeralCredentials.consume(this.operationId, ref) ?? this.fallback.get(ref);
   }
 }

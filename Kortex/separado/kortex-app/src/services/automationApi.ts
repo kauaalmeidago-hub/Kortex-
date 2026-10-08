@@ -370,8 +370,8 @@ export async function submitOperationAuthentication(input: {
 
   return parseResponse<{
     ok: boolean;
-    status?: "authenticated";
-    error?: "AUTHENTICATION_FAILED" | "COMPANY_CODE_REQUIRED" | "AUTHENTICATION_ATTEMPTS_EXCEEDED" | string;
+    status?: "queued" | "authenticated";
+    error?: "AUTHENTICATION_FAILED" | "COMPANY_CODE_REQUIRED" | "DATABASE_OPERATION_UPDATE_FAILED" | string;
     operationId?: string;
     operation?: AutomationOperationResponse;
   }>(response);
