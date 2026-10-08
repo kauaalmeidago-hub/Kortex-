@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { containsSensitiveKey, redact, sanitizeUrl } from "./redaction.js";
+import { containsSensitiveKey, redact, sanitizeDiagnosticText, sanitizeUrl } from "./redaction.js";
 
 describe("redaction", () => {
   it("detects sensitive keys before requests are persisted", () => {
@@ -13,6 +13,19 @@ describe("redaction", () => {
       password: "[REDACTED]",
       nested: { token: "[REDACTED]" },
     });
+  });
+
+  it("removes secrets from Playwright diagnostic strings", () => {
+    const sanitized = sanitizeDiagnosticText(
+      'locator.fill: Timeout. fill("052960") password=mysecret Authorization=Bearer.abc token=xyz',
+    );
+
+    expect(sanitized).toContain('fill("[REDACTED]")');
+    expect(sanitized).toContain("password=[REDACTED]");
+    expect(sanitized).toContain("token=[REDACTED]");
+    expect(sanitized).not.toContain("052960");
+    expect(sanitized).not.toContain("mysecret");
+    expect(sanitized).not.toContain("xyz");
   });
 
   it("removes query and auth parts from urls", () => {
