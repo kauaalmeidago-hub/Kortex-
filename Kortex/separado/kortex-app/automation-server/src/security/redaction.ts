@@ -27,6 +27,15 @@ export function redact<T>(value: T): T {
   return output as T;
 }
 
+export function sanitizeDiagnosticText(value: string | undefined) {
+  if (!value) return value;
+
+  return value
+    .replace(/fill\(\s*(["'])(.*?)\1\s*\)/gis, 'fill("[REDACTED]")')
+    .replace(/(password|senha|token|cookie|authorization|secret|credential|access_token|refresh_token)\s*[:=]\s*([^\s,;]+)/gi, "$1=[REDACTED]")
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]");
+}
+
 export function sanitizeUrl(rawUrl: string | undefined) {
   if (!rawUrl) return undefined;
 
