@@ -1,3 +1,4 @@
+import { recordAuthenticationFailure } from "../authentication/AuthenticationAttemptPolicy.js";
 import { AutomationError, isAbortError } from "../errors.js";
 import type { BrowserManager } from "../browser/BrowserManager.js";
 import type { OperationEventBus } from "../events/EventBus.js";
@@ -29,7 +30,7 @@ export class OperationQueue {
   constructor(private readonly deps: OperationQueueDeps) {}
 
   enqueue(operationId: string) {
-    if (!this.pending.includes(operationId) && this.activeOperationId !== operationId) {
+    if (!this.pending.includes(operationId)) {
       this.pending.push(operationId);
     }
 
@@ -114,6 +115,7 @@ export class OperationQueue {
 
     this.activeOperationId = nextId;
     const controller = new AbortController();
+    const credentialGeneration = this.deps.ephemeralCredentialStore?.snapshotGeneration();
     this.controllers.set(nextId, controller);
 
     try {
@@ -123,7 +125,7 @@ export class OperationQueue {
         repository: this.deps.repository,
         browserManager: this.deps.browserManager,
         secretProvider: this.deps.ephemeralCredentialStore
-          ? new OperationScopedSecretProvider(nextId, this.deps.ephemeralCredentialStore, this.deps.secretProvider)
+          ? new OperationScopedSecretProvider(nextId, this.deps.ephemeralCredentialStore, this.deps.secretProvider, credentialGeneration)
           : this.deps.secretProvider,
         artifactStorage: this.deps.artifactStorage,
         updateStatus: (status, step, data) => this.setStatus(nextId, status, step, this.isFinalStatus(status), data),
@@ -142,13 +144,17 @@ export class OperationQueue {
           data: { operator: operation.portal, companyId: operation.companyId },
         });
       } else if (error instanceof AutomationError && error.code === "AUTHENTICATION_FAILED" && operation.type === "CARD_ISSUE") {
-        await this.handleAuthenticationFailed(operation, error);
+        await recordAuthenticationFailure(operation, error, {
+          config: this.deps.config,
+          repository: this.deps.repository,
+          emitEvent: (event) => this.emitEvent(event),
+        });
       } else {
         await this.fail(nextId, this.toOperationError(error), this.extractErrorArtifact(error));
       }
     } finally {
       this.controllers.delete(nextId);
-      await this.clearEphemeralCredentialIfSafe(nextId);
+      this.deps.ephemeralCredentialStore?.clear(nextId, credentialGeneration);
       this.activeOperationId = undefined;
       void this.drain();
     }
@@ -193,42 +199,6 @@ export class OperationQueue {
     });
     this.deps.eventBus.publish(created);
     return created;
-  }
-
-  private async handleAuthenticationFailed(operation: OperationRecord, error: AutomationError) {
-    const operationError = this.toOperationError(error);
-    await this.deps.repository.update(operation.id, {
-      status: "awaiting_authentication",
-      error: operationError,
-      currentStep: "authentication_failed",
-      updatedAt: new Date().toISOString(),
-    });
-
-    await this.emitEvent({
-      operationId: operation.id,
-      type: "authentication.failed",
-      status: "awaiting_authentication",
-      step: "authentication_failed",
-      data: {
-        error: operationError.code,
-        safeDetails: operationError.safeDetails,
-        retryable: true,
-      },
-    });
-  }
-
-  private async clearEphemeralCredentialIfSafe(operationId: string) {
-    if (!this.deps.ephemeralCredentialStore) return;
-
-    const latest = await Promise.resolve(this.deps.repository.get(operationId)).catch(() => undefined);
-    if (
-      latest?.status === "awaiting_authentication" ||
-      (latest?.status === "queued" && latest.currentStep === "authentication_submitted")
-    ) {
-      return;
-    }
-
-    this.deps.ephemeralCredentialStore.clear(operationId);
   }
 
   private isFinalStatus(status: OperationStatus) {
@@ -301,3 +271,4 @@ export class OperationQueue {
     return context?.artifact;
   }
 }
+

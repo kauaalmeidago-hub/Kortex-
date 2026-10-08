@@ -16,6 +16,7 @@ import type { CredentialResolver } from "./credentials/CredentialResolver.js";
 import { CreateOperationSchema, validatePayload } from "./validation/operationSchemas.js";
 import { sanitizeDiagnosticText } from "./security/redaction.js";
 import type { EphemeralCredentialStore } from "./secrets/EphemeralCredentialStore.js";
+import { authenticationAttemptLimitError, countAuthenticationFailures } from "./authentication/AuthenticationAttemptPolicy.js";
 
 interface ServerDeps {
   config: AutomationConfig;
@@ -306,15 +307,37 @@ export async function createServer({ config, repository, eventBus, queue, creden
       return reply.code(400).send({ ok: false, error: "COMPANY_CODE_REQUIRED", operation: operationResponse(operation) });
     }
 
-    const events = await repository.getEvents(operation.id);
-    const failedAttempts = events.filter((event) => event.type === "authentication.failed").length;
-
     reauthInFlight.add(operation.id);
+    let credentialGeneration: number | undefined;
     try {
-      ephemeralCredentialStore.put(
+      const latest = await repository.get(operation.id);
+      if (latest?.status !== "awaiting_authentication") {
+        return reply.code(409).send({ ok: false, error: "OPERATION_NOT_AWAITING_AUTHENTICATION" });
+      }
+      const failedAttempts = countAuthenticationFailures(await repository.getEvents(operation.id));
+      if (failedAttempts >= config.authMaxAttempts) {
+        ephemeralCredentialStore.clear(operation.id);
+        const reviewed = await repository.update(operation.id, {
+          status: "manual_review",
+          currentStep: "authentication_attempts_exceeded",
+          error: authenticationAttemptLimitError(),
+          updatedAt: new Date().toISOString(),
+          finishedAt: new Date().toISOString(),
+        });
+        return reply.code(429).send({
+          ok: false,
+          error: "AUTHENTICATION_ATTEMPTS_EXCEEDED",
+          operation: reviewed ? operationResponse(reviewed) : undefined,
+        });
+      }
+      credentialGeneration = ephemeralCredentialStore.put(
         operation.id,
         credentialRefFor(operation),
-        { username: companyCode, password: parsed.data.password },
+        {
+          username: companyCode,
+          password: parsed.data.password,
+          metadata: { rememberOnDevice: parsed.data.rememberOnDevice, submittedAt: new Date().toISOString() },
+        },
         config.authChallengeTtlMinutes * 60 * 1000,
       );
 
@@ -323,7 +346,7 @@ export async function createServer({ config, repository, eventBus, queue, creden
         type: "authentication.submitted",
         status: "awaiting_authentication",
         step: "authentication_submitted",
-        data: { rememberOnDevice: false, attemptNumber: failedAttempts + 1 },
+        data: { rememberOnDevice: parsed.data.rememberOnDevice, attemptNumber: failedAttempts + 1 },
         createdAt: new Date().toISOString(),
       });
       eventBus.publish(submitted);
@@ -354,7 +377,7 @@ export async function createServer({ config, repository, eventBus, queue, creden
         operation: resumed ? operationResponse(resumed) : undefined,
       });
     } catch (error) {
-      ephemeralCredentialStore.clear(operation.id);
+      if (credentialGeneration !== undefined) ephemeralCredentialStore.clear(operation.id, credentialGeneration);
       const waiting = await repository.update(operation.id, {
         status: "awaiting_authentication",
         currentStep: "authentication_submit_failed",
@@ -397,3 +420,4 @@ function setupSse(reply: FastifyReply) {
 function writeSse(reply: FastifyReply, event: unknown) {
   reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
 }
+

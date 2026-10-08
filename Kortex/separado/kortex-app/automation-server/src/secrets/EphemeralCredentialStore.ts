@@ -4,27 +4,36 @@ import type { SecretProvider } from "./SecretProvider.js";
 interface EphemeralCredentialEntry {
   credential: PortalCredential;
   expiresAt: number;
+  generation: number;
 }
 
 export class EphemeralCredentialStore {
   private readonly entries = new Map<string, EphemeralCredentialEntry>();
+  private generation = 0;
+
+  snapshotGeneration() {
+    return this.generation;
+  }
 
   put(operationId: string, ref: string, credential: PortalCredential, ttlMs: number) {
     this.pruneExpired();
+    const generation = ++this.generation;
     this.entries.set(this.key(operationId, ref), {
       credential: {
         username: credential.username,
         password: credential.password,
-        metadata: credential.metadata,
+        metadata: credential.metadata ? { ...credential.metadata } : undefined,
       },
       expiresAt: Date.now() + ttlMs,
+      generation,
     });
+    return generation;
   }
 
-  get(operationId: string, ref: string) {
+  get(operationId: string, ref: string, throughGeneration = Number.POSITIVE_INFINITY) {
     const key = this.key(operationId, ref);
     const entry = this.entries.get(key);
-    if (!entry) return undefined;
+    if (!entry || entry.generation > throughGeneration) return undefined;
 
     if (entry.expiresAt <= Date.now()) {
       this.entries.delete(key);
@@ -34,20 +43,20 @@ export class EphemeralCredentialStore {
     return {
       username: entry.credential.username,
       password: entry.credential.password,
-      metadata: entry.credential.metadata,
+      metadata: entry.credential.metadata ? { ...entry.credential.metadata } : undefined,
     };
   }
 
-  consume(operationId: string, ref: string) {
-    const credential = this.get(operationId, ref);
+  consume(operationId: string, ref: string, throughGeneration = Number.POSITIVE_INFINITY) {
+    const credential = this.get(operationId, ref, throughGeneration);
     if (credential) this.entries.delete(this.key(operationId, ref));
     return credential;
   }
 
-  clear(operationId: string) {
+  clear(operationId: string, throughGeneration = Number.POSITIVE_INFINITY) {
     const prefix = `${operationId}:`;
-    for (const key of this.entries.keys()) {
-      if (key.startsWith(prefix)) this.entries.delete(key);
+    for (const [key, entry] of this.entries) {
+      if (key.startsWith(prefix) && entry.generation <= throughGeneration) this.entries.delete(key);
     }
   }
 
@@ -68,9 +77,11 @@ export class OperationScopedSecretProvider implements SecretProvider {
     private readonly operationId: string,
     private readonly ephemeralCredentials: EphemeralCredentialStore,
     private readonly fallback: SecretProvider,
+    private readonly generation = ephemeralCredentials.snapshotGeneration(),
   ) {}
 
   async get(ref: string) {
-    return this.ephemeralCredentials.consume(this.operationId, ref) ?? this.fallback.get(ref);
+    return this.ephemeralCredentials.consume(this.operationId, ref, this.generation) ?? this.fallback.get(ref);
   }
 }
+

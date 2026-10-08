@@ -5,6 +5,7 @@ import type { OperationEventBus } from "../events/EventBus.js";
 import type { SecretProvider } from "../secrets/SecretProvider.js";
 import type { PersistentAutomationQueueRepository } from "../repositories/AutomationOperationRepository.js";
 import { runWorkflow } from "../workflows/WorkflowRunner.js";
+import { recordAuthenticationFailure } from "../authentication/AuthenticationAttemptPolicy.js";
 import { AutomationError, isAbortError } from "../errors.js";
 import type { OperationError, OperationRecord, OperationStatus } from "../types.js";
 import type { ArtifactStorage } from "../storage/ArtifactStorage.js";
@@ -60,6 +61,7 @@ export class PersistentWorker {
 
   private async execute(operation: OperationRecord) {
     const controller = new AbortController();
+    const credentialGeneration = this.deps.ephemeralCredentialStore?.snapshotGeneration();
     this.currentController = controller;
     const lockKey = `${operation.portal}:company:${operation.companyId}`;
     let leaseTimer: NodeJS.Timeout | undefined;
@@ -98,7 +100,7 @@ export class PersistentWorker {
         repository: this.deps.repository,
         browserManager: this.deps.browserManager,
         secretProvider: this.deps.ephemeralCredentialStore
-          ? new OperationScopedSecretProvider(operation.id, this.deps.ephemeralCredentialStore, this.deps.secretProvider)
+          ? new OperationScopedSecretProvider(operation.id, this.deps.ephemeralCredentialStore, this.deps.secretProvider, credentialGeneration)
           : this.deps.secretProvider,
         artifactStorage: this.deps.artifactStorage,
         updateStatus: (status, step, data) => this.updateStatus(operation.id, status, step, data),
@@ -120,7 +122,11 @@ export class PersistentWorker {
           data: { operator: operation.portal, companyId: operation.companyId },
         });
       } else if (error instanceof AutomationError && error.code === "AUTHENTICATION_FAILED" && operation.type === "CARD_ISSUE") {
-        await this.handleAuthenticationFailed(operation, error);
+        await recordAuthenticationFailure(operation, error, {
+          config: this.deps.config,
+          repository: this.deps.repository,
+          emitEvent: (event) => this.emitEvent(event),
+        });
       } else {
         await this.fail(operation.id, this.toOperationError(error));
       }
@@ -128,7 +134,7 @@ export class PersistentWorker {
       if (leaseTimer) clearInterval(leaseTimer);
       if (cancelWatchTimer) clearInterval(cancelWatchTimer);
       await this.deps.repository.releaseLock(lockKey, operation.id, this.deps.config.workerId).catch(() => undefined);
-      await this.clearEphemeralCredentialIfSafe(operation.id);
+      this.deps.ephemeralCredentialStore?.clear(operation.id, credentialGeneration);
       this.currentController = undefined;
     }
   }
@@ -182,42 +188,6 @@ export class PersistentWorker {
     return created;
   }
 
-  private async handleAuthenticationFailed(operation: OperationRecord, error: AutomationError) {
-    const operationError = this.toOperationError(error);
-    await this.deps.repository.update(operation.id, {
-      status: "awaiting_authentication",
-      error: operationError,
-      currentStep: "authentication_failed",
-      updatedAt: new Date().toISOString(),
-    });
-
-    await this.emitEvent({
-      operationId: operation.id,
-      type: "authentication.failed",
-      status: "awaiting_authentication",
-      step: "authentication_failed",
-      data: {
-        error: operationError.code,
-        safeDetails: operationError.safeDetails,
-        retryable: true,
-      },
-    });
-  }
-
-  private async clearEphemeralCredentialIfSafe(operationId: string) {
-    if (!this.deps.ephemeralCredentialStore) return;
-
-    const latest = await Promise.resolve(this.deps.repository.get(operationId)).catch(() => undefined);
-    if (
-      latest?.status === "awaiting_authentication" ||
-      (latest?.status === "queued" && latest.currentStep === "authentication_submitted")
-    ) {
-      return;
-    }
-
-    this.deps.ephemeralCredentialStore.clear(operationId);
-  }
-
   private async fail(operationId: string, error: OperationError) {
     await this.deps.repository.update(operationId, {
       status: "error",
@@ -269,3 +239,4 @@ export class PersistentWorker {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }
+

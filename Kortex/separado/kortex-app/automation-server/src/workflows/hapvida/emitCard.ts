@@ -3,6 +3,7 @@ import { AutomationError, assertNotAborted, createReauthRequiredError } from "..
 import type { OperationArtifact, OperationRecord, OperationResult, PortalCredential } from "../../types.js";
 import type { WorkflowContext } from "../WorkflowContext.js";
 import { requireInput } from "./validators.js";
+import { RememberedCredentialService } from "../../authentication/RememberedCredentialService.js";
 import { ActiveUsersPreflightService } from "./ActiveUsersPreflightService.js";
 import { HapvidaLoginPage } from "./pageObjects/HapvidaLoginPage.js";
 import { HapvidaCardPage } from "./pageObjects/HapvidaCardPage.js";
@@ -197,6 +198,17 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
         step: "authentication_succeeded",
         data: { source: "worker" },
       });
+
+      if (credential?.metadata?.rememberOnDevice === true) {
+        const remembered = await new RememberedCredentialService(context.config).saveValidatedCredential(operation, credential);
+        await context.emitEvent({
+          operationId: operation.id,
+          type: "authentication.saved_on_device",
+          status: "authenticating",
+          step: "authentication_saved_on_device",
+          data: { rememberedOnDevice: true, metadataRegistered: remembered.metadataRegistered },
+        });
+      }
     }
 
     assertNotAborted(signal);
@@ -285,3 +297,4 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
     });
   });
 }
+

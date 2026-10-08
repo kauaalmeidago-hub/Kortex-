@@ -55,6 +55,18 @@ $env:HAPVIDA_AUTHENTICATED_SELECTOR="text=Datas de adesão"
 
 Se a sessao expirar e nao existir credencial segura no `SecretProvider`, o worker retorna `REAUTH_REQUIRED`.
 
+## Reautenticacao pelo Koa
+
+O formulario do Koa envia a senha somente para `/api/operations/:id/reauth`. Esse endpoint guarda a credencial em memoria e devolve a mesma operacao para `queued`; ele nao abre o navegador nem confirma o login.
+
+O worker consome a credencial temporaria uma unica vez, autentica no navegador da emissao e continua nesse mesmo contexto ate gerar o PDF. `authentication.succeeded` so e emitido depois de validar a sessao no portal. A limpeza de uma execucao anterior nao remove uma credencial enviada para a retomada.
+
+Com `rememberOnDevice=false`, a senha nao e gravada em arquivo ou no Supabase. Com `rememberOnDevice=true`, o worker salva a credencial local criptografada por DPAPI somente depois do login confirmado e registra apenas metadados no banco. `authentication.saved_on_device` informa se esses metadados foram registrados; uma indisponibilidade do cadastro nao altera o arquivo local ja criptografado.
+
+`KOA_AUTH_MAX_ATTEMPTS` limita as falhas de login por operacao (padrao: 3). Antes de atingir o limite, uma falha volta para `awaiting_authentication`; ao atingir o limite, a operacao passa para `manual_review`. Falhas tecnicas identificadas como `DATABASE_OPERATION_UPDATE_FAILED` nao consomem uma tentativa de login.
+
+Depois de atualizar o codigo no computador do worker, encerre a instancia antiga, execute `npm ci`, `npm run build` e inicie uma unica instancia com `npm start`. Valide uma emissao de teste pela interface: mesma `operationId`, um login no worker, status `success` e PDF do beneficiario correto. Os testes automatizados nao substituem essa validacao no portal real.
+
 ## Scripts
 
 ```bash
@@ -200,3 +212,4 @@ Por padrao, ele filtra somente hosts contendo `hapvida`, `webhap`, `ndi` ou `sig
 ```
 
 Depois de salvar a credencial especifica, remova o CSV exportado do computador ou guarde-o em local seguro definido pela operacao. O arquivo CSV nao deve ser versionado nem enviado ao frontend.
+
