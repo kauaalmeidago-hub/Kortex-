@@ -166,8 +166,12 @@ export class PostgresOperationRepository implements PersistentAutomationQueueRep
     this.pool = new Pool({
       connectionString: databaseUrl,
       max: 8,
+      connectionTimeoutMillis: 10_000,
+      query_timeout: 15_000,
       application_name: "kortex-automation-server",
     });
+    // pg removes the failed idle client; the next query creates a fresh connection.
+    this.pool.on("error", () => { console.warn("Koa: conexao ociosa com o banco foi interrompida; reconexao automatica ativa."); });
   }
 
   async close() {

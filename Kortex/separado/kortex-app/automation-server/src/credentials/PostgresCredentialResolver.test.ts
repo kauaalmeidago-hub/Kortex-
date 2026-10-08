@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 const mock = vi.hoisted(() => ({ query: vi.fn() }));
-vi.mock("pg", () => ({ default: { Pool: class { query = mock.query; async end() {} } } }));
+vi.mock("pg", () => ({ default: { Pool: class { query = mock.query; on() { return this; } async end() {} } } }));
 import { PostgresCredentialResolver } from "./PostgresCredentialResolver.js";
 
 describe("credentials for a requested portal code", () => {

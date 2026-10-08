@@ -15,10 +15,16 @@
     "browser:check": "tsx src/scripts/koa-browser-check.ts",
     "credential:register": "tsx src/scripts/register-portal-credential.ts",
     "session:bootstrap": "tsx src/scripts/session-bootstrap.ts",
-    "check": "npm run typecheck && npm test"
+    "check": "npm run typecheck && npm test",
+    "permanent:install": "node scripts/install-permanent.mjs install",
+    "permanent:status": "node scripts/install-permanent.mjs status",
+    "permanent:stop": "node scripts/install-permanent.mjs stop",
+    "permanent:remove": "node scripts/install-permanent.mjs remove",
+    "permanent:check": "npm run build && node scripts/check-permanent-runtime.mjs"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.2",
+    "@fastify/static": "^10.1.5",
     "@supabase/supabase-js": "^2.117.2",
     "fastify": "^5.2.0",
     "pg": "^8.23.1",
@@ -33,4 +39,3 @@
     "vitest": "^5.0.3"
   }
 }
-

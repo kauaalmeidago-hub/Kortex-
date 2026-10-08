@@ -59,7 +59,6 @@ if (config.repositoryMode === "postgres" && config.automationMode !== "api") {
     ephemeralCredentialStore,
     artifactStorage,
   });
-  void persistentWorker.run();
 }
 
 const server = await createServer({
@@ -70,19 +69,32 @@ const server = await createServer({
   credentialResolver,
   ephemeralCredentialStore,
   artifactStorage,
+  workerReady: persistentWorker ? () => persistentWorker!.isReady() : undefined,
 });
 
-const close = async () => {
+let workerRun: Promise<void> | undefined;
+let closing: Promise<void> | undefined;
+const close = () => closing ??= (async () => {
   persistentWorker?.stop();
   await server.close().catch(() => undefined);
+  await workerRun;
   await repository.close?.();
   await (credentialResolver as { close?: () => Promise<void> }).close?.();
-};
+})();
 
-process.once("SIGINT", () => void close().then(() => process.exit(0)));
-process.once("SIGTERM", () => void close().then(() => process.exit(0)));
+const shutdown = () => void close().then(() => process.exit(0), () => process.exit(1));
+process.once("SIGINT", shutdown);
+process.once("SIGTERM", shutdown);
+// IPC works on Windows, where child.kill("SIGTERM") terminates without a graceful handler.
+process.on("message", (message) => { if (message === "shutdown") shutdown(); });
+if (process.send) process.once("disconnect", shutdown);
 
 await server.listen({ host: config.host, port: config.port });
+// Binding first prevents a second instance from claiming work before EADDRINUSE.
+workerRun = persistentWorker?.run();
+workerRun?.catch(() => { process.exitCode = 1; shutdown(); });
+process.send?.("ready");
 
 console.log(`Koa automation-server listening on http://${config.host}:${config.port}`);
 console.log(`API token source: ${process.env.KOA_AUTOMATION_TOKEN ? "KOA_AUTOMATION_TOKEN" : "automation/secrets/local-api-token.txt"}`);
+

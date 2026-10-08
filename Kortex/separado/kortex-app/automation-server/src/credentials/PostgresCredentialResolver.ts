@@ -11,8 +11,11 @@ export class PostgresCredentialResolver implements CredentialResolver {
     this.pool = new Pool({
       connectionString: databaseUrl,
       max: 4,
+      connectionTimeoutMillis: 10_000,
+      query_timeout: 15_000,
       application_name: "kortex-credential-resolver",
     });
+    this.pool.on("error", () => { console.warn("Koa: conexao de credenciais interrompida; reconexao automatica ativa."); });
   }
 
   async close() {

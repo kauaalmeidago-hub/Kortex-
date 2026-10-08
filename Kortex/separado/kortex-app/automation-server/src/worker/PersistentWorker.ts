@@ -27,33 +27,59 @@ export class PersistentWorker {
   private stopping = false;
   private currentController?: AbortController;
   private heartbeatTimer?: NodeJS.Timeout;
+  private wakeUp?: () => void;
+  private running = false;
+  private queueConnected = false;
 
   constructor(private readonly deps: PersistentWorkerDeps) {}
+
+  isReady() {
+    return this.running && !this.stopping && this.queueConnected;
+  }
 
   stop() {
     this.stopping = true;
     this.currentController?.abort();
+    this.wakeUp?.();
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
   }
 
   async run() {
+    this.running = true;
     await this.heartbeat("online", { mode: this.deps.config.automationMode });
     this.heartbeatTimer = setInterval(() => {
       void this.heartbeat("online", { mode: this.deps.config.automationMode });
     }, this.deps.config.workerHeartbeatIntervalMs);
 
+    let consecutiveFailures = 0;
     try {
       while (!this.stopping) {
-        await this.deps.repository.markStaleOperationsForReview().catch(() => 0);
-        const operation = await this.deps.repository.claimNext(this.deps.config.workerId, this.deps.config.workerLeaseSeconds);
-        if (!operation) {
-          await this.sleep(this.deps.config.workerPollIntervalMs);
-          continue;
-        }
+        try {
+          await this.deps.repository.markStaleOperationsForReview();
+          if (this.stopping) break;
+          const operation = await this.deps.repository.claimNext(this.deps.config.workerId, this.deps.config.workerLeaseSeconds);
+          this.queueConnected = true;
+          consecutiveFailures = 0;
+          if (this.stopping) break;
+          if (!operation) {
+            await this.sleep(this.deps.config.workerPollIntervalMs);
+            continue;
+          }
 
-        await this.execute(operation);
+          await this.execute(operation);
+        } catch {
+          this.queueConnected = false;
+          // Retry queue connectivity, never replay a portal action with an uncertain outcome.
+          // Do not log the database exception: it may contain credentials or connection URLs.
+          consecutiveFailures += 1;
+          if (consecutiveFailures === 1 && !this.stopping) {
+            console.warn("Koa worker: conexao com a fila indisponivel; reconectando automaticamente.");
+          }
+          await this.sleep(Math.min(30_000, Math.max(1000, this.deps.config.workerPollIntervalMs) * 2 ** Math.min(consecutiveFailures - 1, 5)));
+        }
       }
     } finally {
+      this.running = false;
       if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
       await this.deps.repository.markWorkerOffline?.(this.deps.config.workerId).catch(() => undefined);
     }
@@ -88,7 +114,8 @@ export class PersistentWorker {
       }
 
       leaseTimer = setInterval(() => {
-        void this.deps.repository.renewLease(operation.id, this.deps.config.workerId, this.deps.config.workerLeaseSeconds);
+        void this.deps.repository.renewLease(operation.id, this.deps.config.workerId, this.deps.config.workerLeaseSeconds)
+          .then((renewed) => { this.queueConnected = renewed; }, () => { this.queueConnected = false; });
       }, Math.max(5000, Math.floor((this.deps.config.workerLeaseSeconds * 1000) / 3)));
 
       cancelWatchTimer = setInterval(() => {
@@ -236,7 +263,16 @@ export class PersistentWorker {
   }
 
   private sleep(ms: number) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+    if (this.stopping) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const finish = () => {
+        clearTimeout(timer);
+        this.wakeUp = undefined;
+        resolve();
+      };
+      const timer = setTimeout(finish, ms);
+      this.wakeUp = finish;
+    });
   }
 }
 

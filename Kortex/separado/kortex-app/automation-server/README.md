@@ -73,7 +73,7 @@ O formulario de carteirinha Hapvida depende do reCAPTCHA para enviar o login. O 
 
 Antes de pedir a credencial, o worker verifica se a API do reCAPTCHA carregou. Depois do clique, aguarda o POST do formulario e a resposta do portal. Uma verificacao indisponivel, um formulario que nao foi enviado ou um retorno silencioso ao login retorna `PORTAL_AUTH_UNAVAILABLE`, sem registrar falha de senha nem abrir outro desafio de autenticacao. `AUTHENTICATION_FAILED` exige uma rejeicao de credencial reconhecida no portal. A sessao autenticada continua sendo validada antes da emissao e do armazenamento opcional da credencial.
 
-Depois de atualizar o codigo no computador do worker, encerre a instancia antiga, execute `npm ci`, `npm run build` e inicie uma unica instancia com `npm start`. Valide uma emissao de teste pela interface: mesma `operationId`, um login no worker, status `success` e PDF do beneficiario correto. Os testes automatizados nao substituem essa validacao no portal real.
+Depois de instalar a versao atualizada no computador do worker, valide uma emissao de teste pela interface: mesma `operationId`, um login no worker, status `success` e PDF do beneficiario correto. Os testes automatizados nao substituem essa validacao no portal real.
 
 ## Novos codigos e download pelo chat
 
@@ -87,7 +87,7 @@ Na pasta `kortex-app`, `npm run test:card-download` testa o botao real do chat e
 
 ## Scripts
 
-`npm start` recompila o worker antes de iniciar para evitar executar um `dist` antigo depois de `git pull`. Na pasta `kortex-app`, `npm run automation:start` inicia esse mesmo processo. Mantenha o terminal aberto enquanto o worker estiver em uso.
+`npm start` recompila o worker antes de iniciar. Na pasta `kortex-app`, `npm run automation:start` inicia esse mesmo processo em primeiro plano. Para operar diariamente sem terminal, use a instalacao permanente abaixo.
 
 ```bash
 npm install
@@ -98,11 +98,49 @@ npm run browser:onboard
 npm run browser:check
 ```
 
+## Instalacao permanente no Windows
+
+Execute uma vez na pasta `Kortex/separado/kortex-app`, com o mesmo usuario Windows que utiliza as credenciais DPAPI. Requer Node.js 22.13 ou superior com npm e a configuracao local ja utilizada pelo Kortex. Se houver um terminal antigo executando `automation:start` ou `npm run dev`, encerre-o antes da primeira ativacao.
+
+```powershell
+git pull
+npm run automation:install
+```
+
+O instalador instala as dependencias do lockfile, compila o worker e o aplicativo e cria a inicializacao automatica do usuario. O aplicativo compilado usa a API local e as chaves publicas Supabase de `.env`/`.env.local` da pasta `kortex-app`; a chave secreta do backend nao e enviada ao frontend. O processo continua depois de fechar o terminal, inicia ao entrar no Windows e recupera quedas com espera progressiva de ate 30 segundos. Abra o atalho `Kortex` na area de trabalho, ou `http://localhost:8080`.
+
+O Windows precisa estar ligado e o usuario conectado. O registro usa a pasta Inicializar do usuario, sem exigir administrador e preservando a identidade DPAPI. A versao compilada permanece instalada; nao e necessario repetir `git pull`, `build` ou `start` para cada emissao.
+
+As configuracoes do worker tambem ficam protegidas por DPAPI em `%LOCALAPPDATA%\Kortex\Runtime\environment.dpapi`, inclusive quando vieram somente das variaveis do terminal. As credenciais do portal, perfil do navegador e arquivos existentes continuam nos seus caminhos configurados. O arquivo `status.json` contem somente portas, horarios, estados e PIDs. A API, o aplicativo e a protecao de instancia escutam somente no computador local.
+
+O supervisor aguarda a confirmacao de inicializacao de cada processo e impede uma segunda instancia. O worker so consulta a fila depois de conseguir abrir sua porta. Quedas temporarias do banco recebem reconexao automatica, incluindo erros de conexoes ociosas. A recuperacao consulta a fila; uma acao com resultado incerto continua sujeita a lease e revisao manual, sem reenvio automatico ao portal.
+
+Comandos na pasta `kortex-app`:
+
+```powershell
+npm run automation:status
+npm run automation:stop
+npm run automation:install
+npm run automation:remove
+```
+
+`status` verifica os dois processos e a prontidao da fila. `stop` solicita encerramento dos processos gerenciados, preservando credenciais; `install` os reativa. `remove` encerra e remove a inicializacao automatica. Nenhum desses comandos encerra processos externos ou remove as credenciais. `/ready` retorna 503 enquanto a fila esta reconectando, em vez de anunciar worker pronto.
+
+Para instalar uma futura alteracao de codigo ou configuracao, aguarde a operacao atual terminar, execute `automation:stop`, atualize com `git pull` e rode `automation:install` novamente. A instalacao ativa nao e substituida durante uma emissao.
+
+```bash
+npm run automation:check-runtime
+```
+
+Esse teste usa uma copia temporaria isolada com SQLite e pagina sintetica, sem configuracao, credenciais, banco remoto ou portal reais. Verifica aplicativo e API em segundo plano, tentativa de segunda instancia, recuperacao de quedas separadas do worker/aplicativo e encerramento sem processos orfaos. A criacao do atalho e a protecao DPAPI precisam ser validadas no Windows do operador.
+
 ## Configuracao local
 
 Variaveis principais:
 
 - `KOA_AUTOMATION_PORT`: porta da API. Padrao: `4777`.
+- `KOA_DESKTOP_PORT`: porta do aplicativo permanente. Padrao: `8080`.
+- `KOA_SUPERVISOR_PORT`: porta local usada somente para impedir duas instancias do supervisor. Padrao: `4776`.
 - `KOA_AUTOMATION_HOST`: host. Padrao seguro: `127.0.0.1`.
 - `KOA_AUTOMATION_TOKEN`: token opcional. Se ausente, um token local e criado em `automation/secrets/local-api-token.txt`.
 - `DATABASE_URL`: quando definido, ativa o `PostgresOperationRepository`.

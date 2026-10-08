@@ -16,9 +16,11 @@ describe("Koa reauthentication handoff", () => {
   let app: Awaited<ReturnType<typeof createServer>>;
   let repository: AutomationOperationRepository;
   let launch: ReturnType<typeof vi.spyOn>;
+  let workerReady: boolean;
 
   beforeEach(async () => {
     const now = new Date().toISOString();
+    workerReady = true;
     operation = { id: "operation-1", type: "CARD_ISSUE", status: "awaiting_authentication", companyId: "company-1",
       portal: "hapvida", credentialRef: "hapvida:company-1", input: { contractCode: "0ABC" }, artifacts: [], createdAt: now, updatedAt: now };
     events = [];
@@ -35,6 +37,7 @@ describe("Koa reauthentication handoff", () => {
       config: { apiToken: "test-api", repositoryMode: "postgres", authMaxAttempts: 3, authChallengeTtlMinutes: 30, features: {} } as AutomationConfig,
       repository, eventBus: new OperationEventBus(), queue: { enqueue: vi.fn() } as unknown as OperationQueue,
       credentialResolver: new ExplicitCredentialResolver(), ephemeralCredentialStore: store,
+      workerReady: () => workerReady,
     });
   });
 
@@ -43,6 +46,17 @@ describe("Koa reauthentication handoff", () => {
   const submit = (rememberOnDevice = false) => app.inject({
     method: "POST", url: "/api/operations/operation-1/reauth", headers: { "x-koa-automation-token": "test-api" },
     payload: { password: "synthetic-password", rememberOnDevice },
+  });
+
+  it("reports a disconnected queue as unavailable and becomes ready after recovery", async () => {
+    workerReady = false;
+    const unavailable = await app.inject("/ready");
+    expect(unavailable.statusCode).toBe(503);
+    expect(unavailable.json()).toMatchObject({ database: "reconnecting", worker: "reconnecting" });
+    workerReady = true;
+    const recovered = await app.inject("/ready");
+    expect(recovered.statusCode).toBe(200);
+    expect(recovered.json()).toMatchObject({ database: "ok", worker: "ok" });
   });
 
   it.each([false, true])("preserves remember=%s only in RAM and resumes the same operation without logging in", async (remember) => {

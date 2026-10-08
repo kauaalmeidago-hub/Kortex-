@@ -15,7 +15,12 @@
     "automation:dev": "npm --prefix automation-server run dev",
     "automation:start": "npm --prefix automation-server start",
     "automation:build": "npm --prefix automation-server run build",
-    "automation:test": "npm --prefix automation-server test"
+    "automation:test": "npm --prefix automation-server test",
+    "automation:install": "node automation-server/scripts/install-permanent.mjs install",
+    "automation:status": "node automation-server/scripts/install-permanent.mjs status",
+    "automation:stop": "node automation-server/scripts/install-permanent.mjs stop",
+    "automation:remove": "node automation-server/scripts/install-permanent.mjs remove",
+    "automation:check-runtime": "npm --prefix automation-server run permanent:check"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

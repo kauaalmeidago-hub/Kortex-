@@ -28,6 +28,7 @@ interface ServerDeps {
   credentialResolver: CredentialResolver;
   ephemeralCredentialStore?: EphemeralCredentialStore;
   artifactStorage?: ArtifactStorage;
+  workerReady?: () => boolean;
 }
 
 const operationTypes: OperationType[] = [
@@ -127,7 +128,7 @@ function operationResponse(operation: OperationRecord) {
   });
 }
 
-export async function createServer({ config, repository, eventBus, queue, credentialResolver, ephemeralCredentialStore, artifactStorage }: ServerDeps) {
+export async function createServer({ config, repository, eventBus, queue, credentialResolver, ephemeralCredentialStore, artifactStorage, workerReady }: ServerDeps) {
   const app = fastify({ logger: false });
   const reauthInFlight = new Set<string>();
   const authClient: SupabaseClient | undefined =
@@ -169,12 +170,15 @@ export async function createServer({ config, repository, eventBus, queue, creden
 
   app.get("/health", async () => ({ status: "ok" }));
 
-  app.get("/ready", async () => ({
-    database: "ok",
-    storage: config.supabaseUrl && config.supabaseSecretKey ? "ok" : "local",
-    secrets: config.secretProviderMode === "remote" ? "remote" : "configured",
-    worker: "ok",
-  }));
+  app.get("/ready", async (_request, reply) => {
+    const ready = workerReady?.() ?? true;
+    return reply.code(ready ? 200 : 503).send({
+      database: ready ? "ok" : "reconnecting",
+      storage: config.supabaseUrl && config.supabaseSecretKey ? "ok" : "local",
+      secrets: config.secretProviderMode === "remote" ? "remote" : "configured",
+      worker: ready ? "ok" : "reconnecting",
+    });
+  });
 
   app.post("/api/operations", async (request, reply) => {
     let payload: CreateOperationRequest;
