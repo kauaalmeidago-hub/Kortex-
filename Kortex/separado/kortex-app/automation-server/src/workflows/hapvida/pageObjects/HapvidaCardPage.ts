@@ -38,7 +38,7 @@ async function firstVisible(locators: Locator[]) {
 }
 
 export class HapvidaCardPage {
-  constructor(private readonly page: Page) {}
+  constructor(private readonly page: Page, private readonly previewTimeoutMs = 30_000) {}
 
   periodHeading() {
     return this.page.getByText(/datas?\s+de\s+ades[aã]o/i).first();
@@ -70,10 +70,6 @@ export class HapvidaCardPage {
       .getByRole("button", { name: /imprimir\s+selecionados/i })
       .or(this.page.getByRole("link", { name: /imprimir\s+selecionados/i }))
       .or(this.page.locator('input[value*="imprimir" i]'));
-  }
-
-  cardPreviewTitle() {
-    return this.page.getByText(/carteira\s+provis[oó]ria/i).first();
   }
 
   async waitForPeriodForm() {
@@ -114,9 +110,56 @@ export class HapvidaCardPage {
   }
 
   async waitForCardPreview(input: BeneficiarySearchInput) {
-    await this.cardPreviewTitle().waitFor({ state: "visible" });
-    const pageText = normalizeText((await this.page.locator("body").innerText().catch(() => "")) ?? "");
     const expectedName = normalizeText(input.beneficiaryName);
+    if (!expectedName) {
+      throw new AutomationError("MISSING_REQUIRED_DATA", "Nome do beneficiario nao informado.", {
+        step: "validate_card_preview", retryable: false,
+      });
+    }
+
+    try {
+      const confirmed = await this.page.waitForFunction(({ expectedName }) => {
+        // The portal can put "Carteira Provisoria" only in <title>, which is
+        // metadata and never visible. Validate the rendered document instead.
+        const scope = globalThis as unknown as {
+          document: {
+            title: string;
+            body?: { innerText: string; getBoundingClientRect(): { width: number; height: number } };
+            querySelector(selector: string): unknown;
+          };
+          getComputedStyle(element: unknown): { display: string; visibility: string };
+        };
+        const document = scope.document;
+        const body = document.body;
+        if (!body) return false;
+        const bounds = body.getBoundingClientRect();
+        const style = scope.getComputedStyle(body);
+        if (!bounds.width || !bounds.height || style.display === "none" || style.visibility === "hidden") return false;
+        const normalize = (text: string) => text.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+          .replace(/\s+/g, " ").trim().toLowerCase();
+        const text = normalize(body.innerText);
+        const cardDocument = /carteira\s+provisoria|carteirinha|cartao\s+(?:do\s+beneficiario|de\s+identificacao)/
+          .test(`${normalize(document.title)} ${text}`);
+        const operationForm = document.querySelector('input[type="checkbox"], input[type="password"], #p_cd_empresa, #p_cd_senha');
+        const portalError = /identificacao\s+invalida|sessao\s+expirada|acesso\s+negado|nao\s+foi\s+possivel\s+(?:emitir|gerar)/.test(text);
+        return cardDocument && !operationForm && !portalError && text.includes(expectedName);
+      }, { expectedName }, { timeout: this.previewTimeoutMs });
+      await confirmed.dispose();
+    } catch {
+      const text = normalizeText(await this.page.locator("body").innerText().catch(() => ""));
+      if (text && !text.includes(expectedName)) {
+        throw new AutomationError("CARD_VALIDATION_FAILED", "A carteirinha gerada nao corresponde ao beneficiario solicitado.", {
+          safeDetails: "O nome do beneficiario nao foi encontrado no conteudo renderizado da carteirinha.",
+          step: "validate_card_preview", retryable: false,
+        });
+      }
+      throw new AutomationError("CARD_PREVIEW_NOT_FOUND", "Nao foi possivel confirmar a previa da carteirinha.", {
+        safeDetails: "O documento nao ficou pronto com o nome solicitado. Titulos de aba, formularios de login e listas de selecao nao confirmam uma carteirinha.",
+        step: "validate_card_preview", retryable: false,
+      });
+    }
+
+    const pageText = normalizeText((await this.page.locator("body").innerText().catch(() => "")) ?? "");
 
     if (!pageText.includes(expectedName)) {
       throw new AutomationError("CARD_VALIDATION_FAILED", "A carteirinha gerada nao corresponde ao beneficiario solicitado.", {
@@ -189,3 +232,4 @@ export class HapvidaCardPage {
     return rows;
   }
 }
+

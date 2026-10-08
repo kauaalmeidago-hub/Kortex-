@@ -61,6 +61,10 @@ O formulario do Koa envia a senha somente para `/api/operations/:id/reauth`. Ess
 
 O worker consome a credencial temporaria uma unica vez, autentica no navegador da emissao e continua nesse mesmo contexto ate gerar o PDF. `authentication.succeeded` so e emitido depois de validar a sessao no portal. A limpeza de uma execucao anterior nao remove uma credencial enviada para a retomada.
 
+A validacao final confirma o nome do beneficiario no conteudo renderizado da carteirinha. O titulo da aba pode identificar o documento, mas nao precisa ser visivel no corpo. Formularios de login e listas com checkboxes nao sao aceitos como previa. Uma previa ausente ou de outro beneficiario encerra a operacao antes de imprimir, salvar ou anunciar um PDF.
+
+`npm run test:card-preview` executa casos de regressao em Chrome headless com paginas locais de teste, incluindo titulo apenas no `<head>`, popup e PDF gerado pelo navegador. Requer Chrome instalado (`KOA_BROWSER_CHANNEL`, padrao `chrome`), ou `KOA_TEST_BROWSER_EXECUTABLE` apontando para um Chromium de teste. Esse teste nao acessa o portal nem confirma uma emissao real.
+
 Com `rememberOnDevice=false`, a senha nao e gravada em arquivo ou no Supabase. Com `rememberOnDevice=true`, o worker salva a credencial local criptografada por DPAPI somente depois do login confirmado e registra apenas metadados no banco. `authentication.saved_on_device` informa se esses metadados foram registrados; uma indisponibilidade do cadastro nao altera o arquivo local ja criptografado.
 
 `KOA_AUTH_MAX_ATTEMPTS` limita as falhas de login por operacao (padrao: 3). Antes de atingir o limite, uma falha volta para `awaiting_authentication`; ao atingir o limite, a operacao passa para `manual_review`. Falhas tecnicas identificadas como `DATABASE_OPERATION_UPDATE_FAILED` nao consomem uma tentativa de login.

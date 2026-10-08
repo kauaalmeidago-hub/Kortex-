@@ -133,4 +133,23 @@ describe("CARD_ISSUE authentication in the execution context", () => {
     expect(f.events.some((event) => event.type === "authentication.succeeded")).toBe(false);
     expect(f.artifactSave).not.toHaveBeenCalled();
   });
+
+  it.each(["CARD_PREVIEW_NOT_FOUND", "CARD_VALIDATION_FAILED"])("does not print, store or announce a PDF after %s", async (code) => {
+    const f = fixture(false);
+    mocks.preview.mockRejectedValue(new AutomationError(code, "Previa nao confirmada.", { step: "validate_card_preview" }));
+    await expect(emitCard(f.operation, new AbortController().signal, f.context)).rejects.toMatchObject({ code });
+    expect(f.page.pdf).not.toHaveBeenCalled();
+    expect(f.artifactSave).not.toHaveBeenCalled();
+    expect(f.operation.artifacts).toEqual([]);
+    expect(f.events.some((event) => event.type === "artifact.created" || event.type === "operation.success")).toBe(false);
+    expect(f.operation.status).toBe("verifying");
+  });
+
+  it("does not store a PDF when printing returns invalid bytes", async () => {
+    const f = fixture(false);
+    vi.mocked(f.page.pdf).mockResolvedValue(Buffer.from("<html>Erro do portal</html>"));
+    await expect(emitCard(f.operation, new AbortController().signal, f.context)).rejects.toMatchObject({ code: "PDF_VALIDATION_FAILED" });
+    expect(f.artifactSave).not.toHaveBeenCalled();
+    expect(f.events.some((event) => event.type === "artifact.created" || event.type === "operation.success")).toBe(false);
+  });
 });
