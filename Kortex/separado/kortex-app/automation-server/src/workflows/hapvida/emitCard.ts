@@ -13,6 +13,8 @@ import { HapvidaActiveUsersPage } from "./pageObjects/HapvidaActiveUsersPage.js"
 import { validateCardPdfBytes } from "./downloadValidation.js";
 import { portalLoginCode } from "../../credentials/credentialIdentity.js";
 
+type CardPrintBox = { width: number; height: number };
+
 function readString(input: Record<string, unknown>, keys: string[]) {
   for (const key of keys) {
     const value = input[key];
@@ -43,19 +45,125 @@ function toPortalDate(value: string | undefined, label: string) {
   });
 }
 
-async function printCurrentPageToPdf(page: Page) {
+function safeFileNamePart(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase()
+    .slice(0, 90) || "beneficiario";
+}
+
+async function prepareCardOnlyPrint(page: Page, beneficiaryName: string, title: string) {
+  return page.evaluate<CardPrintBox | undefined, { beneficiaryName: string; title: string }>(
+    ({ beneficiaryName, title }) => {
+      const doc = (globalThis as unknown as { document: any }).document;
+      const normalize = (text: string) => text
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+
+      const expectedName = normalize(beneficiaryName);
+      const cardPattern = /carteira\s+provisoria|carteirinha|cartao\s+(?:do\s+beneficiario|de\s+identificacao)/;
+      const candidates = Array.from(doc.body.querySelectorAll("body *") as any[])
+        .filter((element) => {
+          const rect = element.getBoundingClientRect();
+          if (rect.width < 250 || rect.height < 120) return false;
+          const text = normalize(element.innerText ?? "");
+          return text.includes(expectedName) && cardPattern.test(text);
+        })
+        .sort((left, right) => {
+          const leftRect = left.getBoundingClientRect();
+          const rightRect = right.getBoundingClientRect();
+          return (leftRect.width * leftRect.height) - (rightRect.width * rightRect.height);
+        });
+
+      const card = candidates[0];
+      if (!card) return undefined;
+
+      doc.title = title;
+      doc.getElementById("koa-card-print-root")?.remove();
+      doc.getElementById("koa-card-print-style")?.remove();
+
+      const root = doc.createElement("main");
+      root.id = "koa-card-print-root";
+      root.appendChild(card.cloneNode(true));
+      doc.body.appendChild(root);
+
+      const style = doc.createElement("style");
+      style.id = "koa-card-print-style";
+      style.textContent = `
+        @page { margin: 0; size: auto; }
+        html, body {
+          margin: 0 !important;
+          padding: 0 !important;
+          background: #ffffff !important;
+        }
+        body > :not(#koa-card-print-root) {
+          display: none !important;
+        }
+        #koa-card-print-root {
+          display: block !important;
+          margin: 0 !important;
+          padding: 12px !important;
+          width: max-content !important;
+          background: #ffffff !important;
+        }
+        #koa-card-print-root input,
+        #koa-card-print-root button,
+        #koa-card-print-root a {
+          display: none !important;
+        }
+      `;
+      doc.head.appendChild(style);
+
+      const rect = root.getBoundingClientRect();
+      return {
+        width: Math.max(1, Math.ceil(rect.width)),
+        height: Math.max(1, Math.ceil(rect.height)),
+      };
+    },
+    { beneficiaryName, title },
+  ).catch(() => undefined);
+}
+
+async function printCurrentPageToPdf(page: Page, beneficiaryName: string, title: string) {
+  const printBox = await prepareCardOnlyPrint(page, beneficiaryName, title);
+  const printOptions = printBox
+    ? {
+        width: `${printBox.width}px`,
+        height: `${printBox.height}px`,
+        margin: { top: "0", right: "0", bottom: "0", left: "0" },
+        printBackground: true,
+        preferCSSPageSize: true,
+      }
+    : {
+        format: "A4" as const,
+        printBackground: true,
+        preferCSSPageSize: true,
+      };
+
   try {
-    return await page.pdf({
-      format: "A4",
-      printBackground: true,
-      preferCSSPageSize: true,
-    });
+    return await page.pdf(printOptions);
   } catch {
     const session = await page.context().newCDPSession(page);
     try {
       const pdf = await session.send("Page.printToPDF", {
         printBackground: true,
         preferCSSPageSize: true,
+        ...(printBox
+          ? {
+              paperWidth: printBox.width / 96,
+              paperHeight: printBox.height / 96,
+              marginTop: 0,
+              marginRight: 0,
+              marginBottom: 0,
+              marginLeft: 0,
+            }
+          : {}),
       });
       return Buffer.from(pdf.data, "base64");
     } finally {
@@ -256,8 +364,9 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
     await resultCardPage.waitForCardPreview({ beneficiaryName, cpf, birthDate });
     assertNotAborted(signal);
 
-    const fileName = `carteirinha-${operation.id}.pdf`;
-    const pdfBytes = validateCardPdfBytes(await printCurrentPageToPdf(resultPage), fileName);
+    const fileName = `carteirinha-${safeFileNamePart(beneficiaryName)}.pdf`;
+    const pdfTitle = `Carteirinha - ${beneficiaryName.trim()}`;
+    const pdfBytes = validateCardPdfBytes(await printCurrentPageToPdf(resultPage, beneficiaryName, pdfTitle), fileName);
     const savedArtifact = await context.artifactStorage.save({
       operationId: operation.id,
       workspaceId: operation.workspaceId,

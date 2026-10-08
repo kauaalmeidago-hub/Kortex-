@@ -32,7 +32,10 @@ function fixture(remember: boolean) {
     input: { beneficiaryName: "Beneficiario de teste", periodStart: "2026-10-01", periodEnd: "2026-10-31" },
     artifacts: [], createdAt: now, updatedAt: now };
   const events: OperationEvent[] = [];
-  const page = { pdf: vi.fn(async () => Buffer.from("%PDF-1.7\n1 0 obj << /Type /Page >> endobj\n%%EOF")) } as unknown as Page;
+  const page = {
+    evaluate: vi.fn(async () => ({ width: 640, height: 420 })),
+    pdf: vi.fn(async () => Buffer.from("%PDF-1.7\n1 0 obj << /Type /Page >> endobj\n%%EOF")),
+  } as unknown as Page;
   const browserContext = { clearCookies: vi.fn(async () => undefined) } as unknown as BrowserContext;
   mocks.requestCards.mockResolvedValue(page);
   const validate = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
@@ -71,6 +74,10 @@ describe("CARD_ISSUE authentication in the execution context", () => {
     expect(mocks.cardPages).toEqual([f.page, f.page]);
     expect(f.operation.status).toBe("success");
     expect(f.artifactSave).toHaveBeenCalledOnce();
+    expect(f.artifactSave).toHaveBeenCalledWith(expect.objectContaining({
+      fileName: "carteirinha-beneficiario-de-teste.pdf",
+    }));
+    expect(f.page.pdf).toHaveBeenCalledWith(expect.objectContaining({ width: "640px", height: "420px" }));
     const authenticated = f.events.filter((event) => event.type === "authentication.succeeded");
     expect(authenticated).toHaveLength(1);
     expect(authenticated[0]?.data).toEqual({ source: "worker" });
