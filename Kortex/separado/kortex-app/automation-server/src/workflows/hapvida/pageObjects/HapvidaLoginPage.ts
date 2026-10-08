@@ -17,7 +17,9 @@ export class HapvidaLoginPage {
       });
     }
 
-    await this.page.goto(this.portalUrl, { waitUntil: "domcontentloaded" });
+    await this.page.goto(this.portalUrl, { waitUntil: "domcontentloaded", timeout: this.authTimeoutMs }).catch(() => {
+      throw this.portalUnavailable("O portal Hapvida nao abriu a tela de login dentro do tempo esperado.");
+    });
   }
 
   companyField() {
@@ -63,6 +65,15 @@ export class HapvidaLoginPage {
   }
 
   async login(credential: PortalCredential) {
+    try {
+      await this.submitLogin(credential);
+    } catch (error) {
+      if (error instanceof AutomationError) throw error;
+      throw this.portalUnavailable(this.describeUnexpectedLoginFailure(error));
+    }
+  }
+
+  private async submitLogin(credential: PortalCredential) {
     await this.waitForReady();
     await this.companyField().fill(credential.username);
     await this.passwordField().fill(credential.password);
@@ -102,9 +113,16 @@ export class HapvidaLoginPage {
     });
   }
 
+  private describeUnexpectedLoginFailure(error: unknown) {
+    if (error instanceof Error && /closed|crash|detached|navigation|timeout/i.test(error.message)) {
+      return "A pagina do portal Hapvida ficou indisponivel durante a autenticacao. A tentativa pode ser refeita com o mesmo acesso.";
+    }
+    return "O portal Hapvida falhou durante a autenticacao. A tentativa pode ser refeita com o mesmo acesso.";
+  }
+
   private portalUnavailable(safeDetails: string) {
     return new AutomationError("PORTAL_AUTH_UNAVAILABLE", "Verificacao de acesso ao portal Hapvida indisponivel.", {
-      safeDetails, step: "authenticate", retryable: false,
+      safeDetails, step: "authenticate", retryable: true,
     });
   }
 }

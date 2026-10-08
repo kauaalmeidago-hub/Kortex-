@@ -56,7 +56,7 @@ describe("Hapvida card login submission", () => {
     const f = fixture();
     f.page.waitForRequest.mockResolvedValue(undefined as unknown as Request);
     const error = await f.login.login(credential).catch((error: unknown) => error);
-    expect(error).toMatchObject({ code: "PORTAL_AUTH_UNAVAILABLE", step: "authenticate", retryable: false });
+    expect(error).toMatchObject({ code: "PORTAL_AUTH_UNAVAILABLE", step: "authenticate", retryable: true });
     expect(JSON.stringify(error)).not.toContain(credential.password);
     expect(f.page.waitForLoadState).not.toHaveBeenCalled();
   });

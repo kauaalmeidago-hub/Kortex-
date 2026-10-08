@@ -64,6 +64,12 @@ async function printCurrentPageToPdf(page: Page) {
   }
 }
 
+const CARD_PORTAL_AUTH_MAX_ATTEMPTS = 2;
+
+function isRetryablePortalAuthenticationFailure(error: unknown) {
+  return error instanceof AutomationError && error.code === "PORTAL_AUTH_UNAVAILABLE" && error.retryable;
+}
+
 export async function emitCard(operation: OperationRecord, signal: AbortSignal, context: WorkflowContext) {
   requireInput(operation.input, ["beneficiaryName"]);
 
@@ -82,7 +88,11 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
     });
   }
 
-  await context.browserManager.withContext(operation, signal, async (browserContext, page) => {
+  let credential: PortalCredential | undefined;
+
+  for (let portalAttempt = 1; portalAttempt <= CARD_PORTAL_AUTH_MAX_ATTEMPTS; portalAttempt += 1) {
+    try {
+      await context.browserManager.withContext(operation, signal, async (browserContext, page) => {
     const loginPage = new HapvidaLoginPage(page, context.config.hapvidaCardPortalUrl ?? context.config.hapvidaPortalUrl, context.config.authTimeoutMs);
     const cardPage = new HapvidaCardPage(page);
     const portalUrl = context.config.hapvidaCardPortalUrl ?? context.config.hapvidaPortalUrl;
@@ -90,7 +100,6 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
     const movementAccessPage = new HapvidaMovementAccessPage(page, movementPortalUrl);
     const menuPage = new HapvidaMovementMainMenuPage(page);
     const activeUsersPage = new HapvidaActiveUsersPage(page);
-    let credential: PortalCredential | undefined;
 
     if (portalUrl) {
       context.browserManager.validateAllowedUrl(portalUrl, operation);
@@ -192,13 +201,13 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
           throw new AutomationError("PORTAL_AUTH_UNAVAILABLE", "O portal Hapvida permaneceu na tela de login.", {
             safeDetails: "O formulario foi enviado, mas o portal nao confirmou acesso nem apresentou uma rejeicao de credencial reconhecida. Verifique a verificacao de acesso do portal.",
             step: "authenticate",
-            retryable: false,
+            retryable: true,
           });
         }
 
         throw new AutomationError("PORTAL_AUTH_UNAVAILABLE", "O portal Hapvida nao confirmou o resultado do login.", {
           safeDetails: "A resposta do portal nao apresentou a area autenticada nem uma rejeicao de credencial reconhecida.",
-          step: "authenticate", retryable: false,
+          step: "authenticate", retryable: true,
         });
       }
 
@@ -307,6 +316,35 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
       artifactId: artifact.id,
       fileName: artifact.fileName,
     });
-  });
+      });
+      return;
+    } catch (error) {
+      if (
+        signal.aborted ||
+        portalAttempt >= CARD_PORTAL_AUTH_MAX_ATTEMPTS ||
+        !isRetryablePortalAuthenticationFailure(error)
+      ) {
+        throw error;
+      }
+
+      await context.browserManager.invalidateSession("hapvida").catch(() => undefined);
+      await context.updateStatus("authenticating", "Reabrindo portal Hapvida para nova tentativa", {
+        attempt: portalAttempt + 1,
+        maxAttempts: CARD_PORTAL_AUTH_MAX_ATTEMPTS,
+        reason: "PORTAL_AUTH_UNAVAILABLE",
+      });
+      await context.emitEvent({
+        operationId: operation.id,
+        type: "authentication.started",
+        status: "authenticating",
+        step: "portal_auth_retrying",
+        data: {
+          attempt: portalAttempt + 1,
+          maxAttempts: CARD_PORTAL_AUTH_MAX_ATTEMPTS,
+          reason: "PORTAL_AUTH_UNAVAILABLE",
+        },
+      });
+    }
+  }
 }
 

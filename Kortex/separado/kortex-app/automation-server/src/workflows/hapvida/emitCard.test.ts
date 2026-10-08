@@ -86,6 +86,30 @@ describe("CARD_ISSUE authentication in the execution context", () => {
     expect(JSON.stringify(f.events)).not.toContain("synthetic-password");
   });
 
+  it("reopens the card portal once when authentication is transiently unavailable", async () => {
+    const f = fixture(false);
+    f.validate.mockReset()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    mocks.login
+      .mockRejectedValueOnce(new AutomationError("PORTAL_AUTH_UNAVAILABLE", "Portal indisponivel.", {
+        safeDetails: "Falha temporaria do portal.",
+        step: "authenticate",
+        retryable: true,
+      }))
+      .mockResolvedValueOnce(undefined);
+
+    await emitCard(f.operation, new AbortController().signal, f.context);
+
+    expect(f.withContext).toHaveBeenCalledTimes(2);
+    expect(mocks.login).toHaveBeenCalledTimes(2);
+    expect(f.getSecret).toHaveBeenCalledOnce();
+    expect(f.events.some((event) => event.type === "authentication.started" && event.step === "portal_auth_retrying")).toBe(true);
+    expect(f.operation.status).toBe("success");
+    expect(JSON.stringify(f.events)).not.toContain("synthetic-password");
+  });
+
   it("does not save the password or announce success when portal authentication fails", async () => {
     const f = fixture(true);
     f.validate.mockReset().mockResolvedValue(false);
