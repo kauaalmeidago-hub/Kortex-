@@ -10,6 +10,7 @@ import type { OperationError, OperationRecord, OperationStatus } from "../types.
 import type { ArtifactStorage } from "../storage/ArtifactStorage.js";
 import type { WorkflowContext } from "../workflows/WorkflowContext.js";
 import { sanitizeDiagnosticText } from "../security/redaction.js";
+import { type EphemeralCredentialStore, OperationScopedSecretProvider } from "../secrets/EphemeralCredentialStore.js";
 
 interface PersistentWorkerDeps {
   config: AutomationConfig;
@@ -17,6 +18,7 @@ interface PersistentWorkerDeps {
   eventBus: OperationEventBus;
   browserManager: BrowserManager;
   secretProvider: SecretProvider;
+  ephemeralCredentialStore?: EphemeralCredentialStore;
   artifactStorage: ArtifactStorage;
 }
 
@@ -95,7 +97,9 @@ export class PersistentWorker {
         config: this.deps.config,
         repository: this.deps.repository,
         browserManager: this.deps.browserManager,
-        secretProvider: this.deps.secretProvider,
+        secretProvider: this.deps.ephemeralCredentialStore
+          ? new OperationScopedSecretProvider(operation.id, this.deps.ephemeralCredentialStore, this.deps.secretProvider)
+          : this.deps.secretProvider,
         artifactStorage: this.deps.artifactStorage,
         updateStatus: (status, step, data) => this.updateStatus(operation.id, status, step, data),
         emitEvent: (event) => this.emitEvent({ ...event, operationId: event.operationId ?? operation.id }),
@@ -103,6 +107,18 @@ export class PersistentWorker {
     } catch (error) {
       if (controller.signal.aborted || isAbortError(error)) {
         await this.updateStatus(operation.id, "cancelled", "Operacao cancelada pelo usuario");
+      } else if (error instanceof AutomationError && error.code === "REAUTH_REQUIRED" && operation.type === "CARD_ISSUE") {
+        await this.updateStatus(operation.id, "awaiting_authentication", "authentication_required", {
+          operator: operation.portal,
+          companyId: operation.companyId,
+        });
+        await this.emitEvent({
+          operationId: operation.id,
+          type: "authentication.required",
+          status: "awaiting_authentication",
+          step: "authentication_required",
+          data: { operator: operation.portal, companyId: operation.companyId },
+        });
       } else {
         await this.fail(operation.id, this.toOperationError(error));
       }
@@ -110,6 +126,7 @@ export class PersistentWorker {
       if (leaseTimer) clearInterval(leaseTimer);
       if (cancelWatchTimer) clearInterval(cancelWatchTimer);
       await this.deps.repository.releaseLock(lockKey, operation.id, this.deps.config.workerId).catch(() => undefined);
+      this.deps.ephemeralCredentialStore?.clear(operation.id);
       this.currentController = undefined;
     }
   }
@@ -131,6 +148,11 @@ export class PersistentWorker {
       repositoryMode: this.deps.config.repositoryMode,
       browserProvider: this.deps.config.browserProvider,
       cardIssueEnabled: this.deps.config.features.cardIssue,
+      inclusionPreviewEnabled: this.deps.config.features.inclusionPreview,
+      inclusionSubmitEnabled: this.deps.config.features.inclusion,
+      exclusionPreviewEnabled: this.deps.config.features.exclusionPreview,
+      exclusionSubmitEnabled: this.deps.config.features.exclusion,
+      movementStatusVerifyMaxAttempts: this.deps.config.movementStatusVerifyMaxAttempts,
     }).catch(() => undefined);
   }
 

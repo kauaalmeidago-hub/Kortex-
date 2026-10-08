@@ -1,10 +1,14 @@
 import type { Page } from "playwright";
 import { AutomationError, assertNotAborted, createReauthRequiredError } from "../../errors.js";
-import type { OperationArtifact, OperationRecord, OperationResult } from "../../types.js";
+import type { OperationArtifact, OperationRecord, OperationResult, PortalCredential } from "../../types.js";
 import type { WorkflowContext } from "../WorkflowContext.js";
 import { requireInput } from "./validators.js";
+import { ActiveUsersPreflightService } from "./ActiveUsersPreflightService.js";
 import { HapvidaLoginPage } from "./pageObjects/HapvidaLoginPage.js";
 import { HapvidaCardPage } from "./pageObjects/HapvidaCardPage.js";
+import { HapvidaMovementAccessPage } from "./pageObjects/HapvidaMovementAccessPage.js";
+import { HapvidaMovementMainMenuPage } from "./pageObjects/HapvidaMovementMainMenuPage.js";
+import { HapvidaActiveUsersPage } from "./pageObjects/HapvidaActiveUsersPage.js";
 import { validateCardPdfBytes } from "./downloadValidation.js";
 
 function readString(input: Record<string, unknown>, keys: string[]) {
@@ -79,10 +83,67 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
     const loginPage = new HapvidaLoginPage(page, context.config.hapvidaCardPortalUrl ?? context.config.hapvidaPortalUrl);
     const cardPage = new HapvidaCardPage(page);
     const portalUrl = context.config.hapvidaCardPortalUrl ?? context.config.hapvidaPortalUrl;
+    const movementPortalUrl = context.config.hapvidaMovementPortalUrl;
+    const movementAccessPage = new HapvidaMovementAccessPage(page, movementPortalUrl);
+    const menuPage = new HapvidaMovementMainMenuPage(page);
+    const activeUsersPage = new HapvidaActiveUsersPage(page);
+    let credential: PortalCredential | undefined;
 
     if (portalUrl) {
       context.browserManager.validateAllowedUrl(portalUrl, operation);
     }
+
+    if (movementPortalUrl) {
+      context.browserManager.validateAllowedUrl(movementPortalUrl, operation);
+    }
+
+    const loadCredential = async () => {
+      if (credential) return credential;
+      await context.updateStatus("authenticating", "Carregando credencial segura");
+      credential = await context.secretProvider.get(operation.credentialRef).catch(() => {
+        throw createReauthRequiredError(
+          "Nao foi possivel renovar a sessao Hapvida sem uma credencial segura cadastrada para o Koa.",
+        );
+      });
+      assertNotAborted(signal);
+      return credential;
+    };
+
+    const activeUsersCheck = context.config.features.cardIssueActiveUsersPreflight
+      ? await (async () => {
+          await context.updateStatus("authenticating", "Abrindo Sistema de Movimentacao Hapvida");
+          await movementAccessPage.open().catch((error) => {
+            if (error instanceof AutomationError && error.code === "PORTAL_URL_NOT_CONFIGURED") {
+              throw new AutomationError("ACTIVE_USERS_LIST_UNAVAILABLE", "URL do Sistema de Movimentacao Hapvida nao configurada.", {
+                safeDetails:
+                  "Configure HAPVIDA_MOVEMENT_PORTAL_URL para executar o pre-check da Lista Usuarios Ativos.",
+                step: "checking_active_users",
+                retryable: false,
+              });
+            }
+            throw error;
+          });
+          assertNotAborted(signal);
+
+          await context.updateStatus("authenticating", "Selecionando acesso da empresa");
+          const movementMenuAlreadyLoaded = await menuPage.quickAccessHeading().or(menuPage.menuHeading()).isVisible().catch(() => false);
+          if (!movementMenuAlreadyLoaded) {
+            await movementAccessPage.login(await loadCredential());
+          }
+          await menuPage.waitForLoaded();
+          assertNotAborted(signal);
+
+          const preflightResult = await new ActiveUsersPreflightService({
+            operation,
+            context,
+            signal,
+            menuPage,
+            activeUsersPage,
+          }).validateCardIssue({ beneficiaryName, beneficiaryCpf: cpf });
+          assertNotAborted(signal);
+          return preflightResult;
+        })()
+      : undefined;
 
     await context.updateStatus("authenticating", "Abrindo portal de carteirinha Hapvida");
     await loginPage.open();
@@ -96,16 +157,8 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
       await context.browserManager.saveSession(browserContext, "hapvida");
     } else {
       await context.browserManager.invalidateSession("hapvida");
-      await context.updateStatus("authenticating", "Carregando credencial segura");
-      const credential = await context.secretProvider.get(operation.credentialRef).catch(() => {
-        throw createReauthRequiredError(
-          "Sessao Hapvida expirada e nenhuma credencial segura esta disponivel para este credentialRef. Execute npm run browser:onboard ou cadastre a credencial DPAPI.",
-        );
-      });
-      assertNotAborted(signal);
-
       await context.updateStatus("authenticating", "Autenticando no portal");
-      await loginPage.login(credential);
+      await loginPage.login(await loadCredential());
       assertNotAborted(signal);
 
       const sessionAfterLogin = await context.browserManager.validatePortalSession("hapvida", page);
@@ -193,6 +246,7 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
       operator: operation.portal,
       portalStatus: "Carteirinha emitida",
       artifactId: artifact.id,
+      activeUser: activeUsersCheck?.snapshot.target,
       finishedAt: new Date().toISOString(),
     };
 

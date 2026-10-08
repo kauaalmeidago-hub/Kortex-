@@ -12,7 +12,7 @@ const noSensitiveKeys = (value: unknown) => {
     if (Array.isArray(node)) return node.every(visit);
 
     return Object.entries(node as Record<string, unknown>).every(([key, nested]) => {
-      if (/(password|senha|authorization|cookie|token|storageState|secret|accessToken|refreshToken|rawCredential)/i.test(key)) {
+      if (/(password|senha|pass|pwd|authorization|cookie|token|storageState|secret|accessToken|refreshToken|rawCredential)/i.test(key)) {
         return false;
       }
       return visit(nested);
@@ -49,22 +49,120 @@ export const CardIssuePayloadSchema = z
 export const InclusionHolderPayloadSchema = z
   .object({
     beneficiaryName: z.string().min(1),
-    cpf: z.string().min(1),
+    beneficiaryCpf: z.string().min(1).optional(),
+    cpf: z.string().min(1).optional(),
     birthDate: z.string().min(1),
+    motherName: z.string().optional(),
+    gender: z.string().optional(),
+    zipCode: z.string().optional(),
+    address: z.string().optional(),
+    number: z.string().optional(),
+    district: z.string().optional(),
+    city: z.string().optional(),
+    state: z.string().optional(),
+    mobilePhone: z.string().optional(),
+    unit: z.string().optional(),
+    companyUnit: z.string().optional(),
+    plan: z.string().optional(),
+    planName: z.string().optional(),
     planId: z.string().optional(),
+    healthAllNegativeConfirmed: z.boolean().optional(),
+    healthAnswers: z
+      .array(
+        z.object({
+          questionId: z.string().min(1),
+          answer: z.enum(["yes", "no"]),
+          detail: z.string().optional(),
+        }),
+      )
+      .optional(),
+    attachments: z
+      .array(
+        z.object({
+          id: z.string().optional(),
+          name: z.string().optional(),
+          fileName: z.string().optional(),
+          mimeType: z.string().optional(),
+          size: z.number().optional(),
+          sizeBytes: z.number().optional(),
+          filePath: z.string().optional(),
+        }),
+      )
+      .optional(),
+    documents: z
+      .array(
+        z.object({
+          id: z.string().optional(),
+          name: z.string().optional(),
+          fileName: z.string().optional(),
+          mimeType: z.string().optional(),
+          size: z.number().optional(),
+          sizeBytes: z.number().optional(),
+          filePath: z.string().optional(),
+        }),
+      )
+      .optional(),
     documentIds: z.array(z.string().uuid()).optional(),
   })
-  .passthrough();
+  .passthrough()
+  .superRefine((payload, context) => {
+    if (!payload.beneficiaryCpf && !payload.cpf) {
+      context.addIssue({
+        code: "custom",
+        path: ["cpf"],
+        message: "CPF do titular e obrigatorio para preparar inclusao.",
+      });
+    }
+
+    for (const forbiddenKey of ["password", "senha", "holderUserCode", "titularUserCode", "cancellationDate", "effectiveCancellationDate"]) {
+      if (forbiddenKey in payload) {
+        context.addIssue({
+          code: "custom",
+          path: [forbiddenKey],
+          message: `${forbiddenKey} nao deve ser enviado pelo chat.`,
+        });
+      }
+    }
+  });
 
 export const ExclusionHolderPayloadSchema = z
   .object({
     beneficiaryName: z.string().min(1),
+    beneficiaryCpf: z.string().min(1).optional(),
     cpf: z.string().min(1).optional(),
-    titularUserCode: z.string().min(1).optional(),
+    cancellationReason: z.string().min(1).optional(),
     reason: z.string().min(1).optional(),
+    attachmentIds: z.array(z.string().uuid()).optional(),
     documentIds: z.array(z.string().uuid()).optional(),
   })
-  .passthrough();
+  .passthrough()
+  .superRefine((payload, context) => {
+    if (!payload.beneficiaryCpf && !payload.cpf) {
+      context.addIssue({
+        code: "custom",
+        path: ["beneficiaryCpf"],
+        message: "CPF do titular e obrigatorio para preparar exclusao.",
+      });
+    }
+
+    if (!payload.cancellationReason && !payload.reason) {
+      context.addIssue({
+        code: "custom",
+        path: ["cancellationReason"],
+        message: "Motivo de cancelamento e obrigatorio.",
+      });
+    }
+
+    for (const forbiddenKey of ["password", "senha", "holderUserCode", "titularUserCode", "cancellationDate", "effectiveCancellationDate"]) {
+      if (forbiddenKey in payload) {
+        context.addIssue({
+          code: "custom",
+          path: [forbiddenKey],
+          message: `${forbiddenKey} nao deve ser enviado pelo chat.`,
+        });
+      }
+    }
+  });
 
 export const GenericAutomationPayloadSchema = z.record(z.string(), z.unknown()).refine(noSensitiveKeys, {
   message: "Payload contem chave sensivel.",

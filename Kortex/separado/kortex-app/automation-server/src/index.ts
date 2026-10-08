@@ -17,6 +17,7 @@ import { PersistentWorker } from "./worker/PersistentWorker.js";
 import { LocalArtifactStorage } from "./storage/LocalArtifactStorage.js";
 import { SupabaseArtifactStorage } from "./storage/SupabaseArtifactStorage.js";
 import type { ArtifactStorage } from "./storage/ArtifactStorage.js";
+import { EphemeralCredentialStore } from "./secrets/EphemeralCredentialStore.js";
 
 const config = loadConfig();
 const repository: AutomationOperationRepository =
@@ -25,6 +26,7 @@ const repository: AutomationOperationRepository =
     : new OperationRepository(config.databasePath);
 const eventBus = new OperationEventBus();
 const browserManager = new BrowserManager(config);
+const ephemeralCredentialStore = new EphemeralCredentialStore();
 const secretProvider: SecretProvider =
   config.secretProviderMode === "remote" ? new RemoteSecretProvider() : new DpapiSecretProvider(config.secretsDir);
 const artifactStorage: ArtifactStorage =
@@ -41,6 +43,7 @@ const queue = new OperationQueue({
   eventBus,
   browserManager,
   secretProvider,
+  ephemeralCredentialStore,
   artifactStorage,
 });
 
@@ -53,6 +56,7 @@ if (config.repositoryMode === "postgres" && config.automationMode !== "api") {
     eventBus,
     browserManager,
     secretProvider,
+    ephemeralCredentialStore,
     artifactStorage,
   });
   void persistentWorker.run();
@@ -64,6 +68,7 @@ const server = await createServer({
   eventBus,
   queue,
   credentialResolver,
+  ephemeralCredentialStore,
 });
 
 const close = async () => {

@@ -47,6 +47,7 @@ type ArtifactRow = {
   mime_type: string | null;
   size_bytes: number | string | null;
   checksum: string | null;
+  metadata: Record<string, unknown> | null;
   created_at: Date | string;
 };
 
@@ -64,6 +65,96 @@ function toIso(value: Date | string | null | undefined) {
   if (!value) return undefined;
   return value instanceof Date ? value.toISOString() : value;
 }
+
+function isTerminalStatus(status: OperationStatus) {
+  return (
+    status === "success" ||
+    status === "error" ||
+    status === "cancelled" ||
+    status === "manual_review" ||
+    status === "awaiting_human_verification" ||
+    status === "awaiting_confirmation" ||
+    status === "submission_confirmed"
+  );
+}
+
+export const UPDATE_OPERATION_SQL = `UPDATE public.automation_operations
+       SET status = $2::public.automation_operation_status,
+           current_step = $3,
+           result = $4::jsonb,
+           error_code = $5,
+           error_message = $6,
+           worker_id = CASE
+             WHEN $2::public.automation_operation_status = 'queued'::public.automation_operation_status
+             THEN NULL
+             ELSE worker_id
+           END,
+           lease_expires_at = CASE
+             WHEN $2::public.automation_operation_status = 'queued'::public.automation_operation_status
+             THEN NULL
+             ELSE lease_expires_at
+           END,
+           attempt = CASE
+             WHEN $2::public.automation_operation_status = 'queued'::public.automation_operation_status
+              AND status = 'awaiting_authentication'::public.automation_operation_status
+             THEN 0
+             ELSE attempt
+           END,
+           updated_at = $7,
+           finished_at = $8
+       WHERE id = $1
+       RETURNING *`;
+
+export const SET_OPERATION_STATUS_SQL = `UPDATE public.automation_operations
+       SET status = $2::public.automation_operation_status,
+           current_step = $3,
+           worker_id = CASE
+             WHEN $2::public.automation_operation_status = 'awaiting_authentication'::public.automation_operation_status
+             THEN NULL
+             ELSE COALESCE($4, worker_id)
+           END,
+           lease_expires_at = CASE
+             WHEN $2::public.automation_operation_status = 'awaiting_authentication'::public.automation_operation_status
+             THEN NULL
+             ELSE lease_expires_at
+           END,
+           attempt = CASE
+             WHEN $2::public.automation_operation_status = 'awaiting_authentication'::public.automation_operation_status
+             THEN GREATEST(attempt - 1, 0)
+             ELSE attempt
+           END,
+           error_code = CASE
+             WHEN $2::public.automation_operation_status IN (
+               'error'::public.automation_operation_status,
+               'manual_review'::public.automation_operation_status
+             )
+             THEN error_code
+             ELSE NULL
+           END,
+           error_message = CASE
+             WHEN $2::public.automation_operation_status IN (
+               'error'::public.automation_operation_status,
+               'manual_review'::public.automation_operation_status
+             )
+             THEN error_message
+             ELSE NULL
+           END,
+           updated_at = now(),
+           finished_at = CASE
+             WHEN $2::public.automation_operation_status IN (
+               'success'::public.automation_operation_status,
+               'error'::public.automation_operation_status,
+               'cancelled'::public.automation_operation_status,
+               'manual_review'::public.automation_operation_status,
+               'awaiting_human_verification'::public.automation_operation_status,
+               'awaiting_confirmation'::public.automation_operation_status,
+               'submission_confirmed'::public.automation_operation_status
+             )
+             THEN now()
+             ELSE NULL
+           END
+       WHERE id = $1
+       RETURNING *`;
 
 export class PostgresOperationRepository implements PersistentAutomationQueueRepository {
   private readonly pool: pg.Pool;
@@ -139,26 +230,22 @@ export class PostgresOperationRepository implements PersistentAutomationQueueRep
     const current = await this.get(id);
     if (!current) return undefined;
 
+    const nextStatus = patch.status ?? current.status;
+    const shouldClearError = !patch.error && nextStatus !== "error" && nextStatus !== "manual_review";
+    const nextFinishedAt =
+      patch.finishedAt !== undefined ? patch.finishedAt : patch.status && !isTerminalStatus(nextStatus) ? null : current.finishedAt ?? null;
+
     const result = await this.pool.query<OperationRow>(
-      `UPDATE public.automation_operations
-       SET status = $2,
-           current_step = $3,
-           result = $4::jsonb,
-           error_code = $5,
-           error_message = $6,
-           updated_at = $7,
-           finished_at = $8
-       WHERE id = $1
-       RETURNING *`,
+      UPDATE_OPERATION_SQL,
       [
         id,
-        patch.status ?? current.status,
+        nextStatus,
         patch.currentStep ?? current.currentStep ?? null,
         patch.result ? JSON.stringify(redact(patch.result)) : current.result ? JSON.stringify(redact(current.result)) : null,
-        patch.error?.code ?? current.error?.code ?? null,
-        patch.error?.message ?? current.error?.message ?? null,
+        shouldClearError ? null : patch.error?.code ?? current.error?.code ?? null,
+        shouldClearError ? null : patch.error?.message ?? current.error?.message ?? null,
         patch.updatedAt ?? new Date().toISOString(),
-        patch.finishedAt ?? current.finishedAt ?? null,
+        nextFinishedAt,
       ],
     );
 
@@ -224,7 +311,31 @@ export class PostgresOperationRepository implements PersistentAutomationQueueRep
       `UPDATE public.automation_operations
        SET cancel_requested_at = now(),
            status = CASE
-             WHEN status IN ('queued', 'starting', 'authenticating', 'accessing_portal', 'processing', 'verifying')
+             WHEN status IN ('awaiting_confirmation', 'awaiting_human_verification', 'awaiting_authentication')
+             THEN 'cancelled'::public.automation_operation_status
+             WHEN status IN (
+               'queued',
+               'starting',
+               'authenticating',
+               'accessing_portal',
+               'checking_active_users',
+               'checking_cns',
+               'checking_cpf',
+               'awaiting_authentication',
+               'awaiting_human_verification',
+               'generating_cpf_document',
+               'validating_documents',
+               'opening_inclusion',
+               'filling_registration',
+               'selecting_plan',
+               'uploading_documents',
+               'filling_health_questionnaire',
+               'processing',
+               'submitting',
+               'checking_movement_status',
+               'capturing_evidence',
+               'verifying'
+             )
              THEN 'cancelling'::public.automation_operation_status
              ELSE status
            END,
@@ -298,14 +409,7 @@ export class PostgresOperationRepository implements PersistentAutomationQueueRep
 
   async setStatus(operationId: string, status: OperationStatus, step: string, workerId?: string) {
     const result = await this.pool.query<OperationRow>(
-      `UPDATE public.automation_operations
-       SET status = $2,
-           current_step = $3,
-           worker_id = COALESCE($4, worker_id),
-           updated_at = now(),
-           finished_at = CASE WHEN $2 IN ('success', 'error', 'cancelled', 'manual_review') THEN now() ELSE finished_at END
-       WHERE id = $1
-       RETURNING *`,
+      SET_OPERATION_STATUS_SQL,
       [operationId, status, step, workerId ?? null],
     );
 
@@ -331,7 +435,7 @@ export class PostgresOperationRepository implements PersistentAutomationQueueRep
           artifact.mimeType ?? null,
           artifact.sizeBytes ?? null,
           artifact.checksum ?? null,
-          "{}",
+          JSON.stringify(redact(artifact.metadata ?? {})),
           artifact.createdAt,
         ],
       );
@@ -357,12 +461,20 @@ export class PostgresOperationRepository implements PersistentAutomationQueueRep
       mimeType: row.mime_type ?? undefined,
       sizeBytes: row.size_bytes == null ? undefined : Number(row.size_bytes),
       checksum: row.checksum ?? undefined,
-      kind: row.type === "screenshot" || row.type === "status_screenshot" ? "screenshot" : row.type === "document" ? "download" : "pdf",
+      kind:
+        row.type === "screenshot" || row.type === "status_screenshot" || row.type === "movement_status_evidence"
+          ? "screenshot"
+          : row.type === "document"
+            ? "download"
+            : "pdf",
+      artifactType: row.type as OperationArtifact["artifactType"],
+      metadata: row.metadata ?? undefined,
       createdAt: toIso(row.created_at) ?? new Date().toISOString(),
     }));
   }
 
   private toArtifactType(artifact: OperationArtifact) {
+    if (artifact.artifactType) return artifact.artifactType;
     if (artifact.kind === "pdf") return "card_pdf";
     if (artifact.kind === "screenshot") return "screenshot";
     if (artifact.kind === "download") return "document";

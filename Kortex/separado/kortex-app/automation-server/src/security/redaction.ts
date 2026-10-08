@@ -1,4 +1,4 @@
-const SENSITIVE_KEY_PATTERN = /(password|senha|token|cookie|authorization|secret|credential|access_token|refresh_token)/i;
+const SENSITIVE_KEY_PATTERN = /(password|senha|pass|pwd|token|cookie|authorization|secret|credential|access_token|refresh_token)/i;
 
 export function containsSensitiveKey(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
@@ -31,9 +31,13 @@ export function sanitizeDiagnosticText(value: string | undefined) {
   if (!value) return value;
 
   return value
-    .replace(/fill\(\s*(["'])(.*?)\1\s*\)/gis, 'fill("[REDACTED]")')
-    .replace(/(password|senha|token|cookie|authorization|secret|credential|access_token|refresh_token)\s*[:=]\s*([^\s,;]+)/gi, "$1=[REDACTED]")
-    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]");
+    .replace(/fill\((["'`])(?:\\.|(?!\1)[\s\S])*\1\)/gi, 'fill("[REDACTED]")')
+    .replace(
+      /\b(password|senha|pass|pwd|token|cookie|authorization|secret|credential|access_token|refresh_token)\b\s*[:=]\s*(["'`][\s\S]*?["'`]|[^\s,;}]+)/gi,
+      "$1=[REDACTED]",
+    )
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]")
+    .replace(/sb_secret_[A-Za-z0-9_-]+/g, "sb_secret_[REDACTED]");
 }
 
 export function sanitizeUrl(rawUrl: string | undefined) {
@@ -49,4 +53,8 @@ export function sanitizeUrl(rawUrl: string | undefined) {
   } catch {
     return rawUrl.split("?")[0]?.split("#")[0];
   }
+}
+
+export function sanitizeErrorDetails(value: string | undefined) {
+  return sanitizeDiagnosticText(value);
 }

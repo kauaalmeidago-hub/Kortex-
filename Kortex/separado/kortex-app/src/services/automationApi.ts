@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import { createOperationFallbackMonitor, type OperationConnectionState } from "./operationMonitoring";
 
 export type AutomationOperationType =
   | "CARD_ISSUE"
@@ -12,7 +13,24 @@ export type AutomationOperationStatus =
   | "starting"
   | "authenticating"
   | "accessing_portal"
+  | "checking_active_users"
+  | "checking_cns"
+  | "checking_cpf"
+  | "awaiting_authentication"
+  | "awaiting_human_verification"
+  | "generating_cpf_document"
+  | "validating_documents"
+  | "opening_inclusion"
+  | "filling_registration"
+  | "selecting_plan"
+  | "uploading_documents"
+  | "filling_health_questionnaire"
   | "processing"
+  | "awaiting_confirmation"
+  | "submitting"
+  | "checking_movement_status"
+  | "capturing_evidence"
+  | "submission_confirmed"
   | "verifying"
   | "success"
   | "error"
@@ -121,7 +139,7 @@ function hasSensitiveKey(value: unknown): boolean {
   if (Array.isArray(value)) return value.some(hasSensitiveKey);
 
   return Object.entries(value as Record<string, unknown>).some(([key, item]) => {
-    if (/(password|senha|authorization|cookie|token|storageState|secret|accessToken|refreshToken|rawCredential)/i.test(key)) {
+    if (/(password|senha|pass|pwd|authorization|cookie|token|storageState|secret|accessToken|refreshToken|rawCredential)/i.test(key)) {
       return true;
     }
     return hasSensitiveKey(item);
@@ -165,10 +183,17 @@ async function parseResponse<T>(response: Response): Promise<T> {
   return data as T;
 }
 
-function assertCardIssueOnly(type: AutomationOperationType) {
-  if (type !== "CARD_ISSUE") {
+function assertOnlineOperationAllowed(type: AutomationOperationType) {
+  if (type !== "CARD_ISSUE" && type !== "EXCLUSION_HOLDER" && type !== "INCLUSION_HOLDER") {
     throw new Error("Essa movimentação ainda não está liberada para automação real.");
   }
+}
+
+function createOperationRpcName(type: AutomationOperationType) {
+  if (type === "CARD_ISSUE") return "create_koa_card_issue_operation";
+  if (type === "INCLUSION_HOLDER") return "create_koa_inclusion_holder_preview_operation";
+  if (type === "EXCLUSION_HOLDER") return "create_koa_exclusion_holder_preview_operation";
+  throw new Error("Essa movimentação ainda não está liberada para automação real.");
 }
 
 async function signedArtifactUrl(artifact: SupabaseArtifactRow) {
@@ -265,10 +290,10 @@ export async function createOperation(input: {
 
   if (useLocalApi) return createLocalOperation(input);
 
-  assertCardIssueOnly(input.type);
+  assertOnlineOperationAllowed(input.type);
   if (!input.workspaceId) throw new Error("Workspace ativo é obrigatório para criar operação online.");
 
-  const { data, error } = await supabaseClient.rpc("create_koa_card_issue_operation", {
+  const { data, error } = await supabaseClient.rpc(createOperationRpcName(input.type), {
     _workspace_id: input.workspaceId,
     _company_id: input.companyId,
     _operator: input.operator ?? input.portal ?? "hapvida",
@@ -319,6 +344,39 @@ export async function cancelOperation(operationId: string) {
   return mapSupabaseOperation(data as SupabaseOperationRow);
 }
 
+export async function submitOperationAuthentication(input: {
+  operationId: string;
+  companyCode?: string;
+  password: string;
+  rememberOnDevice: boolean;
+}) {
+  if (!useLocalApi) {
+    throw new Error("A reautenticação segura precisa ser enviada diretamente ao Koa Worker local.");
+  }
+
+  if (!automationBaseUrl) throw new Error("VITE_AUTOMATION_API_URL e obrigatorio quando VITE_AUTOMATION_PROVIDER=local.");
+
+  const body: { companyCode?: string; password: string; rememberOnDevice: boolean } = {
+    password: input.password,
+    rememberOnDevice: input.rememberOnDevice,
+  };
+  if (input.companyCode?.trim()) body.companyCode = input.companyCode.trim();
+
+  const response = await fetch(`${automationBaseUrl}/api/operations/${input.operationId}/reauth`, {
+    method: "POST",
+    headers: await headers(),
+    body: JSON.stringify(body),
+  });
+
+  return parseResponse<{
+    ok: boolean;
+    status?: "authenticated";
+    error?: "AUTHENTICATION_FAILED" | "COMPANY_CODE_REQUIRED" | "AUTHENTICATION_ATTEMPTS_EXCEEDED" | string;
+    operationId?: string;
+    operation?: AutomationOperationResponse;
+  }>(response);
+}
+
 export function getArtifactUrl(operationId: string, fileName: string) {
   if (!useLocalApi) return "";
   return `${automationBaseUrl}/api/operations/${operationId}/artifacts/${encodeURIComponent(fileName)}`;
@@ -327,6 +385,7 @@ export function getArtifactUrl(operationId: string, fileName: string) {
 export async function subscribeToOperation(operationId: string, handlers: {
   onEvent: (event: AutomationEvent) => void;
   onError?: (error: Event) => void;
+  onConnectionState?: (state: OperationConnectionState) => void;
 }) {
   if (useLocalApi) {
     if (!automationBaseUrl) throw new Error("VITE_AUTOMATION_API_URL e obrigatorio quando VITE_AUTOMATION_PROVIDER=local.");
@@ -334,57 +393,115 @@ export async function subscribeToOperation(operationId: string, handlers: {
     const token = await authTokenForSse();
     if (token) url.searchParams.set("token", token);
 
-    const source = new EventSource(url.toString());
-    source.onmessage = (event) => {
-      handlers.onEvent(JSON.parse(event.data) as AutomationEvent);
-    };
-    source.onerror = (event) => {
-      handlers.onError?.(event);
+    let closed = false;
+    let source: EventSource | null = null;
+
+    const connect = () => {
+      if (closed) return;
+      source?.close();
+      source = new EventSource(url.toString());
+      source.onopen = () => fallback.stopFallback();
+      source.onmessage = (event) => {
+        try {
+          fallback.stopFallback();
+          handlers.onEvent(JSON.parse(event.data) as AutomationEvent);
+        } catch {
+          fallback.startFallback();
+        }
+      };
+      source.onerror = () => {
+        fallback.startFallback();
+      };
     };
 
-    return () => source.close();
-  }
-
-  const channel = supabaseClient
-    .channel(`koa-operation-${operationId}`)
-    .on(
-      "postgres_changes",
-      { event: "UPDATE", schema: "public", table: "automation_operations", filter: `id=eq.${operationId}` },
-      (payload) => {
-        const row = payload.new as SupabaseOperationRow;
-        handlers.onEvent({
-          id: `${row.id}:${row.updated_at}`,
-          operationId: row.id,
-          type: row.status === "success" ? "operation.success" : row.status === "error" ? "operation.error" : "operation.status",
-          status: row.status,
-          step: row.current_step ?? undefined,
-          data: row.result ?? undefined,
-          createdAt: row.updated_at,
-        });
-      },
-    )
-    .on(
-      "postgres_changes",
-      { event: "INSERT", schema: "public", table: "automation_events", filter: `operation_id=eq.${operationId}` },
-      (payload) => {
-        const row = payload.new as SupabaseEventRow;
-        handlers.onEvent({
-          id: row.id,
-          operationId: row.operation_id,
-          type: row.event_type,
-          step: row.step ?? undefined,
-          data: row.payload ?? undefined,
-          createdAt: row.created_at,
-        });
-      },
-    )
-    .subscribe((status) => {
-      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-        handlers.onError?.(new Event("error"));
-      }
+    const fallback = createOperationFallbackMonitor({
+      operationId,
+      pollOperation: getOperation,
+      onEvent: handlers.onEvent,
+      onConnectionState: handlers.onConnectionState,
+      reconnect: connect,
     });
 
+    connect();
+
+    return () => {
+      closed = true;
+      fallback.stop();
+      source?.close();
+    };
+  }
+
+  let closed = false;
+  let channel: SupabaseChannelLike | null = null;
+
+  const removeCurrentChannel = () => {
+    if (!channel) return;
+    const current = channel;
+    channel = null;
+    void supabaseClient.removeChannel(current);
+  };
+
+  const connect = () => {
+    if (closed) return;
+    removeCurrentChannel();
+    channel = supabaseClient
+      .channel(`koa-operation-${operationId}`)
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "automation_operations", filter: `id=eq.${operationId}` },
+        (payload) => {
+          const row = payload.new as SupabaseOperationRow;
+          fallback.stopFallback();
+          handlers.onEvent({
+            id: `${row.id}:${row.updated_at}`,
+            operationId: row.id,
+            type: row.status === "success" ? "operation.success" : row.status === "error" ? "operation.error" : "operation.status",
+            status: row.status,
+            step: row.current_step ?? undefined,
+            data: row.result ?? undefined,
+            createdAt: row.updated_at,
+          });
+        },
+      )
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "automation_events", filter: `operation_id=eq.${operationId}` },
+        (payload) => {
+          const row = payload.new as SupabaseEventRow;
+          fallback.stopFallback();
+          handlers.onEvent({
+            id: row.id,
+            operationId: row.operation_id,
+            type: row.event_type,
+            step: row.step ?? undefined,
+            data: row.payload ?? undefined,
+            createdAt: row.created_at,
+          });
+        },
+      )
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          fallback.stopFallback();
+        }
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+          fallback.startFallback();
+        }
+      });
+  };
+
+  const fallback = createOperationFallbackMonitor({
+    operationId,
+    pollOperation: getOperation,
+    onEvent: handlers.onEvent,
+    onConnectionState: handlers.onConnectionState,
+    reconnect: connect,
+  });
+
+  connect();
+
   return () => {
-    void supabaseClient.removeChannel(channel);
+    closed = true;
+    fallback.stop();
+    removeCurrentChannel();
   };
 }

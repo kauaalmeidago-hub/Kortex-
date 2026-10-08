@@ -4,6 +4,7 @@ import { timingSafeEqual } from "node:crypto";
 import fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { z } from "zod";
 import type { AutomationConfig } from "./config.js";
 import type { OperationRepository } from "./db/OperationRepository.js";
 import type { OperationEventBus } from "./events/EventBus.js";
@@ -13,6 +14,10 @@ import { containsSensitiveKey, redact } from "./security/redaction.js";
 import type { AutomationOperationRepository } from "./repositories/AutomationOperationRepository.js";
 import type { CredentialResolver } from "./credentials/CredentialResolver.js";
 import { CreateOperationSchema, validatePayload } from "./validation/operationSchemas.js";
+import { OperationAuthenticationService } from "./authentication/OperationAuthenticationService.js";
+import { AutomationError } from "./errors.js";
+import { sanitizeDiagnosticText } from "./security/redaction.js";
+import type { EphemeralCredentialStore } from "./secrets/EphemeralCredentialStore.js";
 
 interface ServerDeps {
   config: AutomationConfig;
@@ -20,6 +25,7 @@ interface ServerDeps {
   eventBus: OperationEventBus;
   queue: OperationQueue;
   credentialResolver: CredentialResolver;
+  ephemeralCredentialStore?: EphemeralCredentialStore;
 }
 
 const operationTypes: OperationType[] = [
@@ -29,6 +35,14 @@ const operationTypes: OperationType[] = [
   "EXCLUSION_HOLDER",
   "EXCLUSION_DEPENDENT",
 ];
+
+const SubmitOperationAuthenticationSchema = z
+  .object({
+    companyCode: z.string().trim().min(1).optional(),
+    password: z.string().min(1),
+    rememberOnDevice: z.boolean().default(false),
+  })
+  .strict();
 
 function isOperationType(value: unknown): value is OperationType {
   return typeof value === "string" && operationTypes.includes(value as OperationType);
@@ -63,11 +77,17 @@ function validateCreateOperation(body: unknown): CreateOperationRequest {
 
 function disabledWorkflowMessage(config: AutomationConfig, type: OperationType) {
   if (type === "CARD_ISSUE" && !config.features.cardIssue) return "FEATURE_KOA_CARD_ISSUE=false";
-  if ((type === "INCLUSION_HOLDER" || type === "INCLUSION_DEPENDENT") && !config.features.inclusion) {
-    return "FEATURE_KOA_INCLUSION=false";
+  if (type === "INCLUSION_HOLDER" && !config.features.inclusion && !config.features.inclusionPreview) {
+    return "FEATURE_KOA_INCLUSION_PREVIEW=false";
   }
-  if ((type === "EXCLUSION_HOLDER" || type === "EXCLUSION_DEPENDENT") && !config.features.exclusion) {
-    return "FEATURE_KOA_EXCLUSION=false";
+  if (type === "INCLUSION_DEPENDENT") {
+    return "INCLUSION_DEPENDENT ainda nao esta mapeado para automacao real.";
+  }
+  if (type === "EXCLUSION_HOLDER" && !config.features.exclusion && !config.features.exclusionPreview) {
+    return "FEATURE_KOA_EXCLUSION_PREVIEW=false";
+  }
+  if (type === "EXCLUSION_DEPENDENT") {
+    return "EXCLUSION_DEPENDENT ainda nao esta mapeado para automacao real.";
   }
   return undefined;
 }
@@ -87,7 +107,7 @@ function operationResponse(operation: OperationRecord) {
       id: artifact.id,
       fileName: artifact.fileName,
       mimeType: artifact.mimeType,
-      kind: artifact.kind,
+      kind: artifact.artifactType ?? artifact.kind,
       createdAt: artifact.createdAt,
       url: `/api/operations/${operation.id}/artifacts/${encodeURIComponent(artifact.fileName)}`,
     })),
@@ -97,8 +117,10 @@ function operationResponse(operation: OperationRecord) {
   });
 }
 
-export async function createServer({ config, repository, eventBus, queue, credentialResolver }: ServerDeps) {
+export async function createServer({ config, repository, eventBus, queue, credentialResolver, ephemeralCredentialStore }: ServerDeps) {
   const app = fastify({ logger: false });
+  const authenticationService = new OperationAuthenticationService(config, ephemeralCredentialStore);
+  const reauthInFlight = new Set<string>();
   const authClient: SupabaseClient | undefined =
     config.supabaseUrl && config.supabaseSecretKey
       ? createClient(config.supabaseUrl, config.supabaseSecretKey, {
@@ -154,7 +176,7 @@ export async function createServer({ config, repository, eventBus, queue, creden
     }
 
     const requestUserId = (request as FastifyRequest & { userId?: string }).userId;
-    payload.requestedBy ??= requestUserId;
+    payload.requestedBy ??= requestUserId ?? config.defaultRequestedBy;
 
     const disabledReason = disabledWorkflowMessage(config, payload.type);
     if (disabledReason) {
@@ -242,6 +264,170 @@ export async function createServer({ config, repository, eventBus, queue, creden
 
     const operation = await repository.get(request.params.id);
     return reply.send(operation ? operationResponse(operation) : { ok: true });
+  });
+
+  app.post<{ Params: { id: string } }>("/api/operations/:id/reauth", async (request, reply) => {
+    const parsed = SubmitOperationAuthenticationSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ ok: false, error: "INVALID_AUTHENTICATION_PAYLOAD" });
+    }
+
+    const operation = await repository.get(request.params.id);
+    if (!operation) return reply.code(404).send({ ok: false, error: "operation_not_found" });
+    if (operation.type !== "CARD_ISSUE") return reply.code(409).send({ ok: false, error: "AUTHENTICATION_NOT_SUPPORTED" });
+    if (operation.status !== "awaiting_authentication") {
+      return reply.code(409).send({ ok: false, error: "OPERATION_NOT_AWAITING_AUTHENTICATION", operation: operationResponse(operation) });
+    }
+
+    const requestUserId = (request as FastifyRequest & { userId?: string }).userId;
+    if (requestUserId && operation.requestedBy && requestUserId !== operation.requestedBy) {
+      return reply.code(403).send({ ok: false, error: "forbidden" });
+    }
+
+    if (reauthInFlight.has(operation.id)) {
+      return reply.code(409).send({ ok: false, error: "AUTHENTICATION_ALREADY_IN_PROGRESS" });
+    }
+
+    const events = await repository.getEvents(operation.id);
+    const failedAttempts = events.filter((event) => event.type === "authentication.failed").length;
+    if (failedAttempts >= config.authMaxAttempts) {
+      const reviewed = await repository.update(operation.id, {
+        status: "manual_review",
+        currentStep: "authentication_attempts_exceeded",
+        error: {
+          code: "AUTHENTICATION_ATTEMPTS_EXCEEDED",
+          message: "Limite de tentativas de autenticacao excedido.",
+          retryable: false,
+        },
+        updatedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+      });
+      return reply.code(429).send({ ok: false, error: "AUTHENTICATION_ATTEMPTS_EXCEEDED", operation: reviewed ? operationResponse(reviewed) : undefined });
+    }
+
+    reauthInFlight.add(operation.id);
+    const submitted = await repository.appendEvent({
+      operationId: operation.id,
+      type: "authentication.submitted",
+      status: "awaiting_authentication",
+      step: "authentication_submitted",
+      data: { rememberOnDevice: parsed.data.rememberOnDevice, attemptNumber: failedAttempts + 1 },
+      createdAt: new Date().toISOString(),
+    });
+    eventBus.publish(submitted);
+
+    try {
+      await repository.update(operation.id, {
+        status: "authenticating",
+        currentStep: "authentication_started",
+        updatedAt: new Date().toISOString(),
+      });
+      const started = await repository.appendEvent({
+        operationId: operation.id,
+        type: "authentication.started",
+        status: "authenticating",
+        step: "authentication_started",
+        data: { attemptNumber: failedAttempts + 1 },
+        createdAt: new Date().toISOString(),
+      });
+      eventBus.publish(started);
+
+      const result = await authenticationService.authenticateCardIssue(operation, parsed.data);
+
+      const succeeded = await repository.appendEvent({
+        operationId: operation.id,
+        type: "authentication.succeeded",
+        status: "authenticating",
+        step: "authentication_succeeded",
+        data: { rememberedOnDevice: result.rememberedOnDevice },
+        createdAt: new Date().toISOString(),
+      });
+      eventBus.publish(succeeded);
+
+      if (result.rememberedOnDevice) {
+        const saved = await repository.appendEvent({
+          operationId: operation.id,
+          type: "authentication.saved_on_device",
+          status: "authenticating",
+          step: "authentication_saved_on_device",
+          data: { rememberedOnDevice: true },
+          createdAt: new Date().toISOString(),
+        });
+        eventBus.publish(saved);
+      }
+
+      const resumed = await repository.update(operation.id, {
+        status: "queued",
+        currentStep: "authentication_completed",
+        updatedAt: new Date().toISOString(),
+      });
+      const queued = await repository.appendEvent({
+        operationId: operation.id,
+        type: "operation.queued",
+        status: "queued",
+        step: "authentication_completed",
+        data: { resumed: true },
+        createdAt: new Date().toISOString(),
+      });
+      eventBus.publish(queued);
+
+      if (config.repositoryMode === "sqlite") {
+        queue.enqueue(operation.id);
+      }
+
+      return reply.send({
+        ok: true,
+        status: "authenticated",
+        operationId: operation.id,
+        operation: resumed ? operationResponse(resumed) : undefined,
+      });
+    } catch (error) {
+      const code = error instanceof AutomationError ? error.code : "AUTHENTICATION_FAILED";
+      const nextAttempts = failedAttempts + 1;
+      const failed = await repository.appendEvent({
+        operationId: operation.id,
+        type: "authentication.failed",
+        status: "awaiting_authentication",
+        step: "authentication_failed",
+        data: {
+          error: code,
+          attemptNumber: nextAttempts,
+          safeDetails: sanitizeDiagnosticText(
+            error instanceof AutomationError ? error.safeDetails : error instanceof Error ? error.message : undefined,
+          ),
+        },
+        createdAt: new Date().toISOString(),
+      });
+      eventBus.publish(failed);
+
+      if (nextAttempts >= config.authMaxAttempts) {
+        const reviewed = await repository.update(operation.id, {
+          status: "manual_review",
+          currentStep: "authentication_attempts_exceeded",
+          error: {
+            code: "AUTHENTICATION_ATTEMPTS_EXCEEDED",
+            message: "Limite de tentativas de autenticacao excedido.",
+            retryable: false,
+          },
+          updatedAt: new Date().toISOString(),
+          finishedAt: new Date().toISOString(),
+        });
+        return reply.code(429).send({ ok: false, error: "AUTHENTICATION_ATTEMPTS_EXCEEDED", operation: reviewed ? operationResponse(reviewed) : undefined });
+      }
+
+      const waiting = await repository.update(operation.id, {
+        status: "awaiting_authentication",
+        currentStep: "authentication_failed",
+        updatedAt: new Date().toISOString(),
+      });
+      return reply.send({
+        ok: false,
+        error: code === "COMPANY_CODE_REQUIRED" ? "COMPANY_CODE_REQUIRED" : "AUTHENTICATION_FAILED",
+        operation: waiting ? operationResponse(waiting) : undefined,
+      });
+    } finally {
+      reauthInFlight.delete(operation.id);
+    }
   });
 
   app.get<{ Params: { id: string; fileName: string } }>("/api/operations/:id/artifacts/:fileName", async (request, reply) => {

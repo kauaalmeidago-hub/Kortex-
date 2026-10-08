@@ -17,14 +17,18 @@ describe("redaction", () => {
 
   it("removes secrets from Playwright diagnostic strings", () => {
     const sanitized = sanitizeDiagnosticText(
-      'locator.fill: Timeout. fill("052960") password=mysecret Authorization=Bearer.abc token=xyz',
+      'locator.fill: Timeout. fill("999999") password=mysecret pass=abc pwd=def Authorization=Bearer.abc token=xyz',
     );
 
     expect(sanitized).toContain('fill("[REDACTED]")');
     expect(sanitized).toContain("password=[REDACTED]");
+    expect(sanitized).toContain("pass=[REDACTED]");
+    expect(sanitized).toContain("pwd=[REDACTED]");
     expect(sanitized).toContain("token=[REDACTED]");
-    expect(sanitized).not.toContain("052960");
+    expect(sanitized).not.toContain("999999");
     expect(sanitized).not.toContain("mysecret");
+    expect(sanitized).not.toContain("abc");
+    expect(sanitized).not.toContain("def");
     expect(sanitized).not.toContain("xyz");
   });
 

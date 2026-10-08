@@ -40,6 +40,7 @@ async function createConfig(overrides: Partial<AutomationConfig> = {}): Promise<
       cardIssueBatch: false,
       inclusion: false,
       exclusion: false,
+      exclusionPreview: false,
     },
     automationRoot: root,
     authDir: path.join(root, ".auth"),

@@ -17,9 +17,13 @@ export interface AutomationConfig {
   artifactBucket: string;
   secretProviderMode: "dpapi" | "remote" | "mock";
   workerId: string;
+  defaultRequestedBy?: string;
   workerLeaseSeconds: number;
   workerPollIntervalMs: number;
   workerHeartbeatIntervalMs: number;
+  authMaxAttempts: number;
+  authChallengeTtlMinutes: number;
+  movementStatusVerifyMaxAttempts: number;
   debug: boolean;
   headless: boolean;
   browserProvider: "persistent-chrome" | "headless-chromium" | "headless-local";
@@ -38,8 +42,11 @@ export interface AutomationConfig {
   features: {
     cardIssue: boolean;
     cardIssueBatch: boolean;
+    cardIssueActiveUsersPreflight: boolean;
     inclusion: boolean;
+    inclusionPreview: boolean;
     exclusion: boolean;
+    exclusionPreview: boolean;
   };
   automationRoot: string;
   authDir: string;
@@ -51,7 +58,11 @@ export interface AutomationConfig {
   databasePath: string;
   hapvidaPortalUrl?: string;
   hapvidaCardPortalUrl?: string;
+  hapvidaMovementPortalUrl?: string;
+  receitaCpfLookupUrl?: string;
+  cnsLookupUrl?: string;
   ndiCardPortalUrl?: string;
+  ndiMovementPortalUrl?: string;
   hapvidaAuthenticatedSelector?: string;
 }
 
@@ -171,9 +182,13 @@ export function loadConfig(): AutomationConfig {
     artifactBucket: process.env.ARTIFACT_BUCKET ?? "koa-artifacts",
     secretProviderMode: (process.env.SECRET_PROVIDER as AutomationConfig["secretProviderMode"]) ?? "dpapi",
     workerId: process.env.KOA_WORKER_ID ?? process.env.WORKER_ID ?? `local-${process.pid}`,
+    defaultRequestedBy: optionalEnv(process.env.KOA_DEFAULT_REQUESTED_BY),
     workerLeaseSeconds: Number(process.env.WORKER_LEASE_SECONDS ?? 60),
     workerPollIntervalMs: Number(process.env.WORKER_POLL_INTERVAL_MS ?? 3000),
     workerHeartbeatIntervalMs: numberEnv(process.env.WORKER_HEARTBEAT_INTERVAL_MS, 25_000),
+    authMaxAttempts: Math.max(1, numberEnv(process.env.KOA_AUTH_MAX_ATTEMPTS, 3)),
+    authChallengeTtlMinutes: Math.max(1, numberEnv(process.env.KOA_AUTH_CHALLENGE_TTL_MINUTES, 30)),
+    movementStatusVerifyMaxAttempts: Math.max(1, numberEnv(process.env.MOVEMENT_STATUS_VERIFY_MAX_ATTEMPTS, 3)),
     debug,
     headless: browserMode === "background" ? true : headless,
     browserProvider,
@@ -185,6 +200,8 @@ export function loadConfig(): AutomationConfig {
     allowedAutomationHosts: listEnv(process.env.KOA_AUTOMATION_ALLOWED_HOSTS, [
       "webhap.hapvida.com.br",
       "sigo.sh.srv.br",
+      "cnesadm.datasus.gov.br",
+      "servicos.receita.fazenda.gov.br",
     ]),
     profileLockTtlMs: numberEnv(process.env.KOA_BROWSER_PROFILE_LOCK_TTL_MS, 12 * 60 * 60 * 1000),
     traceAuth: booleanEnv(process.env.TRACE_AUTH, false),
@@ -195,8 +212,17 @@ export function loadConfig(): AutomationConfig {
     features: {
       cardIssue: booleanEnv(process.env.FEATURE_KOA_CARD_ISSUE ?? process.env.KOA_CARD_ISSUE_ENABLED, true),
       cardIssueBatch: booleanEnv(process.env.KOA_CARD_ISSUE_BATCH_ENABLED, false),
+      cardIssueActiveUsersPreflight: booleanEnv(process.env.KOA_CARD_ACTIVE_USERS_PREFLIGHT_ENABLED, false),
       inclusion: booleanEnv(process.env.FEATURE_KOA_INCLUSION ?? process.env.KOA_INCLUSION_ENABLED, false),
+      inclusionPreview: booleanEnv(
+        process.env.FEATURE_KOA_INCLUSION_PREVIEW ?? process.env.KOA_INCLUSION_PREVIEW_ENABLED,
+        false,
+      ),
       exclusion: booleanEnv(process.env.FEATURE_KOA_EXCLUSION ?? process.env.KOA_EXCLUSION_ENABLED, false),
+      exclusionPreview: booleanEnv(
+        process.env.FEATURE_KOA_EXCLUSION_PREVIEW ?? process.env.KOA_EXCLUSION_PREVIEW_ENABLED,
+        false,
+      ),
     },
     automationRoot,
     authDir,
@@ -208,7 +234,11 @@ export function loadConfig(): AutomationConfig {
     databasePath: path.join(dataDir, "operations.sqlite"),
     hapvidaPortalUrl: optionalEnv(process.env.HAPVIDA_CARD_PORTAL_URL) ?? optionalEnv(process.env.HAPVIDA_PORTAL_URL),
     hapvidaCardPortalUrl: optionalEnv(process.env.HAPVIDA_CARD_PORTAL_URL) ?? optionalEnv(process.env.HAPVIDA_PORTAL_URL),
+    hapvidaMovementPortalUrl: optionalEnv(process.env.HAPVIDA_MOVEMENT_PORTAL_URL) ?? optionalEnv(process.env.HAPVIDA_PORTAL_URL),
+    receitaCpfLookupUrl: optionalEnv(process.env.RECEITA_CPF_LOOKUP_URL),
+    cnsLookupUrl: optionalEnv(process.env.CNS_LOOKUP_URL),
     ndiCardPortalUrl: optionalEnv(process.env.NDI_CARD_PORTAL_URL),
+    ndiMovementPortalUrl: optionalEnv(process.env.NDI_MOVEMENT_PORTAL_URL),
     hapvidaAuthenticatedSelector: optionalEnv(process.env.HAPVIDA_AUTHENTICATED_SELECTOR),
   };
 }

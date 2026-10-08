@@ -1,0 +1,4 @@
+-- Placeholder for a migration that already exists in the remote Supabase history.
+-- The remote change was applied outside this local migrations folder before this
+-- checkpoint. Keep this file empty so Supabase CLI can reconcile local and
+-- remote migration histories without replaying or changing database objects.

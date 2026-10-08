@@ -39,6 +39,7 @@ async function createConfig(): Promise<AutomationConfig> {
       cardIssueBatch: false,
       inclusion: false,
       exclusion: false,
+      exclusionPreview: false,
     },
     automationRoot: root,
     authDir: path.join(root, ".auth"),

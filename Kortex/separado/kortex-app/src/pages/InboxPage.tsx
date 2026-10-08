@@ -36,11 +36,14 @@ import {
   createOperation,
   getOperation,
   getArtifactUrl,
+  submitOperationAuthentication,
   subscribeToOperation,
   type AutomationOperationResponse,
   type AutomationOperationStatus,
 } from "@/services/automationApi";
+import type { OperationConnectionState } from "@/services/operationMonitoring";
 import { useAuth } from "@/contexts/AuthContext";
+import { validateKoaPeriod } from "@/utils/koaDate";
 
 type ConversationStatus = "active" | "pending" | "resolved";
 type ConversationTab = "all" | ConversationStatus;
@@ -49,7 +52,17 @@ type KoaFlow = "inclusao" | "exclusao" | "carteirinha";
 type InclusionMode = "holder" | "holder_dependents";
 type ExclusionMode = "holder" | "dependent";
 type KoaOperationType = "inclusion" | "exclusion" | "card";
-type KoaPanelPhase = "idle" | "form" | "submitting" | "processing" | "cancelling" | "cancelled" | "success" | "error";
+type KoaPanelPhase =
+  | "idle"
+  | "form"
+  | "submitting"
+  | "processing"
+  | "awaiting_authentication"
+  | "awaiting_confirmation"
+  | "cancelling"
+  | "cancelled"
+  | "success"
+  | "error";
 type KoaOperationStatus = AutomationOperationStatus;
 
 type Message = {
@@ -651,6 +664,19 @@ type KoaOperation = {
   updatedAt: string;
   result?: {
     beneficiaryName?: string;
+    beneficiaryCpfMasked?: string;
+    contractCode?: string;
+    cancellationReason?: string;
+    effectiveCancellationDate?: string;
+    dependentsFound?: Array<{ code?: string; name?: string; birthDate?: string }>;
+    cnsNumber?: string;
+    unit?: string;
+    plan?: string;
+    documents?: number;
+    prepareOnly?: boolean;
+    submissionConfirmed?: boolean;
+    portalStatusCode?: string;
+    portalStatusLabel?: string;
     status?: string;
     protocol?: string;
     fileName?: string;
@@ -747,7 +773,20 @@ function isActiveKoaOperationStatus(status?: KoaOperationStatus) {
     status === "starting" ||
     status === "authenticating" ||
     status === "accessing_portal" ||
+    status === "checking_active_users" ||
+    status === "checking_cns" ||
+    status === "checking_cpf" ||
+    status === "generating_cpf_document" ||
+    status === "validating_documents" ||
+    status === "opening_inclusion" ||
+    status === "filling_registration" ||
+    status === "selecting_plan" ||
+    status === "uploading_documents" ||
+    status === "filling_health_questionnaire" ||
     status === "processing" ||
+    status === "submitting" ||
+    status === "checking_movement_status" ||
+    status === "capturing_evidence" ||
     status === "verifying" ||
     status === "cancelling"
   );
@@ -756,6 +795,10 @@ function isActiveKoaOperationStatus(status?: KoaOperationStatus) {
 function phaseFromOperationStatus(status: KoaOperationStatus): KoaPanelPhase {
   if (status === "success") return "success";
   if (status === "error" || status === "manual_review") return "error";
+  if (status === "awaiting_authentication") return "awaiting_authentication";
+  if (status === "awaiting_confirmation") return "awaiting_confirmation";
+  if (status === "awaiting_human_verification") return "error";
+  if (status === "submission_confirmed") return "success";
   if (status === "cancelled") return "cancelled";
   if (status === "cancelling") return "cancelling";
   return "processing";
@@ -765,13 +808,42 @@ function safeKoaErrorMessage(code?: string) {
   if (code === "REAUTH_REQUIRED") return "É necessário renovar o acesso à Hapvida.";
   if (code === "CREDENTIAL_NOT_FOUND") return "Credencial segura não encontrada.";
   if (code === "BENEFICIARY_NOT_FOUND") return "Beneficiário não encontrado.";
+  if (code === "BENEFICIARY_NOT_ACTIVE") return "Beneficiário não está ativo na Hapvida.";
+  if (code === "BENEFICIARY_ALREADY_ACTIVE") return "Beneficiário já está ativo na Hapvida.";
+  if (code === "CNS_LOOKUP_FAILED") return "Não consegui consultar o CNS.";
+  if (code === "CNS_NOT_FOUND") return "CNS não encontrado para o beneficiário.";
+  if (code === "CNS_IDENTITY_MISMATCH") return "Os dados do CNS não conferem com a solicitação.";
+  if (code === "CNS_CAPTCHA_REQUIRED") return "A consulta CNS exige verificação humana.";
+  if (code === "CPF_LOOKUP_FAILED") return "Não consegui consultar a situação do CPF.";
+  if (code === "CPF_IDENTITY_MISMATCH") return "Os dados da Receita não conferem com a solicitação.";
+  if (code === "CPF_CAPTCHA_REQUIRED") return "A Receita Federal exige verificação humana.";
+  if (code === "CPF_STATUS_REVIEW_REQUIRED") return "A situação cadastral do CPF exige revisão.";
+  if (code === "CPF_DOCUMENT_GENERATION_FAILED") return "Não consegui gerar o comprovante do CPF.";
+  if (code === "PLAN_SELECTION_REQUIRED") return "Unidade Empresa e Plano precisam ser informados.";
+  if (code === "MISSING_REQUIRED_DATA") return "Faltam dados obrigatórios para continuar.";
+  if (code === "INVALID_ATTACHMENT_TYPE") return "Um dos anexos possui tipo inválido.";
+  if (code === "ATTACHMENT_TOO_LARGE") return "Um dos anexos ultrapassa o limite permitido.";
+  if (code === "HEALTH_ANSWERS_REQUIRED") return "A declaração de saúde precisa ser informada.";
+  if (code === "HEALTH_DETAIL_REQUIRED") return "Uma resposta positiva da saúde precisa de detalhe.";
+  if (code === "DEPENDENT_ALREADY_ACTIVE") return "Dependente já está ativo na Hapvida.";
+  if (code === "HOLDER_NOT_ACTIVE") return "Titular responsável não está ativo na Hapvida.";
+  if (code === "BENEFICIARY_TYPE_MISMATCH") return "O tipo do beneficiário não confere com a movimentação.";
   if (code === "BENEFICIARY_AMBIGUOUS") return "Encontrei mais de um beneficiário possível.";
+  if (code === "ACTIVE_USERS_LIST_UNAVAILABLE") return "Não consegui validar a lista de usuários ativos.";
+  if (code === "MOVEMENT_STATUS_UNAVAILABLE") return "Não consegui abrir o Status de Movimentação.";
+  if (code === "MOVEMENT_STATUS_NOT_FOUND") return "Não encontrei a movimentação no status do portal.";
+  if (code === "SUBMISSION_STATUS_UNKNOWN") return "Não consegui confirmar se a solicitação foi registrada.";
+  if (code === "MOVEMENT_EVIDENCE_FAILED") return "Não consegui gerar o comprovante da movimentação.";
   if (code === "DOWNLOAD_VALIDATION_FAILED") return "Não consegui validar o arquivo da carteirinha.";
   if (code === "PDF_VALIDATION_FAILED") return "Não consegui validar o PDF da carteirinha.";
   if (code === "CARD_VALIDATION_FAILED") return "A carteirinha gerada não confere com os dados informados.";
-  if (code === "INVALID_PERIOD") return "O período informado não é válido.";
+  if (code === "INVALID_PERIOD") return "Não foi possível emitir a carteirinha porque o período informado é inválido.";
   if (code === "AUTHENTICATION_FAILED") return "Não consegui autenticar no portal da operadora.";
+  if (code === "AUTHENTICATION_ATTEMPTS_EXCEEDED") return "O limite de tentativas de autenticação foi atingido.";
   if (code === "WORKFLOW_DISABLED") return "Essa movimentação ainda não está liberada para automação real.";
+  if (code === "BENEFICIARY_VALIDATION_FAILED") return "Os dados retornados pelo portal não conferem com a solicitação.";
+  if (code === "CANCELLATION_REASON_REQUIRED") return "O motivo informado não foi encontrado no portal.";
+  if (code === "ATTACHMENT_UPLOAD_FAILED") return "Não foi possível preparar os anexos para o portal.";
   if (code === "PORTAL_CHANGED") return "O portal mudou e precisa de revisão.";
   if (code === "PORTAL_TIMEOUT") return "O portal demorou mais que o esperado.";
   return "Não foi possível concluir a movimentação.";
@@ -790,7 +862,28 @@ function mapAutomationOperation(response: AutomationOperationResponse, type: Koa
     result: response.result
       ? {
           beneficiaryName: typeof response.result.beneficiaryName === "string" ? response.result.beneficiaryName : undefined,
-          status: typeof response.result.portalStatus === "string" ? response.result.portalStatus : undefined,
+          beneficiaryCpfMasked: typeof response.result.beneficiaryCpfMasked === "string" ? response.result.beneficiaryCpfMasked : undefined,
+          contractCode: typeof response.result.contractCode === "string" ? response.result.contractCode : undefined,
+          cancellationReason: typeof response.result.cancellationReason === "string" ? response.result.cancellationReason : undefined,
+          effectiveCancellationDate:
+            typeof response.result.effectiveCancellationDate === "string" ? response.result.effectiveCancellationDate : undefined,
+          cnsNumber: typeof response.result.cnsNumber === "string" ? response.result.cnsNumber : undefined,
+          unit: typeof response.result.unit === "string" ? response.result.unit : undefined,
+          plan: typeof response.result.plan === "string" ? response.result.plan : undefined,
+          documents: typeof response.result.documents === "number" ? response.result.documents : undefined,
+          dependentsFound: Array.isArray(response.result.dependentsFound)
+            ? (response.result.dependentsFound as Array<{ code?: string; name?: string; birthDate?: string }>)
+            : undefined,
+          prepareOnly: response.result.prepareOnly === true,
+          submissionConfirmed: response.result.submissionConfirmed === true,
+          portalStatusCode: typeof response.result.portalStatusCode === "string" ? response.result.portalStatusCode : undefined,
+          portalStatusLabel: typeof response.result.portalStatusLabel === "string" ? response.result.portalStatusLabel : undefined,
+          status:
+            typeof response.result.portalStatusLabel === "string"
+              ? response.result.portalStatusLabel
+              : typeof response.result.portalStatus === "string"
+                ? response.result.portalStatus
+                : undefined,
           protocol: typeof response.result.protocol === "string" ? response.result.protocol : undefined,
           fileName: firstArtifact?.fileName,
           artifactUrl,
@@ -811,7 +904,7 @@ function mapAutomationOperation(response: AutomationOperationResponse, type: Koa
 }
 
 function resolveKoaCompanyId(conversation: Conversation) {
-  return conversation.profile.companyId ?? import.meta.env.VITE_KOA_DEFAULT_COMPANY_ID;
+  return import.meta.env.VITE_KOA_DEFAULT_COMPANY_ID ?? conversation.profile.companyId;
 }
 
 function operationProcessingMessage(type: KoaOperationType) {
@@ -827,6 +920,21 @@ function operationStatusMessage(status: KoaOperationStatus, type: KoaOperationTy
   if (status === "starting") return "Iniciando operação...";
   if (status === "authenticating") return "Acessando a operadora...";
   if (status === "accessing_portal") return "Acessando o portal...";
+  if (status === "checking_active_users") return "Validando os usuários ativos da empresa...";
+  if (status === "checking_cns") return "Consultando o CNS...";
+  if (status === "checking_cpf") return "Validando o CPF na Receita...";
+  if (status === "awaiting_authentication") return "Aguardando autenticação Hapvida...";
+  if (status === "generating_cpf_document") return "Gerando comprovante do CPF...";
+  if (status === "validating_documents") return "Validando documentos...";
+  if (status === "opening_inclusion") return "Abrindo inclusão de titular...";
+  if (status === "filling_registration") return "Preenchendo cadastro...";
+  if (status === "selecting_plan") return "Selecionando unidade e plano...";
+  if (status === "uploading_documents") return "Enviando documentos...";
+  if (status === "filling_health_questionnaire") return "Preenchendo questionário de saúde...";
+  if (status === "awaiting_confirmation") return "Aguardando confirmação...";
+  if (status === "submitting") return "Enviando a solicitação no portal...";
+  if (status === "checking_movement_status") return "Consultando Status de Movimentação...";
+  if (status === "capturing_evidence") return "Gerando comprovante da movimentação...";
   if (status === "verifying") return "Validando a carteirinha...";
   return operationProcessingMessage(type);
 }
@@ -834,7 +942,7 @@ function operationStatusMessage(status: KoaOperationStatus, type: KoaOperationTy
 function operationSuccessMessage(type: KoaOperationType) {
   return {
     inclusion: "Inclusão realizada com sucesso.",
-    exclusion: "Exclusão realizada com sucesso.",
+    exclusion: "Solicitação de exclusão registrada no portal.",
     card: "Carteirinha emitida com sucesso.",
   }[type];
 }
@@ -881,6 +989,7 @@ function KoaPanel({
   const [values, setValues] = useState<KoaFormValues>(() => createInitialKoaValues());
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [operation, setOperation] = useState<KoaOperation | null>(null);
+  const [operationConnectionState, setOperationConnectionState] = useState<OperationConnectionState>("live");
   const historyEndRef = useRef<HTMLDivElement>(null);
   const cancelInFlightRef = useRef(false);
   const operationUnsubscribeRef = useRef<(() => void) | null>(null);
@@ -909,6 +1018,7 @@ function KoaPanel({
     setHelperText(null);
     setErrors({});
     setOperation(null);
+    setOperationConnectionState("live");
     const initialValues = createInitialKoaValues();
     setValues({
       ...initialValues,
@@ -939,6 +1049,7 @@ function KoaPanel({
   const handleSubmitFlow = async () => {
     if (!selectedFlow) return;
     setPhase("submitting");
+    setHelperText(null);
     const nextErrors = validateKoaValues(selectedFlow, values);
 
     setErrors(nextErrors);
@@ -947,10 +1058,36 @@ function KoaPanel({
       return;
     }
 
+    if (selectedFlow === "exclusao" && values.attachments.length > 0) {
+      setHelperText("Anexos para exclusão ainda não estão conectados ao worker. Remova os anexos para preparar sem documento.");
+      setPhase("form");
+      return;
+    }
+
     const type = operationTypeFromFlow(selectedFlow);
+    let cardPeriod: { periodStart: string; periodEnd: string } | null = null;
+    if (selectedFlow === "carteirinha") {
+      const validatedPeriod = validateKoaPeriod(values.startDate, values.endDate);
+      if (!validatedPeriod.valid) {
+        setErrors({
+          startDate: "Informe um período válido.",
+          endDate: "Informe um período válido.",
+        });
+        setPhase("form");
+        return;
+      }
+      cardPeriod = {
+        periodStart: validatedPeriod.periodStart,
+        periodEnd: validatedPeriod.periodEnd,
+      };
+    }
+
     const submittedSummary = buildSubmittedSummary(selectedFlow, values);
 
-    if (selectedFlow !== "carteirinha") {
+    if (
+      (selectedFlow === "inclusao" && values.inclusionType !== "holder") ||
+      (selectedFlow === "exclusao" && values.exclusionType === "dependent")
+    ) {
       const localError: KoaOperation = {
         id: createKoaEntryId("operation"),
         type,
@@ -960,7 +1097,10 @@ function KoaPanel({
         error: {
           code: "WORKFLOW_DISABLED",
           message: "Essa movimentação ainda não está liberada para automação real.",
-          safeDetails: "Nesta etapa, somente emissão de carteirinha pode ser enviada ao worker.",
+          safeDetails:
+            selectedFlow === "exclusao"
+              ? "Nesta etapa, somente exclusão de titular em modo preparação está habilitada."
+              : "Nesta etapa, somente inclusão de titular em modo preparação está habilitada.",
           retryable: false,
         },
       };
@@ -992,16 +1132,36 @@ function KoaPanel({
     }
 
     try {
+      setOperationConnectionState("live");
+      const operationPayload =
+        selectedFlow === "carteirinha"
+          ? {
+              beneficiaryName: values.beneficiaryName.trim(),
+              periodStart: cardPeriod.periodStart,
+              periodEnd: cardPeriod.periodEnd,
+              contractCode: values.contractCode.trim() || undefined,
+            }
+          : selectedFlow === "inclusao"
+            ? {
+                beneficiaryName: values.beneficiaryName.trim(),
+                cpf: values.cpf.trim(),
+                birthDate: values.birthDate.trim(),
+                contractCode: values.contractCode.trim() || undefined,
+                healthAllNegativeConfirmed: false,
+              }
+            : {
+                beneficiaryName: values.beneficiaryName.trim(),
+                beneficiaryCpf: values.cpf.trim(),
+                cancellationReason: values.exclusionReason.trim(),
+                companyAccess: values.companyAccess.trim() || undefined,
+              };
+
       const response = await createOperation({
         type: automationTypeFromFlow(selectedFlow),
         workspaceId,
         companyId,
         requestedBy: user?.id,
-        data: {
-          beneficiaryName: values.beneficiaryName.trim(),
-          periodStart: values.startDate.trim(),
-          periodEnd: values.endDate.trim(),
-        },
+        data: operationPayload,
       });
       const nextOperation = mapAutomationOperation(response, type);
 
@@ -1015,24 +1175,7 @@ function KoaPanel({
             setPhase(phaseFromOperationStatus(mapped.status));
           });
         },
-        onError: () => {
-          setOperation((current) =>
-            current?.id === response.operationId
-              ? {
-                  ...current,
-                  status: "error",
-                  updatedAt: new Date().toISOString(),
-                  error: {
-                    code: "SSE_DISCONNECTED",
-                    message: "Perdi a conexão com os eventos da automação.",
-                    safeDetails: "Atualize o status da operação ou tente novamente.",
-                    retryable: true,
-                  },
-                }
-              : current,
-          );
-          setPhase("error");
-        },
+        onConnectionState: setOperationConnectionState,
       });
       operationUnsubscribeRef.current = unsubscribe;
 
@@ -1070,7 +1213,14 @@ function KoaPanel({
 
   const handleCancelOperation = async () => {
     if (!operation || cancelInFlightRef.current) return;
-    if (!isActiveKoaOperationStatus(operation.status) || operation.status === "cancelling") return;
+    if (
+      (!isActiveKoaOperationStatus(operation.status) &&
+        operation.status !== "awaiting_confirmation" &&
+        operation.status !== "awaiting_authentication") ||
+      operation.status === "cancelling"
+    ) {
+      return;
+    }
 
     cancelInFlightRef.current = true;
     const cancellingAt = new Date().toISOString();
@@ -1111,6 +1261,50 @@ function KoaPanel({
     openFlow(selectedFlow);
   };
 
+  const handleSubmitAuthentication = async (input: {
+    password: string;
+    rememberOnDevice: boolean;
+    companyCode?: string;
+  }) => {
+    if (!operation) return "Operação não encontrada.";
+
+    try {
+      const result = await submitOperationAuthentication({
+        operationId: operation.id,
+        companyCode: input.companyCode,
+        password: input.password,
+        rememberOnDevice: input.rememberOnDevice,
+      });
+
+      if (!result.ok) {
+        if (result.operation) {
+          const mapped = mapAutomationOperation(result.operation, operation.type);
+          setOperation(mapped);
+          setPhase(phaseFromOperationStatus(mapped.status));
+        }
+        if (result.error === "COMPANY_CODE_REQUIRED") return "Informe o código da empresa para continuar.";
+        if (result.error === "AUTHENTICATION_ATTEMPTS_EXCEEDED") return "Limite de tentativas atingido. O Koa interrompeu o fluxo para revisão.";
+        return "Não foi possível autenticar. Confira a senha e tente novamente.";
+      }
+
+      if (result.operation) {
+        const mapped = mapAutomationOperation(result.operation, operation.type);
+        setOperation(mapped);
+        setPhase(phaseFromOperationStatus(mapped.status));
+      } else {
+        setOperation((current) =>
+          current?.id === operation.id
+            ? { ...current, status: "queued", updatedAt: new Date().toISOString() }
+            : current,
+        );
+        setPhase("processing");
+      }
+      return undefined;
+    } catch (error) {
+      return error instanceof Error ? error.message : "Não foi possível autenticar. Tente novamente.";
+    }
+  };
+
   const renderEntry = (entry: KoaChatEntry) => {
     if (entry.kind === "user") return <KoaUserBubble key={entry.id}>{entry.text}</KoaUserBubble>;
     if (entry.kind === "assistant") return <KoaAssistantBubble key={entry.id}>{entry.text}</KoaAssistantBubble>;
@@ -1118,10 +1312,25 @@ function KoaPanel({
     if (entry.kind === "operation") {
       if (!operation || operation.id !== entry.operationId) return null;
       if (!isActiveKoaOperationStatus(operation.status)) {
-        return <KoaOperationResult key={entry.id} operation={operation} onRetry={handleRetry} />;
+        return (
+          <KoaOperationResult
+            key={entry.id}
+            operation={operation}
+            defaultCompanyCode={values.contractCode}
+            onRetry={handleRetry}
+            onCancelOperation={handleCancelOperation}
+            onSubmitAuthentication={handleSubmitAuthentication}
+          />
+        );
       }
 
       const isCancelling = operation.status === "cancelling";
+      const secondaryMessage =
+        operationConnectionState === "reconnecting"
+          ? "Reconectando ao acompanhamento da operação..."
+          : isCancelling
+            ? "Estou interrompendo a movimentação atual."
+            : "Aguarde, enviarei as informações assim que finalizar.";
 
       return (
         <KoaProcessingMessage
@@ -1129,7 +1338,7 @@ function KoaPanel({
           operationType={operation.type}
           status={operation.status}
           message={isCancelling ? "Cancelando operação..." : operationStatusMessage(operation.status, operation.type)}
-          secondaryMessage={isCancelling ? "Estou interrompendo a movimentação atual." : "Aguarde, enviarei as informações assim que finalizar."}
+          secondaryMessage={secondaryMessage}
         />
       );
     }
@@ -1194,6 +1403,7 @@ function KoaPanel({
           ) : (
             <div className="space-y-4">
               {history.map(renderEntry)}
+              {helperText && <p className="rounded-2xl bg-secondary px-4 py-3 text-sm text-muted-foreground">{helperText}</p>}
               <div ref={historyEndRef} />
             </div>
           )}
@@ -1202,7 +1412,7 @@ function KoaPanel({
           value={message}
           onChange={setMessage}
           onSubmit={handleMessageSubmit}
-          disabled={phase === "submitting" || phase === "processing"}
+          disabled={phase === "submitting" || phase === "processing" || phase === "awaiting_authentication"}
           operationStatus={operation?.status}
           onCancelOperation={handleCancelOperation}
         />
@@ -1227,14 +1437,19 @@ function KoaPanelComposer({
   onCancelOperation: () => void;
 }) {
   const operationActive = isActiveKoaOperationStatus(operationStatus);
+  const awaitingAuthentication = operationStatus === "awaiting_authentication";
   const cancelling = operationStatus === "cancelling";
 
-  if (operationActive) {
+  if (operationActive || awaitingAuthentication) {
     return (
       <div className="shrink-0 border-t border-border bg-card px-4 py-3">
         <div className="flex min-w-0 items-center gap-3 rounded-full bg-secondary/70 px-4 py-2">
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-muted-foreground">
-            {cancelling ? "Cancelando operação..." : "Koa está processando a movimentação..."}
+            {awaitingAuthentication
+              ? "Aguardando autenticação Hapvida..."
+              : cancelling
+                ? "Cancelando operação..."
+                : "Koa está processando a movimentação..."}
           </span>
           <button
             type="button"
@@ -1337,12 +1552,234 @@ function KoaProcessingMessage({
   );
 }
 
-function KoaOperationResult({ operation, onRetry }: { operation: KoaOperation; onRetry: () => void }) {
+function KoaAuthenticationCard({
+  defaultCompanyCode,
+  onCancelOperation,
+  onSubmitAuthentication,
+}: {
+  defaultCompanyCode?: string;
+  onCancelOperation: () => void;
+  onSubmitAuthentication: (input: { password: string; rememberOnDevice: boolean; companyCode?: string }) => Promise<string | undefined>;
+}) {
+  const [companyCode, setCompanyCode] = useState(defaultCompanyCode?.trim() ?? "");
+  const [password, setPassword] = useState("");
+  const [rememberOnDevice, setRememberOnDevice] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const needsCompanyCode = !defaultCompanyCode?.trim();
+
+  const handleSubmit = async () => {
+    if (submitting) return;
+    if (needsCompanyCode && !companyCode.trim()) {
+      setError("Informe o código da empresa.");
+      return;
+    }
+    if (!password) {
+      setError("Informe a senha para continuar.");
+      return;
+    }
+
+    setSubmitting(true);
+    setError(null);
+    try {
+      const result = await onSubmitAuthentication({
+        companyCode: companyCode.trim() || undefined,
+        password,
+        rememberOnDevice,
+      });
+      setPassword("");
+      if (result) {
+        setError(result);
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="flex items-start gap-2">
+      <KoaOperationAnimation className="mt-0.5 h-10 w-10 shrink-0" />
+      <div className="max-w-[84%] rounded-2xl rounded-bl-md bg-secondary/80 px-4 py-3 text-left shadow-sm">
+        <p className="text-sm font-semibold text-foreground">Preciso autenticar o acesso Hapvida para continuar.</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          A senha será usada somente para validar o portal e retomar esta emissão.
+        </p>
+
+        <div className="mt-4 space-y-3">
+          {needsCompanyCode ? (
+            <KoaTextField
+              icon={Building2}
+              label="Código da empresa"
+              value={companyCode}
+              error={error?.includes("código") ? error : undefined}
+              placeholder="Digite o código"
+              onChange={(value) => {
+                setCompanyCode(value);
+                setError(null);
+              }}
+            />
+          ) : (
+            <div>
+              <p className="text-xs font-medium text-muted-foreground">Empresa</p>
+              <p className="text-sm font-semibold text-foreground">{defaultCompanyCode}</p>
+            </div>
+          )}
+
+          <KoaPasswordField
+            label="Senha"
+            value={password}
+            error={error && !error.includes("código") ? error : undefined}
+            onChange={(value) => {
+              setPassword(value);
+              setError(null);
+            }}
+          />
+
+          <label className="flex items-center gap-2 text-sm text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={rememberOnDevice}
+              onChange={(event) => setRememberOnDevice(event.target.checked)}
+              className="h-4 w-4 rounded border-border text-primary focus:ring-primary/20"
+            />
+            Lembrar neste computador
+          </label>
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={onCancelOperation}
+            disabled={submitting}
+            className="h-10 rounded-xl border border-border px-3 text-xs font-semibold text-muted-foreground transition hover:bg-background disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={submitting}
+            className="h-10 rounded-xl bg-primary px-3 text-xs font-semibold text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-70"
+          >
+            {submitting ? "Autenticando..." : "Entrar e continuar"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function KoaOperationResult({
+  operation,
+  defaultCompanyCode,
+  onRetry,
+  onCancelOperation,
+  onSubmitAuthentication,
+}: {
+  operation: KoaOperation;
+  defaultCompanyCode?: string;
+  onRetry: () => void;
+  onCancelOperation: () => void;
+  onSubmitAuthentication: (input: { password: string; rememberOnDevice: boolean; companyCode?: string }) => Promise<string | undefined>;
+}) {
   if (operation.status === "cancelled") {
     return (
       <div className="w-fit max-w-[86%] rounded-2xl rounded-bl-md bg-secondary px-4 py-3 text-sm text-foreground">
         <p className="font-semibold">Operação cancelada.</p>
         <p className="mt-1 text-sm font-normal text-muted-foreground">A movimentação foi interrompida antes da conclusão.</p>
+      </div>
+    );
+  }
+
+  if (operation.status === "awaiting_authentication") {
+    return (
+      <KoaAuthenticationCard
+        defaultCompanyCode={defaultCompanyCode}
+        onCancelOperation={onCancelOperation}
+        onSubmitAuthentication={onSubmitAuthentication}
+      />
+    );
+  }
+
+  if (operation.status === "awaiting_human_verification") {
+    return (
+      <div className="flex items-start gap-2">
+        <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+          <Info className="h-5 w-5" strokeWidth={1.5} />
+        </span>
+        <div className="max-w-[84%] rounded-2xl rounded-bl-md bg-secondary/80 px-4 py-3 text-left shadow-sm">
+          <p className="text-sm font-semibold text-foreground">É necessária uma verificação humana.</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            O Koa parou antes de continuar porque o portal externo apresentou CAPTCHA ou validação manual.
+          </p>
+          {operation.result?.status && <p className="mt-2 text-xs text-muted-foreground">{operation.result.status}</p>}
+          <button type="button" onClick={onCancelOperation} className="mt-3 h-9 rounded-xl border border-border px-3 text-xs font-semibold text-muted-foreground transition hover:bg-background">
+            Cancelar
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (operation.status === "awaiting_confirmation") {
+    const dependents = operation.result?.dependentsFound ?? [];
+    const resultRows = [
+      operation.result?.beneficiaryName ? { label: operation.type === "inclusion" ? "Beneficiário" : "Titular", value: operation.result.beneficiaryName } : null,
+      operation.result?.beneficiaryCpfMasked ? { label: "CPF", value: operation.result.beneficiaryCpfMasked } : null,
+      operation.result?.cnsNumber ? { label: "CNS", value: operation.result.cnsNumber } : null,
+      operation.result?.contractCode ? { label: "Contrato", value: operation.result.contractCode } : null,
+      operation.result?.unit ? { label: "Unidade", value: operation.result.unit } : null,
+      operation.result?.plan ? { label: "Plano", value: operation.result.plan } : null,
+      typeof operation.result?.documents === "number" ? { label: "Documentos", value: String(operation.result.documents) } : null,
+      operation.result?.cancellationReason ? { label: "Motivo", value: operation.result.cancellationReason } : null,
+      operation.result?.effectiveCancellationDate ? { label: "Data do pré-cancelamento", value: operation.result.effectiveCancellationDate } : null,
+    ].filter(Boolean) as Array<{ label: string; value: string }>;
+
+    return (
+      <div className="flex items-start gap-2">
+        <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+          <Info className="h-5 w-5" strokeWidth={1.5} />
+        </span>
+        <div className="max-w-[84%] rounded-2xl rounded-bl-md bg-secondary/80 px-4 py-3 text-left shadow-sm">
+          <p className="text-sm font-semibold text-foreground">
+            {operation.type === "inclusion" ? "Revise os dados antes de confirmar a inclusão." : "Revise os dados antes de confirmar a exclusão."}
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {operation.type === "inclusion"
+              ? "O Koa preparou a inclusão de titular e parou antes do envio definitivo."
+              : "O Koa preparou o pré-cancelamento e parou antes do envio definitivo."}
+          </p>
+          {resultRows.length > 0 && (
+            <div className="mt-3 space-y-2">
+              {resultRows.map((row) => (
+                <div key={row.label}>
+                  <p className="text-xs font-medium text-muted-foreground">{row.label}</p>
+                  <p className="text-sm font-medium text-foreground">{row.value}</p>
+                </div>
+              ))}
+            </div>
+          )}
+          {dependents.length > 0 && (
+            <div className="mt-3 rounded-xl border border-border bg-background/70 p-3">
+              <p className="text-xs font-semibold text-foreground">Dependentes encontrados</p>
+              <div className="mt-2 space-y-1">
+                {dependents.map((dependent, index) => (
+                  <p key={`${dependent.code ?? dependent.name ?? "dep"}-${index}`} className="text-xs text-muted-foreground">
+                    {dependent.name ?? "Dependente"}{dependent.birthDate ? ` - ${dependent.birthDate}` : ""}
+                  </p>
+                ))}
+              </div>
+            </div>
+          )}
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <button type="button" onClick={onCancelOperation} className="h-9 rounded-xl border border-border px-3 text-xs font-semibold text-muted-foreground transition hover:bg-background">
+              Cancelar
+            </button>
+            <button type="button" disabled className="h-9 rounded-xl bg-muted px-3 text-xs font-semibold text-muted-foreground" title="Submit real bloqueado nesta fase">
+              {operation.type === "inclusion" ? "Confirmar inclusão" : "Confirmar exclusão"}
+            </button>
+          </div>
+        </div>
       </div>
     );
   }
@@ -1384,14 +1821,23 @@ function KoaOperationResult({ operation, onRetry }: { operation: KoaOperation; o
 
   const resultRows = [
     operation.result?.beneficiaryName ? { label: "Beneficiário", value: operation.result.beneficiaryName } : null,
+    operation.result?.portalStatusCode ? { label: "Código Hapvida", value: operation.result.portalStatusCode } : null,
     operation.result?.status ? { label: "Status", value: operation.result.status } : null,
     operation.result?.protocol ? { label: "Protocolo", value: operation.result.protocol } : null,
     operation.result?.fileName ? { label: "Arquivo", value: operation.result.fileName } : null,
   ].filter(Boolean) as Array<{ label: string; value: string }>;
+  const resultTitle =
+    operation.status === "submission_confirmed"
+      ? operation.type === "inclusion"
+        ? "Solicitação de inclusão registrada no portal."
+        : operation.type === "exclusion"
+          ? "Solicitação de exclusão registrada no portal."
+          : operationSuccessMessage(operation.type)
+      : operationSuccessMessage(operation.type);
 
   return (
     <div className="w-fit max-w-[86%] rounded-2xl rounded-bl-md bg-secondary px-4 py-3 text-sm text-foreground">
-      <p className="font-semibold">{operationSuccessMessage(operation.type)}</p>
+      <p className="font-semibold">{resultTitle}</p>
       {resultRows.length > 0 && (
         <div className="mt-3 space-y-2">
           {resultRows.map((row) => (
@@ -1409,7 +1855,7 @@ function KoaOperationResult({ operation, onRetry }: { operation: KoaOperation; o
           rel="noreferrer"
           className="mt-3 inline-flex h-9 items-center justify-center rounded-xl bg-primary px-3 text-xs font-semibold text-primary-foreground transition hover:bg-primary/90"
         >
-          Baixar carteirinha
+          {operation.type === "card" ? "Baixar carteirinha" : "Ver comprovante"}
         </a>
       )}
     </div>
@@ -1472,7 +1918,6 @@ function KoaMovementForm({
             ]}
           />
           <KoaTextField icon={FileText} label="Código do contrato" value={values.contractCode} error={errors.contractCode} placeholder="Digite o código" onChange={(value) => onChange("contractCode", value)} />
-          <KoaPasswordField label="Senha" value={values.password} error={errors.password} onChange={(value) => onChange("password", value)} />
           <KoaTextField icon={Users} label="Nome completo do beneficiário" value={values.beneficiaryName} error={errors.beneficiaryName} placeholder="Digite o nome completo" onChange={(value) => onChange("beneficiaryName", value)} />
           <KoaTextField icon={IdCard} label="CPF" value={values.cpf} error={errors.cpf} placeholder="000.000.000-00" onChange={(value) => onChange("cpf", value)} />
           <KoaTextField icon={CalendarDays} label="Data de nascimento" value={values.birthDate} error={errors.birthDate} placeholder="DD/MM/AAAA" onChange={(value) => onChange("birthDate", value)} />
@@ -1532,11 +1977,9 @@ function KoaMovementForm({
 
         {values.exclusionType === "holder" ? (
           <>
-            <KoaTextField icon={FileText} label="Código / acesso da empresa" value={values.companyAccess} error={errors.companyAccess} placeholder="Digite o código do acesso" onChange={(value) => onChange("companyAccess", value)} />
-            <KoaPasswordField label="Senha" value={values.password} error={errors.password} onChange={(value) => onChange("password", value)} />
+            <KoaTextField icon={Building2} label="Empresa / acesso da empresa" value={values.companyAccess} error={errors.companyAccess} placeholder="Digite a empresa ou acesso" onChange={(value) => onChange("companyAccess", value)} />
             <KoaTextField icon={Users} label="Beneficiário a ser excluído" value={values.beneficiaryName} error={errors.beneficiaryName} placeholder="Digite o nome completo" onChange={(value) => onChange("beneficiaryName", value)} />
             <KoaTextField icon={IdCard} label="CPF" value={values.cpf} error={errors.cpf} placeholder="000.000.000-00" onChange={(value) => onChange("cpf", value)} />
-            <KoaTextField icon={FileText} label="Código do usuário titular" value={values.titularUserCode} error={errors.titularUserCode} placeholder="Digite o código do titular" onChange={(value) => onChange("titularUserCode", value)} />
             <KoaSelectField
               icon={FileText}
               label="Motivo da exclusão"
@@ -1557,16 +2000,10 @@ function KoaMovementForm({
               onFilesSelected={onFilesSelected}
               onRemoveAttachment={onRemoveAttachment}
             />
+            <KoaInfoNote>O Koa buscará o código do titular e a data do pré-cancelamento diretamente no portal. Nenhuma senha é solicitada no chat.</KoaInfoNote>
           </>
         ) : (
-          <>
-            <KoaTextField icon={FileText} label="Código do contrato" value={values.contractCode} error={errors.contractCode} placeholder="Digite o código" onChange={(value) => onChange("contractCode", value)} />
-            <KoaPasswordField label="Senha" value={values.password} error={errors.password} onChange={(value) => onChange("password", value)} />
-            <KoaTextField icon={Users} label="Nome completo do dependente" value={values.dependentName} error={errors.dependentName} placeholder="Digite o nome completo" onChange={(value) => onChange("dependentName", value)} />
-            <KoaTextField icon={IdCard} label="CPF do dependente" value={values.dependentCpf} error={errors.dependentCpf} placeholder="000.000.000-00" onChange={(value) => onChange("dependentCpf", value)} />
-            <KoaTextField icon={Users} label="Nome do titular responsável" value={values.titularName} error={errors.titularName} placeholder="Digite o nome do titular" onChange={(value) => onChange("titularName", value)} />
-            <KoaTextField icon={FileText} label="Grau de parentesco" value={values.relationship} error={errors.relationship} placeholder="Ex.: filho, cônjuge" onChange={(value) => onChange("relationship", value)} />
-          </>
+          <KoaInfoNote>Exclusão de dependente ainda não está habilitada para automação. Nesta fase, apenas titular pode seguir em modo preparação.</KoaInfoNote>
         )}
       </div>
       <KoaSubmitButton onClick={onSubmit}>Enviar solicitação</KoaSubmitButton>
@@ -1583,10 +2020,17 @@ function validateKoaValues(flow: KoaFlow, values: KoaFormValues) {
 
   if (flow === "carteirinha") {
     ["startDate", "endDate", "beneficiaryName"].forEach((key) => requireValue(key as keyof KoaFormValues));
+    if (values.startDate.trim() && values.endDate.trim()) {
+      const period = validateKoaPeriod(values.startDate, values.endDate);
+      if (!period.valid) {
+        nextErrors.startDate = "Informe um período válido.";
+        nextErrors.endDate = "Informe um período válido.";
+      }
+    }
   }
 
   if (flow === "inclusao") {
-    ["contractCode", "password", "beneficiaryName", "cpf", "birthDate"].forEach((key) => requireValue(key as keyof KoaFormValues));
+    ["contractCode", "beneficiaryName", "cpf", "birthDate"].forEach((key) => requireValue(key as keyof KoaFormValues));
     if (values.inclusionType === "holder_dependents") {
       values.dependents.forEach((dependent, index) => {
         (["fullName", "cpf", "birthDate", "relationship"] as Array<keyof KoaDependent>).forEach((key) => {
@@ -1597,11 +2041,7 @@ function validateKoaValues(flow: KoaFlow, values: KoaFormValues) {
   }
 
   if (flow === "exclusao" && values.exclusionType === "holder") {
-    ["companyAccess", "password", "beneficiaryName", "cpf", "titularUserCode", "exclusionReason"].forEach((key) => requireValue(key as keyof KoaFormValues));
-  }
-
-  if (flow === "exclusao" && values.exclusionType === "dependent") {
-    ["contractCode", "password", "dependentName", "dependentCpf", "titularName", "relationship"].forEach((key) => requireValue(key as keyof KoaFormValues));
+    ["companyAccess", "beneficiaryName", "cpf", "exclusionReason"].forEach((key) => requireValue(key as keyof KoaFormValues));
   }
 
   return nextErrors;
@@ -1687,6 +2127,7 @@ function KoaPasswordField({
         <LockKeyhole className="h-5 w-5 shrink-0 text-muted-foreground" strokeWidth={1.5} />
         <input
           type={visible ? "text" : "password"}
+          autoComplete="current-password"
           value={value}
           onChange={(event) => onChange(event.target.value)}
           placeholder="Digite sua senha"

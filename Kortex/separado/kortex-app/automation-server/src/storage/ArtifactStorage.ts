@@ -4,7 +4,7 @@ export interface SaveArtifactInput {
   fileName: string;
   mimeType: string;
   bytes: Buffer;
-  type: "card_pdf" | "confirmation_pdf" | "screenshot" | "status_screenshot" | "receipt" | "document";
+  type: "card_pdf" | "confirmation_pdf" | "screenshot" | "status_screenshot" | "movement_status_evidence" | "receipt" | "document";
   metadata?: Record<string, unknown>;
 }
 

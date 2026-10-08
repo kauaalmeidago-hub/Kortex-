@@ -44,6 +44,18 @@ function parseJson<T>(value: string | null | undefined, fallback: T): T {
   return JSON.parse(value) as T;
 }
 
+function isTerminalStatus(status: OperationStatus) {
+  return (
+    status === "success" ||
+    status === "error" ||
+    status === "cancelled" ||
+    status === "manual_review" ||
+    status === "awaiting_human_verification" ||
+    status === "awaiting_confirmation" ||
+    status === "submission_confirmed"
+  );
+}
+
 export class OperationRepository implements AutomationOperationRepository {
   private readonly db: DatabaseSync;
 
@@ -108,15 +120,18 @@ export class OperationRepository implements AutomationOperationRepository {
     const current = this.get(id);
     if (!current) return undefined;
 
+    const nextStatus = patch.status ?? current.status;
+    const shouldClearError = !patch.error && nextStatus !== "error" && nextStatus !== "manual_review";
+
     const next: OperationRecord = {
       ...current,
-      status: patch.status ?? current.status,
+      status: nextStatus,
       currentStep: patch.currentStep ?? current.currentStep,
       result: patch.result ?? current.result,
-      error: patch.error ?? current.error,
+      error: shouldClearError ? undefined : patch.error ?? current.error,
       artifacts: patch.artifacts ?? current.artifacts,
       updatedAt: patch.updatedAt ?? new Date().toISOString(),
-      finishedAt: patch.finishedAt ?? current.finishedAt,
+      finishedAt: patch.finishedAt ?? (patch.status && !isTerminalStatus(nextStatus) ? undefined : current.finishedAt),
     };
 
     this.db

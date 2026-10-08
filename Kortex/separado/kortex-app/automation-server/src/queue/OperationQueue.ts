@@ -8,6 +8,8 @@ import { runWorkflow } from "../workflows/WorkflowRunner.js";
 import type { AutomationOperationRepository } from "../repositories/AutomationOperationRepository.js";
 import type { ArtifactStorage } from "../storage/ArtifactStorage.js";
 import type { WorkflowContext } from "../workflows/WorkflowContext.js";
+import { sanitizeDiagnosticText } from "../security/redaction.js";
+import { type EphemeralCredentialStore, OperationScopedSecretProvider } from "../secrets/EphemeralCredentialStore.js";
 
 interface OperationQueueDeps {
   config: AutomationConfig;
@@ -15,6 +17,7 @@ interface OperationQueueDeps {
   eventBus: OperationEventBus;
   browserManager: BrowserManager;
   secretProvider: SecretProvider;
+  ephemeralCredentialStore?: EphemeralCredentialStore;
   artifactStorage: ArtifactStorage;
 }
 
@@ -45,7 +48,42 @@ export class OperationQueue {
     const operation = await this.deps.repository.get(operationId);
     if (!operation) return { ok: false, reason: "not_found" as const };
 
-    if (!["queued", "starting", "authenticating", "accessing_portal", "processing", "verifying"].includes(operation.status)) {
+    if (operation.status === "awaiting_confirmation" || operation.status === "awaiting_human_verification") {
+      const cancelled = await this.setStatus(operation.id, "cancelled", "Operacao cancelada antes do submit definitivo", true);
+      return { ok: true, operation: cancelled };
+    }
+
+    if (operation.status === "awaiting_authentication") {
+      const cancelled = await this.setStatus(operation.id, "cancelled", "Operacao cancelada antes da autenticacao", true);
+      return { ok: true, operation: cancelled };
+    }
+
+    if (
+      ![
+        "queued",
+        "starting",
+        "authenticating",
+        "accessing_portal",
+        "checking_active_users",
+        "checking_cns",
+        "checking_cpf",
+        "awaiting_authentication",
+        "awaiting_human_verification",
+        "generating_cpf_document",
+        "validating_documents",
+        "opening_inclusion",
+        "filling_registration",
+        "selecting_plan",
+        "uploading_documents",
+        "filling_health_questionnaire",
+        "processing",
+        "awaiting_confirmation",
+        "submitting",
+        "checking_movement_status",
+        "capturing_evidence",
+        "verifying",
+      ].includes(operation.status)
+    ) {
       return { ok: false, reason: "not_cancellable" as const, operation };
     }
 
@@ -84,7 +122,9 @@ export class OperationQueue {
         config: this.deps.config,
         repository: this.deps.repository,
         browserManager: this.deps.browserManager,
-        secretProvider: this.deps.secretProvider,
+        secretProvider: this.deps.ephemeralCredentialStore
+          ? new OperationScopedSecretProvider(nextId, this.deps.ephemeralCredentialStore, this.deps.secretProvider)
+          : this.deps.secretProvider,
         artifactStorage: this.deps.artifactStorage,
         updateStatus: (status, step, data) => this.setStatus(nextId, status, step, this.isFinalStatus(status), data),
         emitEvent: (event) => this.emitEvent({ ...event, operationId: event.operationId ?? nextId }),
@@ -92,11 +132,21 @@ export class OperationQueue {
     } catch (error) {
       if (controller.signal.aborted || isAbortError(error)) {
         await this.setStatus(nextId, "cancelled", "Operacao cancelada pelo usuario", true);
+      } else if (error instanceof AutomationError && error.code === "REAUTH_REQUIRED" && operation.type === "CARD_ISSUE") {
+        await this.setStatus(nextId, "awaiting_authentication", "authentication_required");
+        await this.emitEvent({
+          operationId: nextId,
+          type: "authentication.required",
+          status: "awaiting_authentication",
+          step: "authentication_required",
+          data: { operator: operation.portal, companyId: operation.companyId },
+        });
       } else {
         await this.fail(nextId, this.toOperationError(error), this.extractErrorArtifact(error));
       }
     } finally {
       this.controllers.delete(nextId);
+      this.deps.ephemeralCredentialStore?.clear(nextId);
       this.activeOperationId = undefined;
       void this.drain();
     }
@@ -144,7 +194,15 @@ export class OperationQueue {
   }
 
   private isFinalStatus(status: OperationStatus) {
-    return status === "success" || status === "error" || status === "cancelled" || status === "manual_review";
+    return (
+      status === "success" ||
+      status === "error" ||
+      status === "cancelled" ||
+      status === "manual_review" ||
+      status === "awaiting_human_verification" ||
+      status === "awaiting_confirmation" ||
+      status === "submission_confirmed"
+    );
   }
 
   private async fail(operationId: string, error: OperationError, artifact?: OperationArtifact) {
@@ -177,7 +235,7 @@ export class OperationQueue {
       return {
         code: error.code,
         message: error.message,
-        safeDetails: error.safeDetails,
+        safeDetails: sanitizeDiagnosticText(error.safeDetails),
         step: error.step,
         retryable: error.retryable,
       };
@@ -187,7 +245,7 @@ export class OperationQueue {
       return {
         code: "AUTOMATION_ERROR",
         message: "Nao foi possivel concluir a movimentacao.",
-        safeDetails: error.message,
+        safeDetails: sanitizeDiagnosticText(error.message),
         retryable: false,
       };
     }
