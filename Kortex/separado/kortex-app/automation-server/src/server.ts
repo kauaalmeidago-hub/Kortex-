@@ -16,6 +16,7 @@ import type { CredentialResolver } from "./credentials/CredentialResolver.js";
 import { CreateOperationSchema, validatePayload } from "./validation/operationSchemas.js";
 import { sanitizeDiagnosticText } from "./security/redaction.js";
 import type { EphemeralCredentialStore } from "./secrets/EphemeralCredentialStore.js";
+import type { ArtifactStorage } from "./storage/ArtifactStorage.js";
 import { authenticationAttemptLimitError, countAuthenticationFailures } from "./authentication/AuthenticationAttemptPolicy.js";
 
 interface ServerDeps {
@@ -25,6 +26,7 @@ interface ServerDeps {
   queue: OperationQueue;
   credentialResolver: CredentialResolver;
   ephemeralCredentialStore?: EphemeralCredentialStore;
+  artifactStorage?: ArtifactStorage;
 }
 
 const operationTypes: OperationType[] = [
@@ -128,7 +130,7 @@ function operationResponse(operation: OperationRecord) {
   });
 }
 
-export async function createServer({ config, repository, eventBus, queue, credentialResolver, ephemeralCredentialStore }: ServerDeps) {
+export async function createServer({ config, repository, eventBus, queue, credentialResolver, ephemeralCredentialStore, artifactStorage }: ServerDeps) {
   const app = fastify({ logger: false });
   const reauthInFlight = new Set<string>();
   const authClient: SupabaseClient | undefined =
@@ -400,9 +402,22 @@ export async function createServer({ config, repository, eventBus, queue, creden
 
     const fileName = path.basename(decodeURIComponent(request.params.fileName));
     const artifact = operation.artifacts.find((item) => item.fileName === fileName);
-    if (!artifact || !existsSync(artifact.path)) return reply.code(404).send({ error: "artifact_not_found" });
+    if (!artifact) return reply.code(404).send({ error: "artifact_not_found" });
 
-    return reply.header("content-type", artifact.mimeType ?? "application/octet-stream").send(createReadStream(artifact.path));
+    if (artifact.storageProvider === "supabase") {
+      const storagePath = artifact.storagePath ?? artifact.path;
+      if (!storagePath || !artifactStorage) return reply.code(404).send({ error: "artifact_not_found" });
+      const signedUrl = await artifactStorage.getSignedUrl(storagePath, 5 * 60);
+      return reply.redirect(signedUrl);
+    }
+
+    const localPath = artifact.storagePath ?? artifact.path;
+    if (!existsSync(localPath)) return reply.code(404).send({ error: "artifact_not_found" });
+
+    return reply
+      .header("content-type", artifact.mimeType ?? "application/octet-stream")
+      .header("content-disposition", `attachment; filename="${encodeURIComponent(artifact.fileName)}"`)
+      .send(createReadStream(localPath));
   });
 
   return app;

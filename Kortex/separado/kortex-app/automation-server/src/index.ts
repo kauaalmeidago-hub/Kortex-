@@ -69,6 +69,7 @@ const server = await createServer({
   queue,
   credentialResolver,
   ephemeralCredentialStore,
+  artifactStorage,
 });
 
 const close = async () => {

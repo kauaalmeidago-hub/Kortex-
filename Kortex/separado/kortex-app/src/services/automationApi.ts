@@ -379,7 +379,9 @@ export async function submitOperationAuthentication(input: {
 
 export function getArtifactUrl(operationId: string, fileName: string) {
   if (!useLocalApi) return "";
-  return `${automationBaseUrl}/api/operations/${operationId}/artifacts/${encodeURIComponent(fileName)}`;
+  const url = new URL(`${automationBaseUrl}/api/operations/${operationId}/artifacts/${encodeURIComponent(fileName)}`);
+  if (automationToken) url.searchParams.set("token", automationToken);
+  return url.toString();
 }
 
 export async function subscribeToOperation(operationId: string, handlers: {

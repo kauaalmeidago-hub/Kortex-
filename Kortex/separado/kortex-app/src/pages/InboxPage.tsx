@@ -851,7 +851,8 @@ function safeKoaErrorMessage(code?: string) {
 
 function mapAutomationOperation(response: AutomationOperationResponse, type: KoaOperationType): KoaOperation {
   const firstArtifact = response.artifacts[0];
-  const artifactUrl = firstArtifact ? firstArtifact.url || getArtifactUrl(response.operationId, firstArtifact.fileName) : undefined;
+  const localArtifactUrl = firstArtifact ? getArtifactUrl(response.operationId, firstArtifact.fileName) : "";
+  const artifactUrl = firstArtifact ? localArtifactUrl || firstArtifact.url : undefined;
 
   return {
     id: response.operationId,
