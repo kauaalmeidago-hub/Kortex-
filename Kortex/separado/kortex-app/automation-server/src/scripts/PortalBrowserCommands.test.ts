@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => {
   return { config: { browserChannel: "chrome", allowedAutomationHosts: ["webhap.hapvida.com.br", "sigo.sh.srv.br"],
     hapvidaCardPortalUrl: "https://webhap.hapvida.com.br/card", ndiCardPortalUrl: "https://sigo.sh.srv.br/card",
     databaseUrl: "postgres://synthetic", secretsDir: "synthetic-secrets" },
-    page, context, lock: {}, query: vi.fn(), poolEnd: vi.fn(), resolve: vi.fn(), resolverClose: vi.fn(), getSecret: vi.fn(),
+    page, context, lock: {}, query: vi.fn(), poolEnd: vi.fn(), resolve: vi.fn(), resolverClose: vi.fn(), getSecret: vi.fn(), secretClose: vi.fn(),
     launch: vi.fn(), browserClose: vi.fn(), savedCheck: vi.fn(), refresh: vi.fn(), question: vi.fn(), readlineClose: vi.fn(),
     manager: { profileDir: "synthetic-profile", invalidateSession: vi.fn(), launchPersistentContext: vi.fn(), writeStatus: vi.fn(),
       validatePortalSession: vi.fn(), saveSession: vi.fn(), markSessionValidated: vi.fn(), releasePersistentContext: vi.fn() } };
@@ -16,7 +16,7 @@ vi.mock("../config.js", () => ({ loadConfig: () => mocks.config }));
 vi.mock("playwright", () => ({ chromium: { launch: mocks.launch } }));
 vi.mock("pg", () => ({ default: { Pool: class { query = mocks.query; end = mocks.poolEnd; } } }));
 vi.mock("../credentials/PostgresCredentialResolver.js", () => ({ PostgresCredentialResolver: class { resolve = mocks.resolve; close = mocks.resolverClose; } }));
-vi.mock("../secrets/DpapiSecretProvider.js", () => ({ DpapiSecretProvider: class { get = mocks.getSecret; } }));
+vi.mock("../secrets/createSecretProvider.js", () => ({ createSecretProvider: () => ({ get: mocks.getSecret, close: mocks.secretClose }) }));
 vi.mock("../browser/KoaBrowserProfileManager.js", () => ({ KoaBrowserProfileManager: class { constructor() { return mocks.manager; } } }));
 vi.mock("../browser/PortalSessionCheck.js", () => ({ validateSavedPortalSession: mocks.savedCheck, refreshPortalSessionWithCredential: mocks.refresh }));
 vi.mock("node:readline/promises", () => ({ createInterface: () => ({ question: mocks.question, close: mocks.readlineClose }) }));
@@ -59,6 +59,7 @@ describe("NDI browser check command", () => {
     expect(mocks.getSecret).toHaveBeenCalledWith("ndi:company-1:login:0TEST");
     expect(mocks.refresh.mock.calls[0]?.slice(3, 5)).toEqual(["ndi", mocks.config.ndiCardPortalUrl]);
     expect(mocks.resolverClose).toHaveBeenCalledOnce(); expect(mocks.poolEnd).toHaveBeenCalledOnce();
+    expect(mocks.secretClose).toHaveBeenCalledOnce();
     expect(JSON.stringify(vi.mocked(console.log).mock.calls)).not.toContain("synthetic-password");
   });
   it("requires reauthentication when the local NDI credential file is absent", async () => {

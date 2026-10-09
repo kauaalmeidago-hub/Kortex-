@@ -1,108 +1,52 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import pg from "pg";
 import type { AutomationConfig } from "../config.js";
 import { AutomationError } from "../errors.js";
 import type { OperationRecord, PortalCredential } from "../types.js";
 import { protectWithDpapi } from "../security/DpapiProtector.js";
+import { VaultCredentialStore } from "../secrets/VaultCredentialStore.js";
 
-const { Pool } = pg;
-
-function safeFileName(ref: string) {
-  return Buffer.from(ref, "utf8").toString("base64url");
-}
-
-function maskUsername(value: string) {
-  const trimmed = value.trim();
-  if (trimmed.length <= 4) return "***";
-  return `${trimmed.slice(0, 2)}***${trimmed.slice(-2)}`;
-}
-
-// Called by the CARD_ISSUE worker only after validating the portal session in its execution context.
+// Called only after the CARD_ISSUE worker has validated the actual portal session.
 export class RememberedCredentialService {
   constructor(private readonly config: AutomationConfig) {}
 
   async saveValidatedCredential(operation: OperationRecord, credential: PortalCredential) {
     if (credential.metadata?.rememberOnDevice !== true) {
-      return { rememberedOnDevice: false, metadataRegistered: false };
+      return { rememberedOnDevice: false, metadataRegistered: false, storedInDatabase: false };
     }
     if (operation.type !== "CARD_ISSUE") {
       throw new AutomationError("AUTHENTICATION_NOT_SUPPORTED", "Persistencia de credencial indisponivel para esta operacao.");
     }
-    const companyCode = credential.username;
-    const password = credential.password;
-    const credentialRef = operation.credentialRef || `${operation.portal}:${operation.companyId}`;
-    const payload = JSON.stringify({ username: companyCode, password });
+    let storedInDatabase = false;
+    if (this.config.databaseUrl && operation.workspaceId) {
+      let store: VaultCredentialStore | undefined;
+      try {
+        store = new VaultCredentialStore(this.config.databaseUrl);
+        storedInDatabase = await store.saveValidated(operation, credential);
+      }
+      catch (error) {
+        // An ownership mismatch must never overwrite another access's local backup.
+        if (error instanceof AutomationError && error.code === "CREDENTIAL_SCOPE_INVALID") throw error;
+        // Report a database failure without leaking the original error or password.
+      }
+      finally { await store?.close().catch(() => undefined); }
+    }
+    const payload = JSON.stringify({ username: credential.username, password: credential.password });
+    let rememberedOnDevice = false;
     try {
       const encrypted = await protectWithDpapi(payload);
       await mkdir(this.config.secretsDir, { recursive: true, mode: 0o700 });
-      await writeFile(path.join(this.config.secretsDir, `${safeFileName(credentialRef)}.credential.dpapi`), encrypted, { encoding: "utf8", mode: 0o600 });
+      const fileName = Buffer.from(operation.credentialRef, "utf8").toString("base64url") + ".credential.dpapi";
+      await writeFile(path.join(this.config.secretsDir, fileName), encrypted, { encoding: "utf8", mode: 0o600 });
+      rememberedOnDevice = true;
     } catch {
-      throw new AutomationError("CREDENTIAL_SAVE_FAILED", "Nao foi possivel salvar a credencial neste dispositivo.", {
-        step: "remember_credentials",
-        retryable: false,
+      // Vault can retain validated access even when local DPAPI is unavailable.
+    }
+    if (!rememberedOnDevice && !storedInDatabase) {
+      throw new AutomationError("CREDENTIAL_SAVE_FAILED", "Nao foi possivel salvar o acesso para as proximas emissoes.", {
+        step: "remember_credentials", retryable: false,
       });
     }
-
-    if (!this.config.databaseUrl || !operation.workspaceId) {
-      return { rememberedOnDevice: true, metadataRegistered: false };
-    }
-
-    const pool = new Pool({
-      connectionString: this.config.databaseUrl,
-      max: 1,
-      application_name: "kortex-worker-credential-save",
-    });
-
-    try {
-      const metadata = {
-        source: "local_dpapi",
-        store: "worker_local",
-        portalLoginCode: companyCode,
-        registeredVia: "koa_chat_reauth",
-        lastValidatedAt: new Date().toISOString(),
-      };
-
-      await pool.query(
-        `INSERT INTO public.automation_credentials (
-           workspace_id,
-           company_id,
-           operator,
-           credential_ref,
-           label,
-           username_hint,
-           status,
-           last_verified_at,
-           metadata
-         )
-         VALUES ($1, $2, $7, $3, $4, $5, 'active', now(), $6::jsonb)
-         ON CONFLICT (credential_ref)
-         DO UPDATE SET
-           workspace_id = EXCLUDED.workspace_id,
-           company_id = EXCLUDED.company_id,
-           operator = EXCLUDED.operator,
-           label = EXCLUDED.label,
-           username_hint = EXCLUDED.username_hint,
-           status = 'active'::public.automation_credential_status,
-           last_verified_at = now(),
-           metadata = public.automation_credentials.metadata || EXCLUDED.metadata,
-           updated_at = now()`,
-        [
-          operation.workspaceId,
-          operation.companyId,
-          credentialRef,
-          `${operation.portal === "ndi" ? "NDI" : "Hapvida"} - ${operation.companyId}`,
-          maskUsername(companyCode),
-          JSON.stringify(metadata),
-          operation.portal,
-        ],
-      );
-      return { rememberedOnDevice: true, metadataRegistered: true };
-    } catch {
-      // The encrypted local credential remains usable even when metadata registration is unavailable.
-      return { rememberedOnDevice: true, metadataRegistered: false };
-    } finally {
-      await pool.end().catch(() => undefined);
-    }
+    return { rememberedOnDevice, metadataRegistered: storedInDatabase, storedInDatabase };
   }
 }

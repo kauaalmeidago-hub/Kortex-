@@ -85,7 +85,7 @@ describe("worker queue connectivity recovery", () => {
     expect(repository.releaseLock.mock.calls.map(([key]) => key)).toEqual(["hapvida:company:synthetic-company", "ndi:company:synthetic-company"]);
     expect(mocks.workflow).toHaveBeenCalledOnce();
     expect(repository.upsertWorkerHeartbeat).toHaveBeenCalledWith("recovery-test", "online", expect.objectContaining({
-      cardIssueWorkflowVersion: 2, cardPortalSearchDefault: "auto",
+      cardIssueWorkflowVersion: 2, cardPortalSearchDefault: "auto", portalAccessStorageVersion: 1, portalAccessStorage: "local_dpapi",
     }));
   });
 

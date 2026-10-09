@@ -809,6 +809,8 @@ function safeKoaErrorMessage(code?: string) {
   if (code === "REAUTH_REQUIRED") return "É necessário renovar o acesso ao portal da operadora.";
   if (code === "CARD_PORTAL_SEARCH_INCOMPLETE") return "Não consegui concluir a busca em Hapvida e NDI. Verifique o acesso ao portal indicado.";
   if (code === "CREDENTIAL_NOT_FOUND") return "Credencial segura não encontrada.";
+  if (code === "CREDENTIAL_STORE_UNAVAILABLE") return "Não consegui consultar os acessos salvos. Tente novamente quando a conexão voltar.";
+  if (code === "CREDENTIAL_SAVE_FAILED") return "O acesso foi validado, mas não consegui salvá-lo para as próximas emissões.";
   if (code === "BENEFICIARY_NOT_FOUND") return "Beneficiário não encontrado.";
   if (code === "BENEFICIARY_SELECTION_FAILED") return "O portal não confirmou a seleção do beneficiário. A emissão foi interrompida antes de imprimir.";
   if (code === "PORTAL_RESULTS_NOT_READY") return "A lista de beneficiários não terminou de carregar. Tente a consulta novamente.";
@@ -1616,7 +1618,7 @@ function KoaAuthenticationCard({
       <div className="max-w-[84%] rounded-2xl rounded-bl-md bg-secondary/80 px-4 py-3 text-left shadow-sm">
         <p className="text-sm font-semibold text-foreground">Preciso autenticar o acesso {portal === "ndi" ? "NDI" : "Hapvida"} para continuar.</p>
         <p className="mt-1 text-sm text-muted-foreground">
-          Informe o acesso deste código para buscar em Hapvida e NDI. Com "Lembrar" ativado, ele será salvo de forma protegida neste computador para cada portal em que o login funcionar.
+          Informe o acesso deste código para buscar em Hapvida e NDI. Com "Salvar acesso" ativado, ele será guardado de forma protegida para as próximas emissões, em cada portal em que o login funcionar.
         </p>
 
         <div className="mt-4 space-y-3">
@@ -1649,7 +1651,7 @@ function KoaAuthenticationCard({
               onChange={(event) => setRememberOnDevice(event.target.checked)}
               className="h-4 w-4 rounded border-border text-primary focus:ring-primary/20"
             />
-            Lembrar neste computador
+            Salvar acesso para as próximas emissões
           </label>
         </div>
 

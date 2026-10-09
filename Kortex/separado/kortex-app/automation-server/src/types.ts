@@ -171,6 +171,7 @@ export interface OperationEvent {
     | "authentication.succeeded"
     | "authentication.failed"
     | "authentication.saved_on_device"
+    | "authentication.saved_in_database"
     | "exclusion.started"
     | "exclusion.company_access_selected"
     | "exclusion.active_users_loaded"
@@ -192,3 +193,4 @@ export interface OperationEvent {
   data?: Record<string, unknown>;
   createdAt: string;
 }
+

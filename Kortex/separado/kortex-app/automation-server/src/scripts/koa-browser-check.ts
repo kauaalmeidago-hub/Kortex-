@@ -7,7 +7,7 @@ import { AutomationError, createReauthRequiredError } from "../errors.js";
 import { KoaBrowserProfileManager } from "../browser/KoaBrowserProfileManager.js";
 import { refreshPortalSessionWithCredential, validateSavedPortalSession } from "../browser/PortalSessionCheck.js";
 import { DomainAllowlist } from "../security/DomainAllowlist.js";
-import { DpapiSecretProvider } from "../secrets/DpapiSecretProvider.js";
+import { createSecretProvider } from "../secrets/createSecretProvider.js";
 import { PostgresCredentialResolver } from "../credentials/PostgresCredentialResolver.js";
 import type { PortalName } from "../types.js";
 import { portalBrowserOptions } from "./portalBrowserOptions.js";
@@ -35,7 +35,7 @@ export async function resolveCompanyId(databaseUrl: string, portal: PortalName, 
         safeDetails: "Use --company-id e, quando houver varios codigos, --company-code.", retryable: true,
       });
     }
-    throw createReauthRequiredError(`Nenhuma credencial ${label} elegivel foi encontrada. Informe o acesso no chat e use Lembrar neste computador.`);
+    throw createReauthRequiredError(`Nenhuma credencial ${label} elegivel foi encontrada. Informe o acesso no formulario do chat e use Salvar acesso para as proximas emissoes.`);
   } finally { await pool.end(); }
 }
 
@@ -56,12 +56,14 @@ export async function runPortalBrowserCheck(args = process.argv.slice(2)) {
       throw createReauthRequiredError(`A sessao ${label} nao esta validada e falta DATABASE_URL para localizar a credencial segura.`);
     }
     const companyId = await resolveCompanyId(config.databaseUrl, portal, companyCode, explicitCompanyId);
-    const resolver = new PostgresCredentialResolver(config.databaseUrl);
+    const secrets = createSecretProvider(config);
+    let resolver: PostgresCredentialResolver | undefined;
     try {
+      resolver = new PostgresCredentialResolver(config.databaseUrl);
       const resolved = await resolver.resolve({ companyId, operator: portal, portalLoginCode: companyCode });
-      const credential = await new DpapiSecretProvider(config.secretsDir).get(resolved.credentialRef).catch(error => {
+      const credential = await secrets.get(resolved.credentialRef).catch(error => {
         if (error instanceof AutomationError && error.code === "CREDENTIAL_NOT_FOUND") {
-          throw createReauthRequiredError(`Cadastre o acesso ${label} no chat com Lembrar neste computador, ou valide a sessao com browser:onboard -- --operator=${portal}.`);
+          throw createReauthRequiredError(`Cadastre o acesso ${label} no formulario do chat com Salvar acesso, ou valide a sessao com browser:onboard -- --operator=${portal}.`);
         }
         throw error;
       });
@@ -71,7 +73,7 @@ export async function runPortalBrowserCheck(args = process.argv.slice(2)) {
       await refreshPortalSessionWithCredential(config, browser, manager, portal, url, credential);
       console.log("SESSION_REFRESHED");
       console.log("SESSION_VALID");
-    } finally { await resolver.close(); }
+    } finally { try { await resolver?.close(); } finally { await secrets.close?.(); } }
   } finally { await browser.close().catch(() => undefined); }
 }
 

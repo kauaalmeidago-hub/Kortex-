@@ -4,14 +4,12 @@ import { OperationRepository } from "./db/OperationRepository.js";
 import { PostgresOperationRepository } from "./repositories/PostgresOperationRepository.js";
 import { OperationEventBus } from "./events/EventBus.js";
 import { OperationQueue } from "./queue/OperationQueue.js";
-import { DpapiSecretProvider } from "./secrets/DpapiSecretProvider.js";
-import { RemoteSecretProvider } from "./secrets/RemoteSecretProvider.js";
+import { createSecretProvider } from "./secrets/createSecretProvider.js";
 import { createServer } from "./server.js";
 import { ExplicitCredentialResolver } from "./credentials/CredentialResolver.js";
 import { PostgresCredentialResolver } from "./credentials/PostgresCredentialResolver.js";
 import type { AutomationOperationRepository } from "./repositories/AutomationOperationRepository.js";
 import type { PersistentAutomationQueueRepository } from "./repositories/AutomationOperationRepository.js";
-import type { SecretProvider } from "./secrets/SecretProvider.js";
 import type { CredentialResolver } from "./credentials/CredentialResolver.js";
 import { PersistentWorker } from "./worker/PersistentWorker.js";
 import { LocalArtifactStorage } from "./storage/LocalArtifactStorage.js";
@@ -27,8 +25,7 @@ const repository: AutomationOperationRepository =
 const eventBus = new OperationEventBus();
 const browserManager = new BrowserManager(config);
 const ephemeralCredentialStore = new EphemeralCredentialStore();
-const secretProvider: SecretProvider =
-  config.secretProviderMode === "remote" ? new RemoteSecretProvider() : new DpapiSecretProvider(config.secretsDir);
+const secretProvider = createSecretProvider(config);
 const artifactStorage: ArtifactStorage =
   config.supabaseUrl && config.supabaseSecretKey
     ? new SupabaseArtifactStorage(config.supabaseUrl, config.supabaseSecretKey, config.artifactBucket)
@@ -82,6 +79,7 @@ const close = () => closing ??= (async () => {
   await workerRun;
   await repository.close?.();
   await (credentialResolver as { close?: () => Promise<void> }).close?.();
+  await secretProvider.close?.();
 })();
 
 const shutdown = () => void close().then(() => process.exit(0), () => process.exit(1));

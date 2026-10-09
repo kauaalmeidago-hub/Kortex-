@@ -224,7 +224,8 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
     const loadCredential = async () => {
       if (credential) return credential;
       await context.updateStatus("authenticating", "Carregando credencial segura");
-      credential = await context.secretProvider.get(operation.credentialRef).catch(() => {
+      credential = await context.secretProvider.get(operation.credentialRef).catch((error) => {
+        if (error instanceof AutomationError && error.code === "CREDENTIAL_STORE_UNAVAILABLE") throw error;
         throw createReauthRequiredError(
           `Nao foi possivel renovar a sessao ${portalLabel} sem uma credencial segura cadastrada para o Koa.`,
         );
@@ -334,12 +335,16 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
 
       if (credential?.metadata?.rememberOnDevice === true) {
         const remembered = await new RememberedCredentialService(context.config).saveValidatedCredential(operation, credential);
-        await context.emitEvent({
+        if (remembered.rememberedOnDevice) await context.emitEvent({
           operationId: operation.id,
           type: "authentication.saved_on_device",
           status: "authenticating",
           step: "authentication_saved_on_device",
-          data: { rememberedOnDevice: true, metadataRegistered: remembered.metadataRegistered },
+          data: { rememberedOnDevice: true, metadataRegistered: remembered.metadataRegistered, storedInDatabase: remembered.storedInDatabase === true },
+        });
+        if (remembered.storedInDatabase) await context.emitEvent({
+          operationId: operation.id, type: "authentication.saved_in_database", status: "authenticating",
+          step: "authentication_saved_in_database", data: { operator: portal, storedInDatabase: true },
         });
       }
     }

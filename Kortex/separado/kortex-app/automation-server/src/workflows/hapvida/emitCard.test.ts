@@ -144,6 +144,28 @@ describe("CARD_ISSUE authentication in the execution context", () => {
     expect(f.events.some((event) => event.type === "authentication.succeeded")).toBe(false);
   });
 
+  it("confirms database storage after a validated login even without a local DPAPI copy", async () => {
+    const f = fixture(true);
+    mocks.remember.mockResolvedValue({ rememberedOnDevice: false, metadataRegistered: true, storedInDatabase: true });
+    await emitCard(f.operation, new AbortController().signal, f.context);
+    expect(f.events.filter(event => event.type === "authentication.saved_in_database")).toEqual([
+      expect.objectContaining({ data: { operator: "hapvida", storedInDatabase: true } }),
+    ]);
+    expect(f.events.some(event => event.type === "authentication.saved_on_device")).toBe(false);
+    expect(mocks.remember.mock.invocationCallOrder[0]).toBeGreaterThan(f.validate.mock.invocationCallOrder[1]!);
+    expect(f.operation.status).toBe("success");
+    expect(JSON.stringify(f.events)).not.toContain("synthetic-password");
+  });
+
+  it("does not request another password or attempt portal login during a credential database outage", async () => {
+    const f = fixture(false);
+    f.getSecret.mockRejectedValue(new AutomationError("CREDENTIAL_STORE_UNAVAILABLE", "Cofre indisponivel.", { retryable: true }));
+    await expect(emitCard(f.operation, new AbortController().signal, f.context)).rejects.toMatchObject({ code: "CREDENTIAL_STORE_UNAVAILABLE" });
+    expect(mocks.login).not.toHaveBeenCalled();
+    expect(mocks.remember).not.toHaveBeenCalled();
+    expect(f.artifactSave).not.toHaveBeenCalled();
+  });
+
   it("uses the requested code instead of an earlier valid portal session", async () => {
     const f = fixture(true);
     f.operation.input.contractCode = "0NEW";

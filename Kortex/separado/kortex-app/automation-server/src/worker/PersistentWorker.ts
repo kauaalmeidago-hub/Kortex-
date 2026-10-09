@@ -207,6 +207,8 @@ export class PersistentWorker {
       cardIssueEnabled: this.deps.config.features.cardIssue,
       cardIssueWorkflowVersion: 2,
       cardPortalSearchDefault: "auto",
+      portalAccessStorageVersion: 1,
+      portalAccessStorage: this.deps.config.databaseUrl && this.deps.config.secretProviderMode !== "mock" ? "supabase_vault" : "local_dpapi",
       inclusionPreviewEnabled: this.deps.config.features.inclusionPreview,
       inclusionSubmitEnabled: this.deps.config.features.inclusion,
       exclusionPreviewEnabled: this.deps.config.features.exclusionPreview,

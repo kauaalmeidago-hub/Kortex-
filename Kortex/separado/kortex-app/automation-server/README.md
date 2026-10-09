@@ -47,7 +47,7 @@ npm run session:bootstrap -- --operator=hapvida
 
 `browser:onboard` abre o Chrome dedicado no portal de carteirinha escolhido; Hapvida e o padrao e `--operator=ndi` seleciona NDI. Depois do login manual e da confirmacao com Enter, somente a sessao validada daquela operadora e salva por DPAPI. Uma tentativa NDI sem login validado nao salva estado e nao substitui a sessao Hapvida.
 
-`browser:check` valida a sessao da operadora escolhida ou tenta renova-la com a credencial segura cadastrada para essa operadora. `REAUTH_REQUIRED` informa falta de acesso validado e nao desabilita o worker nem a emissao Hapvida. Para cadastrar e lembrar o acesso NDI, envie a credencial pelo formulario seguro do chat em um pedido de carteirinha, com "Lembrar neste computador". O worker valida o login antes de salvar o acesso. O onboarding manual salva a sessao, sem ler nem cadastrar a senha.
+`browser:check` valida a sessao da operadora escolhida ou tenta renova-la com a credencial segura cadastrada para essa operadora. `REAUTH_REQUIRED` informa falta de acesso validado e nao desabilita o worker nem a emissao Hapvida. Para cadastrar e lembrar o acesso NDI, envie a credencial pelo formulario seguro do chat em um pedido de carteirinha, com "Salvar acesso para as proximas emissoes". O worker valida o login antes de salvar o acesso no cofre do banco. O onboarding manual salva a sessao, sem ler nem cadastrar a senha.
 
 Se houver mais de uma empresa elegivel, informe `--company-id=<uuid>`. Para verificar um codigo especifico, adicione `--company-code=<codigo>`; o check nao aceita a sessao geral de outro codigo como confirmacao desse acesso. `npm run test:portal-sessions` verifica isolamento de sessoes, login NDI e Hapvida e falhas de autenticacao em Chromium com paginas sinteticas interceptadas, sem acessar os portais reais.
 
@@ -65,7 +65,7 @@ Se a sessao expirar e nao existir credencial segura no `SecretProvider`, o worke
 
 Pedidos de carteirinha usam `portalSearch: "auto"`, inclusive pedidos antigos sem essa propriedade; somente `portalSearch: "selected"` limita a busca a uma operadora. O worker consulta o portal inicial e, se o acesso for rejeitado, faltar credencial ou o beneficiario nao for encontrado, consulta o outro portal na mesma operacao. Uma lista que nao carregou ou um seletor indisponivel antes de qualquer selecao tambem permite consultar o outro portal, sem registrar ausencia do beneficiario. Ao confirmar uma carteirinha e gerar um PDF valido, a busca termina; `operator` no resultado e nos metadados do arquivo identifica a operadora. Uma selecao nao confirmada, previa incorreta, nome ambiguo ou PDF invalido interrompe a busca para revisao.
 
-Hapvida utiliza `HAPVIDA_CARD_PORTAL_URL`. NDI utiliza `NDI_CARD_PORTAL_URL`, com padrao `https://sigo.sh.srv.br/pls/webmin/pk_carteira_provisoria.login_empresa_form`. As credenciais salvas sao selecionadas separadamente por empresa, operadora e codigo. Somente a senha enviada explicitamente para aquela busca automatica pode ser tentada nos dois portais em memoria; uma senha Hapvida previamente salva nao e reutilizada em NDI. Com "Lembrar", cada acesso confirmado recebe seu proprio arquivo DPAPI e cadastro da operadora correta.
+Hapvida utiliza `HAPVIDA_CARD_PORTAL_URL`. NDI utiliza `NDI_CARD_PORTAL_URL`, com padrao `https://sigo.sh.srv.br/pls/webmin/pk_carteira_provisoria.login_empresa_form`. As credenciais salvas sao selecionadas separadamente por empresa, operadora e codigo. Somente a senha enviada explicitamente para aquela busca automatica pode ser tentada nos dois portais em memoria; uma senha Hapvida previamente salva nao e reutilizada em NDI. Com "Salvar acesso", cada login confirmado e associado a empresa, operadora e codigo corretos, com senha criptografada no Supabase Vault e copia local DPAPI quando disponivel.
 
 Se apenas um portal precisar de autenticacao, a retomada consulta esse portal sem repetir uma busca ja concluida para o mesmo beneficiario, codigo e periodo. "Beneficiario nao encontrado em Hapvida ou NDI" exige ausencia confirmada nos dois. Se algum portal estiver indisponivel, o pedido informa que a busca ficou incompleta. O pre-check opcional de usuarios ativos Hapvida nao e executado em NDI. Inclusao e exclusao NDI continuam aguardando mapeamento.
 
@@ -83,7 +83,9 @@ A validacao final confirma o nome do beneficiario no conteudo renderizado da car
 
 `npm run test:card-preview` executa casos de regressao em Chrome headless com paginas locais de teste, incluindo titulo apenas no `<head>`, popup e PDF gerado pelo navegador. Requer Chrome instalado (`KOA_BROWSER_CHANNEL`, padrao `chrome`), ou `KOA_TEST_BROWSER_EXECUTABLE` apontando para um Chromium de teste. Esse teste nao acessa o portal nem confirma uma emissao real.
 
-Com `rememberOnDevice=false`, a senha nao e gravada em arquivo ou no Supabase. Com `rememberOnDevice=true`, o worker salva a credencial local criptografada por DPAPI somente depois do login confirmado e registra apenas metadados no banco. `authentication.saved_on_device` informa se esses metadados foram registrados; uma indisponibilidade do cadastro nao altera o arquivo local ja criptografado.
+Com `rememberOnDevice=false`, a senha nao e gravada em arquivo ou no Supabase. Com `rememberOnDevice=true` (nome mantido na API por compatibilidade), o worker grava o codigo e a senha no Supabase Vault somente depois do login confirmado. O cadastro publico contem apenas a referencia, o codigo e os metadados; a associacao com o segredo fica em `koa_private.automation_credential_secrets`, sem acesso de `anon` ou `authenticated`. A senha nao e gravada nos eventos, resultados ou metadados publicos.
+
+`authentication.saved_in_database` confirma a gravacao no cofre; `authentication.saved_on_device` confirma a copia DPAPI quando disponivel. Uma falha na gravacao no banco nao e anunciada como sucesso no banco. Sem nenhuma copia protegida, o retorno e `CREDENTIAL_SAVE_FAILED`. Uma falha ao consultar o cofre retorna `CREDENTIAL_STORE_UNAVAILABLE`, sem pedir outra senha nem tentar uma credencial de outra empresa ou operadora.
 
 `KOA_AUTH_MAX_ATTEMPTS` limita as falhas de login por operacao (padrao: 3). Antes de atingir o limite, uma falha volta para `awaiting_authentication`; ao atingir o limite, a operacao passa para `manual_review`. Falhas tecnicas identificadas como `DATABASE_OPERATION_UPDATE_FAILED` nao consomem uma tentativa de login.
 
@@ -97,7 +99,11 @@ Depois de instalar a versao atualizada no computador do worker, valide uma emiss
 
 Na carteirinha, a credencial e selecionada pelo cadastro da empresa e pelo codigo Hapvida informado. Um novo codigo recebe uma referencia separada; a senha e a sessao de outro codigo nao sao reutilizadas. Corrigir o codigo na reautenticacao atualiza o payload e a referencia da mesma operacao antes de devolve-la para a fila, tanto em Postgres quanto em SQLite.
 
-O formulario permite editar o codigo e inicia com `Lembrar neste computador` marcado. Depois do login validado, a senha fica criptografada por DPAPI no dispositivo e o banco recebe o cadastro e a referencia desse acesso. Desmarcar a opcao mantem a senha somente em memoria para aquela execucao.
+O formulario permite editar o codigo e inicia com `Salvar acesso para as proximas emissoes` marcado. Depois do login validado, o banco recebe a credencial criptografada. O worker recupera esse acesso para as proximas emissoes da mesma empresa, operadora e codigo. Uma nova senha validada para a mesma referencia atualiza o segredo existente em uma transacao. Desmarcar a opcao mantem a senha somente em memoria para aquela execucao.
+
+O cofre exige `DATABASE_URL` de backend, a extensao `supabase_vault` e as migrations `../supabase/migrations/20261009124253_koa_portal_credential_vault_storage.sql` e `20261009130006_koa_portal_credential_database_event.sql`. A role do backend deve poder acessar o cofre e o schema privado; nenhuma chave administrativa vai para o frontend. A conexao remota do cofre exige TLS com verificacao do certificado (`sslmode=verify-full`); configure `sslrootcert` no `DATABASE_URL` caso o certificado do projeto nao esteja no trust store do Node. O `SecretProvider` prioriza o cofre e permite as credenciais DPAPI antigas quando a referencia ainda nao tem segredo no banco. Credenciais inativas ou associacoes inconsistentes nao usam essa alternativa local.
+
+O heartbeat da versao instalada informa `portalAccessStorageVersion: 1` e `portalAccessStorage: "supabase_vault"` quando o cofre esta configurado. Esse marcador confirma a versao do worker; a gravacao de cada acesso e confirmada pelo evento de autenticacao apos o login.
 
 O botao do chat baixa o PDF para o computador do usuario. No modo local, a requisicao inclui a autenticacao atual do Kortex e o worker devolve os bytes do bucket privado com `Content-Disposition: attachment`. No modo Supabase, o aplicativo gera uma nova URL assinada ao clicar. Uma falha de download permite tentar baixar o mesmo arquivo novamente, sem emitir outra carteirinha.
 
@@ -163,7 +169,7 @@ Variaveis principais:
 - `KOA_SUPERVISOR_PORT`: porta local usada somente para impedir duas instancias do supervisor. Padrao: `4776`.
 - `KOA_AUTOMATION_HOST`: host. Padrao seguro: `127.0.0.1`.
 - `KOA_AUTOMATION_TOKEN`: token opcional. Se ausente, um token local e criado em `automation/secrets/local-api-token.txt`.
-- `DATABASE_URL`: quando definido, ativa o `PostgresOperationRepository`.
+- `DATABASE_URL`: quando definido, ativa o `PostgresOperationRepository` e o cofre de credenciais validadas no banco.
 - `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY`: usados somente no backend para Auth/Storage.
 - `ARTIFACT_BUCKET`: bucket privado para artefatos. Padrao: `koa-artifacts`.
 - `AUTOMATION_MODE`: `api-worker`, `api` ou `worker`.
