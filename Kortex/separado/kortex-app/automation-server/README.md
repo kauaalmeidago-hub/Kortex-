@@ -71,7 +71,13 @@ Se apenas um portal precisar de autenticacao, a retomada consulta esse portal se
 
 `npm run test:card-portals` testa em Chromium os dois formularios, periodo, selecao, geracao real de PDF, troca de operadora, referencia de credencial e falhas sem arquivo, com paginas sinteticas e todas as requisicoes interceptadas. Esse teste nao acessa os portais reais. Depois de atualizar a instalacao permanente, valide uma carteirinha NDI real no computador do worker. Para limitar um pedido ao portal escolhido na API local, informe `portalSearch: "selected"`.
 
-A selecao examina todas as linhas visiveis correspondentes ao nome, prioriza linhas com controle habilitado e aceita checkbox, radio ou rotulo associado ao controle oculto. Homonimos exigem CPF ou data de nascimento que diferencie as linhas. O worker aguarda a lista depois da consulta e confirma a selecao antes de imprimir. `npm run test:card-selection` verifica esses layouts e o carregamento atrasado em Chromium com dados sinteticos. O heartbeat da versao corrigida informa `cardIssueWorkflowVersion: 2` e `cardPortalSearchDefault: "auto"`, permitindo verificar se a instalacao em execucao recebeu essa atualizacao.
+No campo de nome, `TODOS` (inclusive em minusculas) solicita todas as carteirinhas disponiveis para o codigo da empresa e periodo informados. A API tambem aceita `beneficiaryScope: "all"`. O codigo da empresa e obrigatorio para o lote; a sessao generica de outro contrato nao e aceita. O worker identifica as linhas selecionaveis, confirma todos os controles e confere todos os nomes/identificadores na previa antes de gerar um unico PDF, com varias paginas quando necessario. O resultado informa `beneficiaryCount` e o chat apresenta "Baixar todas as carteirinhas". Uma lista paginada ou uma linha sem identidade reconhecivel retorna `CARD_BATCH_INCOMPLETE`, sem anunciar um lote parcial como completo. `FEATURE_KOA_CARD_ISSUE` controla tanto a emissao individual quanto o comando explicito `TODOS`; a antiga variavel `KOA_CARD_ISSUE_BATCH_ENABLED`, que nao controlava a execucao, foi retirada do exemplo de configuracao.
+
+A previa pode estar na aba principal, popup ou frame visivel da mesma origem do portal. Campos somente de leitura sao incluidos na conferência e convertidos em texto na copia de impressao. Nomes abreviados exigem um identificador da linha selecionada; se a lista informa o numero da carteirinha, ele tambem deve corresponder ao documento. Homonimos exigem identificadores individuais, sem usar um CPF compartilhado para confirmar duas carteirinhas. Uma emissao individual limpa outras selecoes anteriores antes de imprimir. O titulo da aba e apenas um sinal de tipo de documento; listas, login e telas de espera nao sao carteirinhas.
+
+`npm run test:card-batch` verifica esses cenarios em paginas sinteticas, incluindo um lote de 12 beneficiarios, PDF com varias paginas, nomes abreviados, numero divergente, campos somente de leitura, selecao anterior, homonimos e lote incompleto. `KOA_TEST_PDF_OUTPUT_DIR` permite salvar os PDFs sinteticos para inspecao. O heartbeat da instalacao atualizada informa `cardIssueWorkflowVersion: 3` e `cardPreviewVersion: 2`.
+
+A selecao examina todas as linhas visiveis correspondentes ao nome, prioriza linhas com controle habilitado e aceita checkbox, radio ou rotulo associado ao controle oculto. Homonimos exigem CPF ou data de nascimento que diferencie as linhas. O worker aguarda a lista depois da consulta e confirma a selecao antes de imprimir. `npm run test:card-selection` verifica esses layouts e o carregamento atrasado em Chromium com dados sinteticos. O heartbeat da versao atual informa `cardIssueWorkflowVersion: 3` e `cardPortalSearchDefault: "auto"`, permitindo verificar se a instalacao em execucao recebeu essa atualizacao.
 
 ## Reautenticacao pelo Koa
 
@@ -182,7 +188,6 @@ Variaveis principais:
 - `KOA_BROWSER_CHANNEL`: canal Playwright. Padrao: `chrome`.
 - `TRACE_AUTH=false`: evita screenshots em telas de autenticacao.
 - `FEATURE_KOA_CARD_ISSUE=true`: habilita emissao de carteirinha.
-- `KOA_CARD_ISSUE_BATCH_ENABLED=false`: mantem emissao em lote desabilitada ate haver validacao real.
 - `FEATURE_KOA_INCLUSION=false`: mantem inclusao bloqueada ate validacao real.
 - `FEATURE_KOA_EXCLUSION=false`: mantem exclusao bloqueada ate validacao real.
 - `HAPVIDA_CARD_PORTAL_URL`: URL da emissao de carteirinha Hapvida.

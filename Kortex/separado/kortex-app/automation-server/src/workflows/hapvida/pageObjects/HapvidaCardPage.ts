@@ -1,16 +1,13 @@
 import type { Locator, Page } from "playwright";
 import { AutomationError } from "../../../errors.js";
+import { waitForRenderedCards, type CardBeneficiary } from "../cardPreview.js";
 
-export interface BeneficiarySearchInput {
-  beneficiaryName: string;
-  cpf?: string;
-  birthDate?: string;
-}
+export interface BeneficiarySearchInput extends CardBeneficiary {}
 
 function normalizeText(value: string) {
   return value
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\u0300-\u036f\u00ad\u200b-\u200d\ufeff]/g, "")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
@@ -28,7 +25,7 @@ const ROW_SELECTOR = 'tr, [role="row"]';
 const CONTROL_SELECTOR = 'input[type="checkbox"], input[type="radio"], [role="checkbox"], [role="radio"]';
 
 export class HapvidaCardPage {
-  constructor(private readonly page: Page, private readonly previewTimeoutMs = 30_000) {}
+  constructor(private readonly page: Page, private readonly previewTimeoutMs = 30_000, private readonly portalUrl?: string) {}
 
   periodHeading() {
     return this.page.getByText(/datas?\s+de\s+ades[aã]o/i).first();
@@ -59,7 +56,7 @@ export class HapvidaCardPage {
     return this.page
       .getByRole("button", { name: /imprimir\s+selecionados/i })
       .or(this.page.getByRole("link", { name: /imprimir\s+selecionados/i }))
-      .or(this.page.locator('input[value*="imprimir" i]'));
+      .or(this.page.locator('input[value*="imprimir selecionados" i], input[value*="imprimir selecionadas" i]'));
   }
 
   async waitForPeriodForm() {
@@ -88,6 +85,13 @@ export class HapvidaCardPage {
       });
     }
 
+    const identity = await this.readRowIdentity(row);
+    if (input.cpf && identity.cpf && onlyDigits(input.cpf) !== identity.cpf) {
+      throw new AutomationError("BENEFICIARY_NOT_FOUND", "O CPF da linha nao corresponde ao pedido.", { step: "find_beneficiary" });
+    }
+    // Old portal lists can contain preselected rows. Never print another person's card with this request.
+    await this.clearSelections(selection.control);
+
     try {
       const native = /^(checkbox|radio)$/i.test(await selection.control.getAttribute("type") ?? "");
       const checked = native ? await selection.control.isChecked() : await selection.control.getAttribute("aria-checked") === "true";
@@ -103,6 +107,128 @@ export class HapvidaCardPage {
         step: "confirm_beneficiary_selection", retryable: true,
       });
     }
+    await this.assertSelectedControls([selection.control]);
+    return { ...input, cpf: input.cpf ?? identity.cpf, cardIdentifiers: identity.cardIdentifiers, requireIdentifier: identity.requireIdentifier };
+  }
+
+  async selectAllBeneficiaries(): Promise<BeneficiarySearchInput[]> {
+    const nextPage = this.page.getByRole("link", { name: /^(?:proxima|próxima|seguinte|next)(?:\s+p[aá]gina)?$/i })
+      .or(this.page.getByRole("button", { name: /^(?:proxima|próxima|seguinte|next)(?:\s+p[aá]gina)?$/i }));
+    for (let index = 0; index < await nextPage.count(); index += 1) {
+      if (await nextPage.nth(index).isVisible() && await nextPage.nth(index).isEnabled() &&
+          await nextPage.nth(index).getAttribute("aria-disabled") !== "true") {
+        throw new AutomationError("CARD_BATCH_INCOMPLETE", "O portal apresentou uma lista paginada para emissao em lote.", {
+          safeDetails: "Nao foi entregue um lote parcial. Consulte um periodo que retorne a lista completa.", step: "select_beneficiary",
+        });
+      }
+    }
+    const rows = this.page.locator(ROW_SELECTOR);
+    const selections: Array<{ control: Locator; target: Locator; label: boolean; input: BeneficiarySearchInput }> = [];
+    for (let index = 0; index < await rows.count(); index += 1) {
+      const row = rows.nth(index);
+      if (!await row.isVisible() || await row.locator(ROW_SELECTOR).count() || await row.locator("th").count()) continue;
+      const selection = await this.findSelectionControl(row);
+      if (!selection) continue;
+      const identity = await this.readRowIdentity(row);
+      if (!identity.beneficiaryName) {
+        throw new AutomationError("CARD_BATCH_INCOMPLETE", "Nao foi possivel identificar todos os beneficiarios da lista.", {
+          safeDetails: "Uma linha selecionavel nao apresentou um nome identificavel. Nenhuma carteirinha foi impressa.", step: "select_beneficiary",
+        });
+      }
+      selections.push({ ...selection, input: identity });
+    }
+    if (!selections.length) throw new AutomationError("BENEFICIARY_NOT_FOUND", "Nao ha beneficiarios disponiveis no periodo informado.", { step: "find_beneficiary" });
+    const identityCandidates = new Map(selections.map(selection => [selection, [...(selection.input.cardIdentifiers ?? []), ...(selection.input.cpf ? [selection.input.cpf] : [])]]));
+    for (const selection of selections) {
+      const homonyms = selections.filter(other => normalizeText(other.input.beneficiaryName) === normalizeText(selection.input.beneficiaryName));
+      if (homonyms.length > 1) {
+        const ids = identityCandidates.get(selection)!;
+        const uniqueIds = ids.filter(id => homonyms.filter(other => identityCandidates.get(other)!.includes(id)).length === 1);
+        if (!uniqueIds.length) {
+          throw new AutomationError("BENEFICIARY_AMBIGUOUS", "Ha nomes repetidos sem identificador individual para conferir o lote.", { step: "find_beneficiary" });
+        }
+        selection.input.cardIdentifiers = uniqueIds;
+        if (selection.input.cpf && !uniqueIds.includes(selection.input.cpf)) selection.input.cpf = undefined;
+        selection.input.requireIdentifier = true;
+      }
+    }
+    await this.clearSelections();
+    try {
+      for (const selection of selections) {
+        const native = /^(checkbox|radio)$/i.test(await selection.control.getAttribute("type") ?? "");
+        if (native && !selection.label) await selection.control.check();
+        else if (!await this.isSelected(selection.control)) await selection.target.click();
+      }
+      await this.assertSelectedControls(selections.map(selection => selection.control));
+    } catch {
+      throw new AutomationError("BENEFICIARY_SELECTION_FAILED", "O portal nao confirmou a selecao completa do lote.", {
+        safeDetails: "Nenhum PDF foi gerado porque uma ou mais selecoes nao permaneceram marcadas.", step: "confirm_beneficiary_selection", retryable: true,
+      });
+    }
+    return selections.map(selection => selection.input);
+  }
+
+  private async isSelected(control: Locator) {
+    return /^(checkbox|radio)$/i.test(await control.getAttribute("type") ?? "")
+      ? control.isChecked() : await control.getAttribute("aria-checked") === "true";
+  }
+
+  private async clearSelections(except?: Locator) {
+    const controls = this.page.locator(`${ROW_SELECTOR.split(", ").map(row => `${row} ${CONTROL_SELECTOR.split(", ").join(`, ${row} `)}`).join(", ")}`);
+    const exceptHandle = except ? await except.elementHandle() : undefined;
+    try {
+      for (let index = 0; index < await controls.count(); index += 1) {
+        const control = controls.nth(index);
+        if (!await control.isEnabled() || !await this.isSelected(control)) continue;
+        if (exceptHandle && await control.evaluate((element, target) => element === target, exceptHandle)) continue;
+        const type = await control.getAttribute("type");
+        if (type === "radio") continue;
+        if (type === "checkbox" && await control.isVisible()) await control.uncheck();
+        else {
+          const row = control.locator('xpath=ancestor::*[self::tr or @role="row"][1]');
+          const selection = await this.findSelectionControl(row, control);
+          if (!selection) throw new AutomationError("BENEFICIARY_SELECTION_FAILED", "Nao foi possivel limpar uma selecao anterior.", { step: "confirm_beneficiary_selection" });
+          await selection.target.click();
+        }
+      }
+    } finally { await exceptHandle?.dispose(); }
+  }
+
+  private async assertSelectedControls(expected: Locator[]) {
+    for (const control of expected) if (!await this.isSelected(control)) throw new AutomationError("BENEFICIARY_SELECTION_FAILED", "A selecao nao foi confirmada.", { step: "confirm_beneficiary_selection" });
+    const checked = this.page.locator('tr input:checked, [role="row"] input:checked, tr [aria-checked="true"], [role="row"] [aria-checked="true"]');
+    if (await checked.count() !== expected.length) throw new AutomationError("BENEFICIARY_SELECTION_FAILED", "O portal manteve uma selecao diferente da solicitada.", { step: "confirm_beneficiary_selection" });
+  }
+
+  private async readRowIdentity(row: Locator): Promise<BeneficiarySearchInput> {
+    return row.evaluate(element => {
+      const node = element as any;
+      const normalize = (text: string) => text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+      const cells = Array.from(node.children as any[]).filter(cell => /^(TD|TH)$/.test(cell.tagName) || cell.getAttribute("role") === "cell");
+      const table = node.closest("table");
+      const header = table && (Array.from(table.querySelectorAll("tr") as any[]).find(row => row.querySelector("th") && !row.querySelector("tr")));
+      const headings = header ? Array.from(header.children as any[]).map(cell => normalize(cell.innerText ?? "")) : [];
+      let nameIndex = headings.findIndex(label => /\bnome\b/.test(label));
+      if (nameIndex < 0) nameIndex = headings.findIndex(label => /^(beneficiario|usuario|segurado)$/.test(label));
+      const candidates = cells.map(cell => (cell.innerText ?? "").trim()).filter(text => /^[\p{L} .'-]+$/u.test(text) &&
+        text.split(/\s+/).length >= 2 && !/\b(plano|selecionar|imprimir|carteira|contrato|titular|dependente)\b/i.test(text));
+      const beneficiaryName = nameIndex >= 0 ? (cells[nameIndex]?.innerText ?? "").trim() : candidates.length === 1 ? candidates[0] : "";
+      const cardIdentifiers: string[] = [];
+      let cpf: string | undefined;
+      let requireIdentifier = false;
+      headings.forEach((label, index) => {
+        const digits = (cells[index]?.innerText ?? "").replace(/\D/g, "");
+        if (/\bcpf\b/.test(label) && digits.length === 11) cpf = digits;
+        if (/\b(carteira|carteirinha|matricula)\b|(codigo|cd\.?|cod\.?).*(beneficiario|usuario|segurado)/.test(label) && digits.length >= 6 && !/^0+$/.test(digits)) {
+          cardIdentifiers.push(digits);
+          if (/\b(carteira|carteirinha)\b/.test(label)) requireIdentifier = true;
+        }
+      });
+      for (const input of node.querySelectorAll('input[name*="cd_beneficiario"], input[name*="cd_usuario"], input[name*="carteira"], input[name*="matricula"]')) {
+        const digits = (input.value ?? "").replace(/\D/g, ""); if (digits.length >= 6 && !/^0+$/.test(digits)) cardIdentifiers.push(digits);
+      }
+      return { beneficiaryName, cpf, cardIdentifiers: [...new Set(cardIdentifiers)], requireIdentifier };
+    });
   }
 
   private async waitForBeneficiaryList() {
@@ -132,8 +258,8 @@ export class HapvidaCardPage {
     await ready.dispose();
   }
 
-  private async findSelectionControl(row: Locator) {
-    const controls = row.locator(CONTROL_SELECTOR);
+  private async findSelectionControl(row: Locator, specificControl?: Locator) {
+    const controls = specificControl ?? row.locator(CONTROL_SELECTOR);
     for (let index = 0; index < await controls.count(); index += 1) {
       const control = controls.nth(index);
       if (!(await control.isEnabled().catch(() => false))) continue;
@@ -164,64 +290,11 @@ export class HapvidaCardPage {
   }
 
   async waitForCardPreview(input: BeneficiarySearchInput) {
-    const expectedName = normalizeText(input.beneficiaryName);
-    if (!expectedName) {
-      throw new AutomationError("MISSING_REQUIRED_DATA", "Nome do beneficiario nao informado.", {
-        step: "validate_card_preview", retryable: false,
-      });
-    }
+    return (await waitForRenderedCards(this.page, [input], this.previewTimeoutMs, this.portalUrl))[0];
+  }
 
-    try {
-      const confirmed = await this.page.waitForFunction(({ expectedName }) => {
-        // The portal can put "Carteira Provisoria" only in <title>, which is
-        // metadata and never visible. Validate the rendered document instead.
-        const scope = globalThis as unknown as {
-          document: {
-            title: string;
-            body?: { innerText: string; getBoundingClientRect(): { width: number; height: number } };
-            querySelector(selector: string): unknown;
-          };
-          getComputedStyle(element: unknown): { display: string; visibility: string };
-        };
-        const document = scope.document;
-        const body = document.body;
-        if (!body) return false;
-        const bounds = body.getBoundingClientRect();
-        const style = scope.getComputedStyle(body);
-        if (!bounds.width || !bounds.height || style.display === "none" || style.visibility === "hidden") return false;
-        const normalize = (text: string) => text.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-          .replace(/\s+/g, " ").trim().toLowerCase();
-        const text = normalize(body.innerText);
-        const cardDocument = /carteira\s+provisoria|carteirinha|cartao\s+(?:do\s+beneficiario|de\s+identificacao)/
-          .test(`${normalize(document.title)} ${text}`);
-        const operationForm = document.querySelector('input[type="checkbox"], input[type="password"], #p_cd_empresa, #p_cd_senha');
-        const portalError = /identificacao\s+invalida|sessao\s+expirada|acesso\s+negado|nao\s+foi\s+possivel\s+(?:emitir|gerar)/.test(text);
-        return cardDocument && !operationForm && !portalError && text.includes(expectedName);
-      }, { expectedName }, { timeout: this.previewTimeoutMs });
-      await confirmed.dispose();
-    } catch {
-      const text = normalizeText(await this.page.locator("body").innerText().catch(() => ""));
-      if (text && !text.includes(expectedName)) {
-        throw new AutomationError("CARD_VALIDATION_FAILED", "A carteirinha gerada nao corresponde ao beneficiario solicitado.", {
-          safeDetails: "O nome do beneficiario nao foi encontrado no conteudo renderizado da carteirinha.",
-          step: "validate_card_preview", retryable: false,
-        });
-      }
-      throw new AutomationError("CARD_PREVIEW_NOT_FOUND", "Nao foi possivel confirmar a previa da carteirinha.", {
-        safeDetails: "O documento nao ficou pronto com o nome solicitado. Titulos de aba, formularios de login e listas de selecao nao confirmam uma carteirinha.",
-        step: "validate_card_preview", retryable: false,
-      });
-    }
-
-    const pageText = normalizeText((await this.page.locator("body").innerText().catch(() => "")) ?? "");
-
-    if (!pageText.includes(expectedName)) {
-      throw new AutomationError("CARD_VALIDATION_FAILED", "A carteirinha gerada nao corresponde ao beneficiario solicitado.", {
-        safeDetails: "O nome do beneficiario nao foi encontrado na pre-visualizacao da carteirinha.",
-        step: "validate_card_preview",
-        retryable: false,
-      });
-    }
+  async waitForCardPreviews(inputs: BeneficiarySearchInput[]) {
+    return waitForRenderedCards(this.page, inputs, this.previewTimeoutMs, this.portalUrl);
   }
 
   private async findSingleBeneficiaryRow(input: BeneficiarySearchInput) {

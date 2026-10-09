@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { isAllBeneficiariesRequest } from "../workflows/hapvida/cardIssueScope.js";
+import { portalLoginCode } from "../credentials/credentialIdentity.js";
 
 const noSensitiveKeys = (value: unknown) => {
   if (!value || typeof value !== "object") return true;
@@ -35,6 +37,7 @@ export const OperatorSchema = z.enum(["hapvida", "ndi"]).default("hapvida");
 export const CardIssuePayloadSchema = z
   .object({
     portalSearch: z.enum(["auto", "selected"]).default("auto"),
+    beneficiaryScope: z.enum(["single", "all"]).optional(),
     beneficiaryName: z.string().min(1),
     cpf: z.string().min(1).optional(),
     birthDate: z.string().min(1).optional(),
@@ -45,7 +48,13 @@ export const CardIssuePayloadSchema = z
     contractCode: z.string().min(1).optional(),
     documentIds: z.array(z.string().uuid()).optional(),
   })
-  .passthrough();
+  .passthrough()
+  .transform(input => ({ ...input, beneficiaryScope: isAllBeneficiariesRequest(input) ? "all" as const : "single" as const }))
+  .superRefine((input, context) => {
+    if (input.beneficiaryScope === "all" && !portalLoginCode(input)) {
+      context.addIssue({ code: "custom", path: ["contractCode"], message: "Informe o codigo da empresa para emitir todas as carteirinhas." });
+    }
+  });
 
 export const InclusionHolderPayloadSchema = z
   .object({

@@ -211,7 +211,8 @@ export function loadConfig(): AutomationConfig {
     downloadTimeoutMs: numberEnv(process.env.KOA_BROWSER_DOWNLOAD_TIMEOUT_MS, 60_000),
     features: {
       cardIssue: booleanEnv(process.env.FEATURE_KOA_CARD_ISSUE ?? process.env.KOA_CARD_ISSUE_ENABLED, true),
-      cardIssueBatch: booleanEnv(process.env.KOA_CARD_ISSUE_BATCH_ENABLED, false),
+      // An explicit TODOS request uses the same authorization and feature switch as individual issuance.
+      cardIssueBatch: booleanEnv(process.env.FEATURE_KOA_CARD_ISSUE ?? process.env.KOA_CARD_ISSUE_ENABLED, true),
       cardIssueActiveUsersPreflight: booleanEnv(process.env.KOA_CARD_ACTIVE_USERS_PREFLIGHT_ENABLED, false),
       inclusion: booleanEnv(process.env.FEATURE_KOA_INCLUSION ?? process.env.KOA_INCLUSION_ENABLED, false),
       inclusionPreview: booleanEnv(

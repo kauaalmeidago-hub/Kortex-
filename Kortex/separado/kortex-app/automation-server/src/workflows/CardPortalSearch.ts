@@ -3,6 +3,7 @@ import { credentialRefForLogin, portalLoginCode } from "../credentials/credentia
 import type { OperationRecord, PortalCredential, PortalName } from "../types.js";
 import type { WorkflowContext } from "./WorkflowContext.js";
 import { emitCard } from "./hapvida/emitCard.js";
+import { isAllBeneficiariesRequest } from "./hapvida/cardIssueScope.js";
 
 type SearchProgress = { contractCode?: string; requestKey: string; notFound: PortalName[]; visited: PortalName[] };
 const portals: PortalName[] = ["hapvida", "ndi"];
@@ -18,7 +19,8 @@ export async function searchCardPortals(operation: OperationRecord, signal: Abor
 
   const contractCode = portalLoginCode(operation.input);
   const requestKey = JSON.stringify([contractCode, operation.input.beneficiaryName, operation.input.cpf,
-    operation.input.birthDate, operation.input.periodStart ?? operation.input.startDate, operation.input.periodEnd ?? operation.input.endDate]);
+    operation.input.birthDate, operation.input.periodStart ?? operation.input.startDate, operation.input.periodEnd ?? operation.input.endDate,
+    ...(isAllBeneficiariesRequest(operation.input) ? ["all"] : [])]);
   const previous = operation.result?.cardPortalSearch as Partial<SearchProgress> | undefined;
   const progress: SearchProgress = {
     contractCode,

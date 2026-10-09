@@ -44,6 +44,7 @@ import type { OperationConnectionState } from "@/services/operationMonitoring";
 import { useAuth } from "@/contexts/AuthContext";
 import { validateKoaPeriod } from "@/utils/koaDate";
 import { KoaArtifactDownload } from "@/components/KoaArtifactDownload";
+import { isAllCardBeneficiaries } from "@/utils/cardIssueScope";
 
 type ConversationStatus = "active" | "pending" | "resolved";
 type ConversationTab = "all" | ConversationStatus;
@@ -666,6 +667,8 @@ type KoaOperation = {
   result?: {
     operator?: "hapvida" | "ndi";
     beneficiaryName?: string;
+    beneficiaryScope?: "single" | "all";
+    beneficiaryCount?: number;
     beneficiaryCpfMasked?: string;
     contractCode?: string;
     cancellationReason?: string;
@@ -811,6 +814,7 @@ function safeKoaErrorMessage(code?: string) {
   if (code === "CREDENTIAL_NOT_FOUND") return "Credencial segura não encontrada.";
   if (code === "CREDENTIAL_STORE_UNAVAILABLE") return "Não consegui consultar os acessos salvos. Tente novamente quando a conexão voltar.";
   if (code === "CREDENTIAL_SAVE_FAILED") return "O acesso foi validado, mas não consegui salvá-lo para as próximas emissões.";
+  if (code === "CARD_BATCH_INCOMPLETE") return "Não consegui confirmar a lista completa para emitir todas as carteirinhas.";
   if (code === "BENEFICIARY_NOT_FOUND") return "Beneficiário não encontrado.";
   if (code === "BENEFICIARY_SELECTION_FAILED") return "O portal não confirmou a seleção do beneficiário. A emissão foi interrompida antes de imprimir.";
   if (code === "PORTAL_RESULTS_NOT_READY") return "A lista de beneficiários não terminou de carregar. Tente a consulta novamente.";
@@ -869,6 +873,8 @@ function mapAutomationOperation(response: AutomationOperationResponse, type: Koa
       ? {
           operator: response.result.operator === "ndi" || response.result.operator === "hapvida" ? response.result.operator : undefined,
           beneficiaryName: typeof response.result.beneficiaryName === "string" ? response.result.beneficiaryName : undefined,
+          beneficiaryScope: response.result.beneficiaryScope === "all" ? "all" : "single",
+          beneficiaryCount: typeof response.result.beneficiaryCount === "number" ? response.result.beneficiaryCount : undefined,
           beneficiaryCpfMasked: typeof response.result.beneficiaryCpfMasked === "string" ? response.result.beneficiaryCpfMasked : undefined,
           contractCode: typeof response.result.contractCode === "string" ? response.result.contractCode : undefined,
           cancellationReason: typeof response.result.cancellationReason === "string" ? response.result.cancellationReason : undefined,
@@ -1148,6 +1154,7 @@ function KoaPanel({
           ? {
               portalSearch: "auto",
               beneficiaryName: values.beneficiaryName.trim(),
+              beneficiaryScope: isAllCardBeneficiaries(values.beneficiaryName) ? "all" : "single",
               periodStart: cardPeriod.periodStart,
               periodEnd: cardPeriod.periodEnd,
               contractCode: values.contractCode.trim() || undefined,
@@ -1832,6 +1839,7 @@ function KoaOperationResult({
   const resultRows = [
     operation.type === "card" && operation.result?.operator ? { label: "Operadora", value: operation.result.operator === "ndi" ? "NDI" : "Hapvida" } : null,
     operation.result?.beneficiaryName ? { label: "Beneficiário", value: operation.result.beneficiaryName } : null,
+    operation.result?.beneficiaryScope === "all" ? { label: "Beneficiários", value: `${operation.result.beneficiaryCount ?? 0} carteirinhas` } : null,
     operation.result?.portalStatusCode ? { label: "Código Hapvida", value: operation.result.portalStatusCode } : null,
     operation.result?.status ? { label: "Status", value: operation.result.status } : null,
     operation.result?.protocol ? { label: "Protocolo", value: operation.result.protocol } : null,
@@ -1844,7 +1852,9 @@ function KoaOperationResult({
         : operation.type === "exclusion"
           ? "Solicitação de exclusão registrada no portal."
           : operationSuccessMessage(operation.type)
-      : operationSuccessMessage(operation.type);
+      : operation.type === "card" && operation.result?.beneficiaryScope === "all"
+        ? `${operation.result.beneficiaryCount ?? 0} carteirinhas emitidas e validadas.`
+        : operationSuccessMessage(operation.type);
 
   return (
     <div className="w-fit max-w-[86%] rounded-2xl rounded-bl-md bg-secondary px-4 py-3 text-sm text-foreground">
@@ -1860,7 +1870,7 @@ function KoaOperationResult({
         </div>
       )}
       {operation.result?.fileName && (
-        <KoaArtifactDownload operationId={operation.id} fileName={operation.result.fileName} label={operation.type === "card" ? "Baixar carteirinha" : "Baixar comprovante"} />
+        <KoaArtifactDownload operationId={operation.id} fileName={operation.result.fileName} label={operation.type === "card" ? operation.result.beneficiaryScope === "all" ? "Baixar todas as carteirinhas" : "Baixar carteirinha" : "Baixar comprovante"} />
       )}
     </div>
   );
@@ -1898,8 +1908,8 @@ function KoaMovementForm({
             <KoaTextField icon={CalendarDays} label="Data inicial" value={values.startDate} error={errors.startDate} placeholder="DD/MM/AAAA" onChange={(value) => onChange("startDate", value)} />
             <KoaTextField icon={CalendarDays} label="Data final" value={values.endDate} error={errors.endDate} placeholder="DD/MM/AAAA" onChange={(value) => onChange("endDate", value)} />
           </div>
-          <KoaTextField icon={Users} label="Nome completo do beneficiário" value={values.beneficiaryName} error={errors.beneficiaryName} placeholder="Digite o nome completo" onChange={(value) => onChange("beneficiaryName", value)} />
-          <KoaInfoNote>Informe o período em que o beneficiário foi incluído.</KoaInfoNote>
+          <KoaTextField icon={Users} label="Nome do beneficiário ou TODOS" value={values.beneficiaryName} error={errors.beneficiaryName} placeholder="Nome completo ou TODOS" onChange={(value) => onChange("beneficiaryName", value)} />
+          <KoaInfoNote>Digite TODOS para emitir as carteirinhas disponíveis da empresa no período informado.</KoaInfoNote>
         </div>
         <KoaSubmitButton onClick={onSubmit}>Emitir carteirinha</KoaSubmitButton>
       </KoaFormCard>
@@ -2024,6 +2034,7 @@ function validateKoaValues(flow: KoaFlow, values: KoaFormValues) {
 
   if (flow === "carteirinha") {
     ["startDate", "endDate", "beneficiaryName"].forEach((key) => requireValue(key as keyof KoaFormValues));
+    if (isAllCardBeneficiaries(values.beneficiaryName)) requireValue("contractCode", "Informe o código da empresa para emitir todas.");
     if (values.startDate.trim() && values.endDate.trim()) {
       const period = validateKoaPeriod(values.startDate, values.endDate);
       if (!period.valid) {

@@ -7,7 +7,7 @@ import type { OperationEvent, OperationRecord } from "../../types.js";
 const mocks = vi.hoisted(() => ({
   open: vi.fn(), ready: vi.fn(), login: vi.fn(), passwordVisible: vi.fn(), invalid: vi.fn(),
   periodForm: vi.fn(), fillPeriod: vi.fn(), submitPeriod: vi.fn(), selectBeneficiary: vi.fn(),
-  requestCards: vi.fn(), preview: vi.fn(), remember: vi.fn(), loginPages: [] as unknown[], cardPages: [] as unknown[], loginOptions: [] as unknown[],
+  requestCards: vi.fn(), preview: vi.fn(), selectAll: vi.fn(), previews: vi.fn(), remember: vi.fn(), loginPages: [] as unknown[], cardPages: [] as unknown[], loginOptions: [] as unknown[],
 }));
 vi.mock("./pageObjects/HapvidaLoginPage.js", () => ({ HapvidaLoginPage: class {
   constructor(page: unknown, url: unknown, _timeout: unknown, label: unknown) { mocks.loginPages.push(page); mocks.loginOptions.push({ url, label }); }
@@ -18,6 +18,7 @@ vi.mock("./pageObjects/HapvidaCardPage.js", () => ({ HapvidaCardPage: class {
   constructor(page: unknown) { mocks.cardPages.push(page); }
   waitForPeriodForm = mocks.periodForm; fillPeriod = mocks.fillPeriod; submitPeriod = mocks.submitPeriod;
   selectBeneficiary = mocks.selectBeneficiary; requestSelectedCards = mocks.requestCards; waitForCardPreview = mocks.preview;
+  selectAllBeneficiaries = mocks.selectAll; waitForCardPreviews = mocks.previews;
 } }));
 vi.mock("../../authentication/RememberedCredentialService.js", () => ({ RememberedCredentialService: class {
   saveValidatedCredential = mocks.remember;
@@ -241,5 +242,33 @@ describe("CARD_ISSUE authentication in the execution context", () => {
     await expect(emitCard(f.operation, new AbortController().signal, f.context)).rejects.toMatchObject({ code: "PDF_VALIDATION_FAILED" });
     expect(f.artifactSave).not.toHaveBeenCalled();
     expect(f.events.some((event) => event.type === "artifact.created" || event.type === "operation.success")).toBe(false);
+  });
+
+  it("issues all returned NDI beneficiaries in one PDF after verifying every selection", async () => {
+    const f = fixture(false);
+    f.operation.portal = "ndi";
+    f.operation.input = { ...f.operation.input, beneficiaryName: "TODOS", contractCode: "0ABC" };
+    f.validate.mockReset().mockResolvedValue(true);
+    const selected = [{ beneficiaryName: "PESSOA DE TESTE UM" }, { beneficiaryName: "PESSOA DE TESTE DOIS" }];
+    mocks.selectAll.mockResolvedValue(selected);
+    await emitCard(f.operation, new AbortController().signal, f.context);
+    expect(mocks.selectBeneficiary).not.toHaveBeenCalled();
+    expect(mocks.selectAll).toHaveBeenCalledOnce();
+    expect(mocks.previews).toHaveBeenCalledWith(selected);
+    expect(f.operation.result).toMatchObject({ operator: "ndi", beneficiaryScope: "all", beneficiaryCount: 2 });
+    expect(f.artifactSave).toHaveBeenCalledWith(expect.objectContaining({ fileName: "carteirinhas-empresa-0abc.pdf" }));
+    expect(f.page.pdf).toHaveBeenCalledWith(expect.objectContaining({ format: "A4" }));
+    expect(f.operation.status).toBe("success");
+  });
+
+  it("does not print or report a complete batch when one selected person's preview is missing", async () => {
+    const f = fixture(false);
+    f.operation.input = { ...f.operation.input, beneficiaryName: "todos", contractCode: "0ABC" };
+    f.validate.mockReset().mockResolvedValue(true);
+    mocks.selectAll.mockResolvedValue([{ beneficiaryName: "PESSOA DE TESTE UM" }, { beneficiaryName: "PESSOA DE TESTE DOIS" }]);
+    mocks.previews.mockRejectedValue(new AutomationError("CARD_VALIDATION_FAILED", "Falta um beneficiario no documento."));
+    await expect(emitCard(f.operation, new AbortController().signal, f.context)).rejects.toMatchObject({ code: "CARD_VALIDATION_FAILED" });
+    expect(f.page.pdf).not.toHaveBeenCalled(); expect(f.artifactSave).not.toHaveBeenCalled();
+    expect(f.operation.artifacts).toEqual([]);
   });
 });

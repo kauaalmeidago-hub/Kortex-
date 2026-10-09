@@ -6,7 +6,9 @@ import { requireInput } from "./validators.js";
 import { RememberedCredentialService } from "../../authentication/RememberedCredentialService.js";
 import { ActiveUsersPreflightService } from "./ActiveUsersPreflightService.js";
 import { HapvidaLoginPage } from "./pageObjects/HapvidaLoginPage.js";
-import { HapvidaCardPage } from "./pageObjects/HapvidaCardPage.js";
+import { HapvidaCardPage, type BeneficiarySearchInput } from "./pageObjects/HapvidaCardPage.js";
+import { isAllBeneficiariesRequest } from "./cardIssueScope.js";
+import { materializeCardDocuments } from "./cardPreview.js";
 import { HapvidaMovementAccessPage } from "./pageObjects/HapvidaMovementAccessPage.js";
 import { HapvidaMovementMainMenuPage } from "./pageObjects/HapvidaMovementMainMenuPage.js";
 import { HapvidaActiveUsersPage } from "./pageObjects/HapvidaActiveUsersPage.js";
@@ -61,7 +63,7 @@ async function prepareCardOnlyPrint(page: Page, beneficiaryName: string, title: 
       const doc = (globalThis as unknown as { document: any }).document;
       const normalize = (text: string) => text
         .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[\u0300-\u036f\u00ad\u200b-\u200d\ufeff]/g, "")
         .replace(/\s+/g, " ")
         .trim()
         .toLowerCase();
@@ -113,8 +115,7 @@ async function prepareCardOnlyPrint(page: Page, beneficiaryName: string, title: 
           background: #ffffff !important;
         }
         #koa-card-print-root input,
-        #koa-card-print-root button,
-        #koa-card-print-root a {
+        #koa-card-print-root button {
           display: none !important;
         }
       `;
@@ -130,8 +131,8 @@ async function prepareCardOnlyPrint(page: Page, beneficiaryName: string, title: 
   ).catch(() => undefined);
 }
 
-async function printCurrentPageToPdf(page: Page, beneficiaryName: string, title: string) {
-  const printBox = await prepareCardOnlyPrint(page, beneficiaryName, title);
+async function printCurrentPageToPdf(page: Page, beneficiaryName: string, title: string, batch = false) {
+  const printBox = batch ? undefined : await prepareCardOnlyPrint(page, beneficiaryName, title);
   const printOptions = printBox
     ? {
         width: `${printBox.width}px`,
@@ -187,6 +188,10 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
   const cpf = readString(operation.input, ["cpf"]);
   const birthDate = readString(operation.input, ["birthDate"]);
   const requestedCompanyCode = portalLoginCode(operation.input);
+  const allBeneficiaries = isAllBeneficiariesRequest(operation.input);
+  if (allBeneficiaries && !requestedCompanyCode) {
+    throw new AutomationError("MISSING_REQUIRED_DATA", "Informe o codigo da empresa para emitir todas as carteirinhas.", { step: "validate_input" });
+  }
 
   if (!beneficiaryName) {
     throw new AutomationError("MISSING_REQUIRED_DATA", "Nome do beneficiario nao informado.", {
@@ -207,7 +212,7 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
     try {
       await context.browserManager.withContext(operation, signal, async (browserContext, page) => {
     const loginPage = new HapvidaLoginPage(page, portalUrl, context.config.authTimeoutMs, portalLabel);
-    const cardPage = new HapvidaCardPage(page);
+    const cardPage = new HapvidaCardPage(page, context.config.actionTimeoutMs ?? 30_000, portalUrl);
     const movementPortalUrl = context.config.hapvidaMovementPortalUrl;
     const movementAccessPage = new HapvidaMovementAccessPage(page, movementPortalUrl);
     const menuPage = new HapvidaMovementMainMenuPage(page);
@@ -237,7 +242,7 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
       return credential;
     };
 
-    const activeUsersCheck = portal === "hapvida" && context.config.features.cardIssueActiveUsersPreflight
+    const activeUsersCheck = !allBeneficiaries && portal === "hapvida" && context.config.features.cardIssueActiveUsersPreflight
       ? await (async () => {
           await context.updateStatus("authenticating", "Abrindo Sistema de Movimentacao Hapvida");
           await movementAccessPage.open().catch((error) => {
@@ -360,22 +365,28 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
     await cardPage.submitPeriod();
     assertNotAborted(signal);
 
-    await context.updateStatus("processing", "Localizando beneficiario");
-    await cardPage.selectBeneficiary({ beneficiaryName, cpf, birthDate });
+    await context.updateStatus("processing", allBeneficiaries ? "Selecionando todos os beneficiarios da empresa" : "Localizando beneficiario");
+    const selected: BeneficiarySearchInput[] = allBeneficiaries
+      ? await cardPage.selectAllBeneficiaries()
+      : [await cardPage.selectBeneficiary({ beneficiaryName, cpf, birthDate }) ?? { beneficiaryName, cpf, birthDate }];
+    if (!selected.length) throw new AutomationError("BENEFICIARY_NOT_FOUND", "Nao ha beneficiarios disponiveis para emitir.", { step: "find_beneficiary" });
     assertNotAborted(signal);
 
     await context.updateStatus("processing", "Emitindo carteirinha");
     const resultPage = await cardPage.requestSelectedCards();
-    const resultCardPage = new HapvidaCardPage(resultPage);
+    const resultCardPage = new HapvidaCardPage(resultPage, context.config.actionTimeoutMs ?? 30_000, portalUrl);
     assertNotAborted(signal);
 
     await context.updateStatus("verifying", "Validando carteirinha gerada");
-    await resultCardPage.waitForCardPreview({ beneficiaryName, cpf, birthDate });
+    const documents = allBeneficiaries
+      ? await resultCardPage.waitForCardPreviews(selected)
+      : [await resultCardPage.waitForCardPreview(selected[0]!)].filter((frame): frame is NonNullable<typeof frame> => Boolean(frame));
     assertNotAborted(signal);
+    if (documents?.length) await materializeCardDocuments(resultPage, documents, allBeneficiaries);
 
-    const fileName = `carteirinha-${safeFileNamePart(beneficiaryName)}.pdf`;
-    const pdfTitle = `Carteirinha - ${beneficiaryName.trim()}`;
-    const pdfBytes = validateCardPdfBytes(await printCurrentPageToPdf(resultPage, beneficiaryName, pdfTitle), fileName);
+    const fileName = allBeneficiaries ? `carteirinhas-empresa-${safeFileNamePart(requestedCompanyCode!)}.pdf` : `carteirinha-${safeFileNamePart(beneficiaryName)}.pdf`;
+    const pdfTitle = allBeneficiaries ? `Carteirinhas da empresa - ${requestedCompanyCode}` : `Carteirinha - ${beneficiaryName.trim()}`;
+    const pdfBytes = validateCardPdfBytes(await printCurrentPageToPdf(resultPage, beneficiaryName, pdfTitle, allBeneficiaries), fileName);
     const savedArtifact = await context.artifactStorage.save({
       operationId: operation.id,
       workspaceId: operation.workspaceId,
@@ -384,7 +395,9 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
       bytes: pdfBytes,
       type: "card_pdf",
       metadata: {
-        beneficiaryName,
+        beneficiaryName: allBeneficiaries ? undefined : beneficiaryName,
+        beneficiaryScope: allBeneficiaries ? "all" : "single",
+        beneficiaryCount: selected.length,
         companyId: operation.companyId,
         operator: operation.portal,
       },
@@ -407,10 +420,13 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
     const current = await context.repository.get(operation.id);
     const result: OperationResult = {
       ...current?.result,
-      beneficiaryName,
+      beneficiaryName: allBeneficiaries ? undefined : beneficiaryName,
+      beneficiaryScope: allBeneficiaries ? "all" : "single",
+      beneficiaryCount: selected.length,
+      beneficiaryNames: selected.map(input => input.beneficiaryName),
       companyId: operation.companyId,
       operator: operation.portal,
-      portalStatus: "Carteirinha emitida",
+      portalStatus: allBeneficiaries ? `${selected.length} carteirinhas emitidas` : "Carteirinha emitida",
       artifactId: artifact.id,
       activeUser: activeUsersCheck?.snapshot.target,
       finishedAt: new Date().toISOString(),
@@ -430,8 +446,9 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
       step: "card_pdf_created",
       data: { artifactId: artifact.id, fileName: artifact.fileName, mimeType: artifact.mimeType },
     });
-    await context.updateStatus("success", "Carteirinha emitida e validada", {
-      beneficiaryName,
+    await context.updateStatus("success", allBeneficiaries ? `${selected.length} carteirinhas emitidas e validadas` : "Carteirinha emitida e validada", {
+      beneficiaryName: allBeneficiaries ? undefined : beneficiaryName,
+      beneficiaryCount: selected.length,
       artifactId: artifact.id,
       fileName: artifact.fileName,
     });
