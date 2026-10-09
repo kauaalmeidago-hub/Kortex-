@@ -1176,7 +1176,7 @@ function KoaPanel({
               beneficiaryScope: isAllCardBeneficiaries(values.beneficiaryName) ? "all" : "single",
               periodStart: cardPeriod.periodStart,
               periodEnd: cardPeriod.periodEnd,
-              contractCode: values.contractCode.trim() || undefined,
+              contractCode: values.contractCode.trim().toUpperCase() || undefined,
               cpf: values.cpf.replace(/\D/g, "") || undefined,
               cardNumber: values.cardNumber.replace(/\D/g, "") || undefined,
             }
@@ -1331,7 +1331,7 @@ function KoaPanel({
         return "Não foi possível autenticar. Confira a senha e tente novamente.";
       }
 
-      setValues((current) => ({ ...current, contractCode: input.companyCode?.trim() || current.contractCode, password: "" }));
+      setValues((current) => ({ ...current, contractCode: input.companyCode?.trim().toUpperCase() || current.contractCode, password: "" }));
 
       if (result.operation) {
         const mapped = mapAutomationOperation(result.operation, operation.type);
@@ -1885,7 +1885,7 @@ function KoaMovementForm({
     return (
       <KoaFormCard icon={IdCard} title="Emissão de carteirinha">
         <div className="space-y-3">
-          <KoaTextField icon={FileText} name="koa-card-company-code" label="Código da empresa" value={values.contractCode} error={errors.contractCode} placeholder="Digite o código" onChange={(value) => onChange("contractCode", value)} />
+          <KoaTextField icon={FileText} name="koa-card-company-code" label="Código da empresa" value={values.contractCode} error={errors.contractCode} placeholder="Digite o código" onChange={(value) => onChange("contractCode", value.toUpperCase())} />
           <div className="grid gap-3">
             <KoaTextField icon={CalendarDays} label="Data inicial" value={values.startDate} error={errors.startDate} placeholder="DD/MM/AAAA" onChange={(value) => onChange("startDate", value)} />
             <KoaTextField icon={CalendarDays} label="Data final" value={values.endDate} error={errors.endDate} placeholder="DD/MM/AAAA" onChange={(value) => onChange("endDate", value)} />

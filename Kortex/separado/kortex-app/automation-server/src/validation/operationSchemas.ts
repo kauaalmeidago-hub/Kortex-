@@ -49,7 +49,8 @@ export const CardIssuePayloadSchema = z
     documentIds: z.array(z.string().uuid()).optional(),
   })
   .passthrough()
-  .transform(input => ({ ...input, beneficiaryScope: isAllBeneficiariesRequest(input) ? "all" as const : "single" as const }))
+  .transform(input => ({ ...input, ...(portalLoginCode(input) ? { contractCode: portalLoginCode(input) } : {}),
+    beneficiaryScope: isAllBeneficiariesRequest(input) ? "all" as const : "single" as const }))
   .superRefine((input, context) => {
     if (input.beneficiaryScope === "all" && !portalLoginCode(input)) {
       context.addIssue({ code: "custom", path: ["contractCode"], message: "Informe o codigo da empresa para emitir todas as carteirinhas." });

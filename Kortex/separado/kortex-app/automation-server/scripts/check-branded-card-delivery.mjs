@@ -110,6 +110,7 @@ async function check(label, { portal = "ndi", all = false, target = 1, include =
       operation=repository.get(operation.id);await run();operation=repository.get(operation.id);
     }
     assert.equal(operation.status,"success");assert.equal(pdfs.length,1);assert.equal(printed.length,1);
+    assert.equal(printed[0].all,false,"TODOS and individual requests must use Imprimir selecionados");
     if (chooseHomonym || duplicateRow) assert.deepEqual(printed[0].checked,[target]);
     const expected=all?persons.map((_,index)=>index):[target,...(include?persons.map((person,index)=>person.holder===id(target)?index:-1).filter(index=>index>=0):[])];
     assert.equal(operation.result.beneficiaryCount,expected.length);

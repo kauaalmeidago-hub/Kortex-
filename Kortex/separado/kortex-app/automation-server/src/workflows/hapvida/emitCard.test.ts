@@ -183,6 +183,7 @@ describe("CARD_ISSUE authentication in the execution context", () => {
   it("uses the requested code instead of an earlier valid portal session", async () => {
     const f = fixture(true);
     f.operation.input.contractCode = "0NEW";
+    f.operation.credentialRef = "hapvida:company-1:login:0NEW";
     f.validate.mockReset().mockResolvedValue(true);
     f.getSecret.mockResolvedValue({ username: "0NEW", password: "new-password", metadata: { rememberOnDevice: true } });
     await emitCard(f.operation, new AbortController().signal, f.context);
@@ -332,6 +333,7 @@ describe("CARD_ISSUE authentication in the execution context", () => {
   it("issues all returned NDI beneficiaries in one PDF after verifying every selection", async () => {
     const f = fixture(false);
     f.operation.portal = "ndi";
+    f.operation.credentialRef = "ndi:company-1:login:0ABC";
     f.operation.input = { ...f.operation.input, beneficiaryName: "TODOS", contractCode: "0ABC" };
     f.validate.mockReset().mockResolvedValue(true);
     const selected = [{ beneficiaryName: "PESSOA DE TESTE UM" }, { beneficiaryName: "PESSOA DE TESTE DOIS" }];
@@ -348,6 +350,7 @@ describe("CARD_ISSUE authentication in the execution context", () => {
 
   it("does not print or report a complete batch when one selected person's preview is missing", async () => {
     const f = fixture(false);
+    f.operation.credentialRef = "hapvida:company-1:login:0ABC";
     f.operation.input = { ...f.operation.input, beneficiaryName: "todos", contractCode: "0ABC" };
     f.validate.mockReset().mockResolvedValue(true);
     mocks.selectAll.mockResolvedValue([{ beneficiaryName: "PESSOA DE TESTE UM" }, { beneficiaryName: "PESSOA DE TESTE DOIS" }]);
@@ -355,5 +358,28 @@ describe("CARD_ISSUE authentication in the execution context", () => {
     await expect(emitCard(f.operation, new AbortController().signal, f.context)).rejects.toMatchObject({ code: "CARD_VALIDATION_FAILED" });
     expect(f.page.pdf).not.toHaveBeenCalled(); expect(f.artifactSave).not.toHaveBeenCalled();
     expect(f.operation.artifacts).toEqual([]);
+  });
+  it.each(["hapvida", "ndi"] as const)("issues directly in %s even with the movement preflight flag left enabled", async portal => {
+    const f = fixture(false);
+    f.operation.portal = portal;
+    f.operation.credentialRef = `${portal}:company-1:login:EKKRY`;
+    f.operation.input.contractCode = " ekkry ";
+    f.context.config.ndiCardPortalUrl = "https://ndi.test/card";
+    f.context.config.hapvidaMovementPortalUrl = "https://must-not-open.test/movement";
+    f.context.config.features.cardIssueActiveUsersPreflight = true;
+    f.getSecret.mockResolvedValue({ username: "ekkry", password: "new-password", metadata: { rememberOnDevice: false } });
+    await emitCard(f.operation, new AbortController().signal, f.context);
+    expect(mocks.login).toHaveBeenCalledWith(expect.objectContaining({ username: "EKKRY" }));
+    expect(f.context.browserManager.validateAllowedUrl).not.toHaveBeenCalledWith(f.context.config.hapvidaMovementPortalUrl, expect.anything());
+    expect(f.operation.status).toBe("success");
+    expect(f.events.some(event => /movimentacao/i.test(event.step ?? ""))).toBe(false);
+  });
+  it("blocks another operator's credential reference before login even when the username matches", async () => {
+    const f = fixture(false);
+    f.operation.portal = "ndi";
+    f.operation.credentialRef = "hapvida:company-1:login:0ABC";
+    f.operation.input.contractCode = "0ABC";
+    await expect(emitCard(f.operation, new AbortController().signal, f.context)).rejects.toMatchObject({ code: "REAUTH_REQUIRED" });
+    expect(mocks.login).not.toHaveBeenCalled(); expect(f.artifactSave).not.toHaveBeenCalled();
   });
 });

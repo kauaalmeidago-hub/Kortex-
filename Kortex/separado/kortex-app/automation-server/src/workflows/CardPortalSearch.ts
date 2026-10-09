@@ -1,50 +1,59 @@
 import { AutomationError, assertNotAborted } from "../errors.js";
-import { credentialRefForLogin, portalLoginCode } from "../credentials/credentialIdentity.js";
+import { credentialRefForLogin, normalizePortalLoginCode, portalLoginCode } from "../credentials/credentialIdentity.js";
 import type { OperationRecord, PortalCredential, PortalName } from "../types.js";
 import type { WorkflowContext } from "./WorkflowContext.js";
 import { emitCard } from "./hapvida/emitCard.js";
 import { isAllBeneficiariesRequest } from "./hapvida/cardIssueScope.js";
 
-type SearchProgress = { contractCode?: string; requestKey: string; notFound: PortalName[]; visited: PortalName[] };
+type SearchProgress = { version: number; contractCode?: string; requestKey: string; notFound: PortalName[]; visited: PortalName[] };
+const SEARCH_VERSION = 2;
 const portals: PortalName[] = ["hapvida", "ndi"];
 const canSearchAnotherPortal = new Set(["AUTHENTICATION_FAILED", "REAUTH_REQUIRED", "BENEFICIARY_NOT_FOUND",
   "BENEFICIARY_NOT_ACTIVE", "ACTIVE_USERS_LIST_UNAVAILABLE", "PORTAL_URL_NOT_CONFIGURED", "PORTAL_AUTH_UNAVAILABLE"]);
 
 export async function searchCardPortals(operation: OperationRecord, signal: AbortSignal, context: WorkflowContext) {
-  if (operation.input.portalSearch === "selected") return emitCard(operation, signal, context);
-  if (operation.input.portalSearch !== "auto") {
+  const selectedPortal = operation.input.portalSearch === "selected";
+  if (!selectedPortal && operation.input.portalSearch !== "auto") {
     operation.input = { ...operation.input, portalSearch: "auto" };
     await context.repository.update(operation.id, { input: operation.input });
   }
 
   const contractCode = portalLoginCode(operation.input);
+  if (contractCode && operation.input.contractCode !== contractCode) {
+    operation.input = { ...operation.input, contractCode };
+    await context.repository.update(operation.id, { input: operation.input });
+  }
   const requestKey = JSON.stringify([operation.companyId, contractCode, operation.input.beneficiaryName, operation.input.cpf, operation.input.cardNumber,
     operation.input.birthDate, operation.input.periodStart ?? operation.input.startDate, operation.input.periodEnd ?? operation.input.endDate,
     ...(isAllBeneficiariesRequest(operation.input) ? ["all"] : [])]);
   const previous = operation.result?.cardPortalSearch as Partial<SearchProgress> | undefined;
   const progress: SearchProgress = {
+    version: SEARCH_VERSION,
     contractCode,
     requestKey,
-    notFound: previous && previous.requestKey === requestKey && Array.isArray(previous.notFound)
+    notFound: !selectedPortal && previous && previous.version === SEARCH_VERSION && previous.requestKey === requestKey && Array.isArray(previous.notFound)
       ? previous.notFound.filter((portal): portal is PortalName => portals.includes(portal as PortalName)) : [],
     visited: [],
   };
   const original = { portal: operation.portal, credentialRef: operation.credentialRef, credentialId: operation.credentialId };
   // A verified access for this exact company/code avoids probing the wrong portal on every new request.
   // A resumed authentication request keeps its current portal and its operation-scoped RAM credential.
-  const preferred = contractCode && previous?.requestKey !== requestKey
+  const preferred = !selectedPortal && contractCode && previous?.requestKey !== requestKey
     ? await context.credentialResolver?.preferredCardPortal?.({ companyId: operation.companyId, portalLoginCode: contractCode })
     : undefined;
   const first = preferred ?? original.portal;
-  const order = [first, ...portals.filter(portal => portal !== first)];
+  const order = selectedPortal ? [original.portal] : [first, ...portals.filter(portal => portal !== first)];
   const failures: Array<{ portal: PortalName; error: AutomationError }> = [];
   let submittedCredential: PortalCredential | undefined;
 
   const bind = async (portal: PortalName) => {
-    const resolved = portal === original.portal
-      ? original
+    const expectedRef = credentialRefForLogin(operation.companyId, portal, contractCode);
+    const candidate = !contractCode && portal === original.portal ? original
       : await context.credentialResolver?.resolve({ companyId: operation.companyId, operator: portal, portalLoginCode: contractCode })
-        ?? { credentialRef: credentialRefForLogin(operation.companyId, portal, contractCode), credentialId: undefined };
+        ?? { credentialRef: expectedRef, credentialId: undefined };
+    // Rebind even the initial portal: persisted legacy requests may carry another operator's reference.
+    const resolved = contractCode && candidate.credentialRef !== expectedRef
+      ? { credentialRef: expectedRef, credentialId: undefined } : candidate;
     const patch = { portal, credentialRef: resolved.credentialRef, credentialId: resolved.credentialId,
       result: { ...operation.result, cardPortalSearch: { ...progress, visited: [...progress.visited], notFound: [...progress.notFound] } } };
     const updated = await context.repository.update(operation.id, patch);
@@ -68,13 +77,16 @@ export async function searchCardPortals(operation: OperationRecord, signal: Abor
         secretProvider: { get: async ref => {
           // Only an explicitly submitted credential for this automatic search may cross portals in RAM.
           // Saved credentials remain scoped to their own operator, company and login code.
-          submittedCredential ??= context.secretProvider.takeAutomaticSearchCredential?.(original.credentialRef);
+          if (!selectedPortal) submittedCredential ??= context.secretProvider.takeAutomaticSearchCredential?.(original.credentialRef);
           if (submittedCredential) {
             if (useSubmitted || portal === original.portal) return submittedCredential;
             // The other operator may have a different, already validated password for this same code.
             // Try that operator's own saved access before falling back to the submitted RAM credential.
-            const saved = await context.secretProvider.get(ref).catch(() => undefined);
-            if (saved && (!contractCode || saved.username.trim() === contractCode)) {
+            const saved = await context.secretProvider.get(ref).catch(error => {
+              if (error instanceof AutomationError && error.code === "CREDENTIAL_STORE_UNAVAILABLE") throw error;
+              return undefined;
+            });
+            if (saved && (!contractCode || normalizePortalLoginCode(saved.username) === contractCode)) {
               savedOtherCredential = saved;
               return saved;
             }
@@ -96,6 +108,7 @@ export async function searchCardPortals(operation: OperationRecord, signal: Abor
     } catch (error) {
       assertNotAborted(signal);
       if (!(error instanceof AutomationError)) throw error;
+      if (selectedPortal) throw error;
       const listFailureBeforeSelection = error.code === "PORTAL_RESULTS_NOT_READY" ||
         (error.code === "PORTAL_CHANGED" && error.step === "select_beneficiary");
       if (!canSearchAnotherPortal.has(error.code) && !listFailureBeforeSelection) throw error;

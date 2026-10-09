@@ -4,6 +4,13 @@ import { KoaAuthenticationCard } from "./KoaAuthenticationCard";
 
 describe("company code and portal password in the chat", () => {
   const props = () => ({ defaultCompanyCode: "0TEST", portal: "ndi" as const, onCancelOperation: vi.fn(), onSubmitAuthentication: vi.fn(async () => undefined as string | undefined) });
+  it("shows and submits uppercase company codes while preserving password case", async () => {
+    const p = props(); render(<KoaAuthenticationCard {...p} defaultCompanyCode=" ekkry " />);
+    expect(screen.getByText("EKKRY")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Senha NDI"), { target: { value: "CaseSensitivePassword" } });
+    fireEvent.click(screen.getByRole("button", { name: "Entrar e continuar" }));
+    await waitFor(() => expect(p.onSubmitAuthentication).toHaveBeenCalledWith({ companyCode: "EKKRY", password: "CaseSensitivePassword", rememberOnDevice: true }));
+  });
   it("keeps the request's company code above the password and out of editable autofill inputs", async () => {
     const p = props(); render(<KoaAuthenticationCard {...p} />);
     const code = screen.getByText("0TEST"), password = screen.getByLabelText("Senha NDI");

@@ -17,7 +17,7 @@ import { CreateOperationSchema, validatePayload } from "./validation/operationSc
 import { sanitizeDiagnosticText } from "./security/redaction.js";
 import type { EphemeralCredentialStore } from "./secrets/EphemeralCredentialStore.js";
 import type { ArtifactStorage } from "./storage/ArtifactStorage.js";
-import { portalLoginCode } from "./credentials/credentialIdentity.js";
+import { normalizePortalLoginCode, portalLoginCode } from "./credentials/credentialIdentity.js";
 import { authenticationAttemptLimitError, countAuthenticationFailures } from "./authentication/AuthenticationAttemptPolicy.js";
 
 interface ServerDeps {
@@ -60,7 +60,7 @@ function readString(value: unknown) {
 }
 
 function companyCodeFor(operation: OperationRecord, input: { companyCode?: string }) {
-  return input.companyCode?.trim() || readString(operation.input.contractCode) || readString(operation.input.companyCode);
+  return input.companyCode?.trim() ? normalizePortalLoginCode(input.companyCode) : portalLoginCode(operation.input);
 }
 
 function readBearerToken(header: string | undefined) {

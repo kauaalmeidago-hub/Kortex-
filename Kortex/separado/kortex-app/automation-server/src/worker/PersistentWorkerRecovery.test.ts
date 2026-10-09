@@ -85,7 +85,7 @@ describe("worker queue connectivity recovery", () => {
     expect(repository.releaseLock.mock.calls.map(([key]) => key)).toEqual(["hapvida:company:synthetic-company", "ndi:company:synthetic-company"]);
     expect(mocks.workflow).toHaveBeenCalledOnce();
     expect(repository.upsertWorkerHeartbeat).toHaveBeenCalledWith("recovery-test", "online", expect.objectContaining({
-      cardIssueWorkflowVersion: 9, cardIssueBeneficiaryChoiceEnabled: true, cardDeliveryTemplateVersion: 1, cardDeliveryBrandingEnabled: true, cardIssueSingleCaptureEnabled: true, cardIssueDependentConfirmationEnabled: true, cardPreviewVersion: 2, cardIssueBatchEnabled: true, cardIssuePrintAllEnabled: true, cardPortalPreferenceVersion: 1, cardPortalSearchDefault: "auto", portalAccessStorageVersion: 1, portalAccessStorage: "local_dpapi",
+      cardIssueWorkflowVersion: 10, cardIssueBeneficiaryChoiceEnabled: true, cardDeliveryTemplateVersion: 1, cardDeliveryBrandingEnabled: true, cardIssueSingleCaptureEnabled: true, cardIssueDependentConfirmationEnabled: true, cardPreviewVersion: 2, cardIssueBatchEnabled: true, cardIssuePrintAllEnabled: false, cardIssuePrintSelectedEnabled: true, cardIssueDirectPortalEnabled: true, cardCredentialScopeVersion: 2, cardPortalPreferenceVersion: 2, cardPortalSearchDefault: "auto", portalAccessStorageVersion: 1, portalAccessStorage: "local_dpapi",
     }));
   });
 

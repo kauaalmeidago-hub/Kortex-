@@ -5,6 +5,7 @@ import { AutomationError } from "../errors.js";
 import type { OperationRecord, PortalCredential } from "../types.js";
 import { protectWithDpapi } from "../security/DpapiProtector.js";
 import { VaultCredentialStore } from "../secrets/VaultCredentialStore.js";
+import { credentialRefForLogin, normalizePortalLoginCode, portalLoginCode } from "../credentials/credentialIdentity.js";
 
 // Called only after the CARD_ISSUE worker has validated the actual portal session.
 export class RememberedCredentialService {
@@ -17,6 +18,12 @@ export class RememberedCredentialService {
     if (operation.type !== "CARD_ISSUE") {
       throw new AutomationError("AUTHENTICATION_NOT_SUPPORTED", "Persistencia de credencial indisponivel para esta operacao.");
     }
+    const code = normalizePortalLoginCode(credential.username), requestedCode = portalLoginCode(operation.input);
+    if ((requestedCode && requestedCode !== code) || (operation.credentialRef !== credentialRefForLogin(operation.companyId, operation.portal, code) &&
+        (requestedCode || operation.credentialRef !== credentialRefForLogin(operation.companyId, operation.portal)))) {
+      throw new AutomationError("CREDENTIAL_SCOPE_INVALID", "O acesso nao corresponde ao codigo e operadora do pedido.");
+    }
+    credential = { ...credential, username: code };
     let storedInDatabase = false;
     if (this.config.databaseUrl && operation.workspaceId) {
       let store: VaultCredentialStore | undefined;

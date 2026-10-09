@@ -11,7 +11,7 @@ export function KoaAuthenticationCard({ defaultCompanyCode, portal, notFoundPort
   onSubmitAuthentication: (input: { password: string; rememberOnDevice: boolean; companyCode?: string }) => Promise<string | undefined>;
 }) {
   const id = useId();
-  const [companyCode, setCompanyCode] = useState(defaultCompanyCode?.trim() ?? "");
+  const [companyCode, setCompanyCode] = useState(defaultCompanyCode?.trim().toUpperCase() ?? "");
   const [editingCode, setEditingCode] = useState(!defaultCompanyCode?.trim());
   const [password, setPassword] = useState("");
   const [visible, setVisible] = useState(false);
@@ -20,7 +20,7 @@ export function KoaAuthenticationCard({ defaultCompanyCode, portal, notFoundPort
   const [error, setError] = useState<string>();
   const inFlight = useRef(false);
   useEffect(() => {
-    if (!editingCode && defaultCompanyCode?.trim()) setCompanyCode(defaultCompanyCode.trim());
+    if (!editingCode && defaultCompanyCode?.trim()) setCompanyCode(defaultCompanyCode.trim().toUpperCase());
   }, [defaultCompanyCode, editingCode]);
   useEffect(() => { setPassword(""); setVisible(false); setError(undefined); }, [portal, defaultCompanyCode]);
   const portalLabel = portal === "ndi" ? "NDI" : "Hapvida";
@@ -29,7 +29,7 @@ export function KoaAuthenticationCard({ defaultCompanyCode, portal, notFoundPort
     if (!companyCode.trim()) { setError("Informe o código da empresa."); return; }
     if (!password) { setError("Informe a senha para continuar."); return; }
     inFlight.current = true; setSubmitting(true); setError(undefined);
-    try { setError(await onSubmitAuthentication({ companyCode: companyCode.trim(), password, rememberOnDevice })); }
+    try { setError(await onSubmitAuthentication({ companyCode: companyCode.trim().toUpperCase(), password, rememberOnDevice })); }
     catch { setError("Não consegui enviar o acesso. Tente novamente."); }
     finally { setPassword(""); setVisible(false); inFlight.current = false; setSubmitting(false); }
   };
@@ -46,7 +46,7 @@ export function KoaAuthenticationCard({ defaultCompanyCode, portal, notFoundPort
         <div className="flex min-h-11 items-center gap-3 rounded-xl border border-input bg-card px-3">
           <Building2 className="h-5 w-5 shrink-0 text-muted-foreground" />
           {editingCode ? <input id={`${id}-code`} name="koa-portal-company-code" autoComplete="off" value={companyCode}
-            onChange={event => { setCompanyCode(event.target.value); setError(undefined); }} placeholder="Digite o código da empresa"
+            onChange={event => { setCompanyCode(event.target.value.toUpperCase()); setPassword(""); setError(undefined); }} placeholder="Digite o código da empresa"
             className="min-w-0 flex-1 bg-transparent text-sm font-normal outline-none" />
             : <span id={`${id}-code`} className="min-w-0 flex-1 break-all font-semibold" aria-label="Código da empresa informado">{companyCode}</span>}
           {!editingCode && <button type="button" onClick={() => setEditingCode(true)} className="text-xs font-semibold text-primary">Alterar código</button>}

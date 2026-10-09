@@ -2,6 +2,7 @@ import pg from "pg";
 import { AutomationError } from "../errors.js";
 import type { OperationRecord, PortalCredential } from "../types.js";
 import type { SecretProvider } from "./SecretProvider.js";
+import { credentialRefForLogin, normalizePortalLoginCode, portalLoginCode } from "../credentials/credentialIdentity.js";
 
 const { Pool } = pg;
 const eligible = new Set(["active", "needs_verification"]);
@@ -54,8 +55,9 @@ export class VaultCredentialStore implements SecretProvider {
       const parsed = JSON.parse(row.decrypted_secret) as Partial<PortalCredential>;
       if (typeof parsed.username !== "string" || !parsed.username.trim() ||
           typeof parsed.password !== "string" || !parsed.password ||
-          (row.portal_login_code && parsed.username.trim() !== row.portal_login_code)) throw new Error("Invalid credential payload");
-      return { username: parsed.username, password: parsed.password };
+          (row.portal_login_code && normalizePortalLoginCode(parsed.username) !== normalizePortalLoginCode(row.portal_login_code))) throw new Error("Invalid credential payload");
+      if (ref.includes(":login:") && !ref.endsWith(`:login:${encodeURIComponent(normalizePortalLoginCode(parsed.username))}`)) throw new Error("Invalid credential code");
+      return { username: normalizePortalLoginCode(parsed.username), password: parsed.password };
     } catch {
       throw new AutomationError("INVALID_CREDENTIAL", "A credencial protegida nao corresponde ao cadastro solicitado.");
     }
@@ -69,8 +71,14 @@ export class VaultCredentialStore implements SecretProvider {
     if (!operation.workspaceId || !operation.credentialRef || !credential.username.trim() || !credential.password) {
       throw new AutomationError("CREDENTIAL_SCOPE_INVALID", "Faltam dados para associar o acesso a empresa e operadora.");
     }
-    const payload = JSON.stringify({ username: credential.username.trim(), password: credential.password });
-    const metadata = { source: "validated_portal_login", store: "supabase_vault", portalLoginCode: credential.username.trim(),
+    const code = normalizePortalLoginCode(credential.username), requestedCode = portalLoginCode(operation.input);
+    const expectedRef = credentialRefForLogin(operation.companyId, operation.portal, code);
+    if ((requestedCode && requestedCode !== code) || (operation.credentialRef !== expectedRef &&
+        (requestedCode || operation.credentialRef !== credentialRefForLogin(operation.companyId, operation.portal)))) {
+      throw new AutomationError("CREDENTIAL_SCOPE_INVALID", "O codigo, a empresa e a operadora nao correspondem ao acesso validado.");
+    }
+    const payload = JSON.stringify({ username: code, password: credential.password });
+    const metadata = { source: "validated_portal_login", store: "supabase_vault", portalLoginCode: code,
       registeredVia: "koa_chat_reauth", lastValidatedAt: new Date().toISOString() };
     const client = await this.pool.connect().catch(() => {
       throw new AutomationError("CREDENTIAL_DATABASE_SAVE_FAILED", "Nao foi possivel salvar o acesso no cofre.");
@@ -92,7 +100,7 @@ export class VaultCredentialStore implements SecretProvider {
          RETURNING id`,
         [operation.workspaceId, operation.companyId, operation.portal, operation.credentialRef,
           `${operation.portal === "ndi" ? "NDI" : "Hapvida"} - ${operation.companyId}`,
-          credential.username.trim().length <= 4 ? "***" : `${credential.username.trim().slice(0, 2)}***${credential.username.trim().slice(-2)}`,
+          code.length <= 4 ? "***" : `${code.slice(0, 2)}***${code.slice(-2)}`,
           JSON.stringify(metadata)],
       );
       const id = registration.rows[0]?.id;

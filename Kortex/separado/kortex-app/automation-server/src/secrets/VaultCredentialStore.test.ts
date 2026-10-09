@@ -34,6 +34,10 @@ beforeEach(() => {
 });
 
 describe("reading protected portal access", () => {
+  it("rejects a secret whose username belongs to another code even if public metadata matches it", async () => {
+    mocks.query.mockResolvedValue({ rows: [row({ portal_login_code: "0OTHER", decrypted_secret: JSON.stringify({ username: "0OTHER", password: "other-password" }) })] });
+    await expect(store().get(operation().credentialRef)).rejects.toMatchObject({ code: "INVALID_CREDENTIAL" });
+  });
   it("reads the requested reference and strips transient remember flags", async () => {
     const secrets = store();
     expect(await secrets.get(operation().credentialRef)).toEqual({ username: "0TEST", password: credential.password });
@@ -85,6 +89,17 @@ describe("reading protected portal access", () => {
   it("does not impose remote TLS on an isolated loopback test database", () => {
     new VaultCredentialStore("postgres://fixture@127.0.0.1/postgres");
     expect(new URL(mocks.pool.mock.calls[0]![0].connectionString).searchParams.has("sslmode")).toBe(false);
+  });
+});
+
+describe("credential scope before vault storage", () => {
+  it.each(["operator", "code", "company"])("does not persist a validated password under a different %s", async field => {
+    const op = operation();
+    if (field === "operator") op.portal = "hapvida";
+    if (field === "code") op.input.contractCode = "EKKRY";
+    if (field === "company") op.companyId = "other-company";
+    await expect(store().saveValidated(op, credential)).rejects.toMatchObject({ code: "CREDENTIAL_SCOPE_INVALID" });
+    expect(mocks.connect).not.toHaveBeenCalled(); expect(mocks.transaction).not.toHaveBeenCalled();
   });
 });
 

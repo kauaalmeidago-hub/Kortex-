@@ -3,17 +3,13 @@ import type { OperationArtifact, OperationRecord, OperationResult, PortalCredent
 import type { WorkflowContext } from "../WorkflowContext.js";
 import { requireInput } from "./validators.js";
 import { RememberedCredentialService } from "../../authentication/RememberedCredentialService.js";
-import { ActiveUsersPreflightService } from "./ActiveUsersPreflightService.js";
 import { HapvidaLoginPage } from "./pageObjects/HapvidaLoginPage.js";
 import { HapvidaCardPage, type BeneficiarySearchInput } from "./pageObjects/HapvidaCardPage.js";
 import { isAllBeneficiariesRequest } from "./cardIssueScope.js";
 import { createBrandedCardDelivery } from "./brandedCardDelivery.js";
-import { HapvidaMovementAccessPage } from "./pageObjects/HapvidaMovementAccessPage.js";
-import { HapvidaMovementMainMenuPage } from "./pageObjects/HapvidaMovementMainMenuPage.js";
-import { HapvidaActiveUsersPage } from "./pageObjects/HapvidaActiveUsersPage.js";
 import { validateCardPdfBytes } from "./downloadValidation.js";
 import { pendingCardDependents, type CardDependentConfirmation } from "./cardDependents.js";
-import { portalLoginCode } from "../../credentials/credentialIdentity.js";
+import { credentialRefForLogin, normalizePortalLoginCode, portalLoginCode } from "../../credentials/credentialIdentity.js";
 import { pendingCardBeneficiary, cardRowFingerprint, type CardBeneficiaryConfirmation } from "./cardBeneficiaryChoice.js";
 
 function readString(input: Record<string, unknown>, keys: string[]) {
@@ -89,7 +85,7 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
   const portalLabel = portal === "ndi" ? "NDI" : "Hapvida";
   const portalUrl = portal === "ndi"
     ? context.config.ndiCardPortalUrl
-    : context.config.hapvidaCardPortalUrl ?? context.config.hapvidaPortalUrl;
+    : context.config.hapvidaCardPortalUrl;
   let credential: PortalCredential | undefined;
 
   for (let portalAttempt = 1; portalAttempt <= CARD_PORTAL_AUTH_MAX_ATTEMPTS; portalAttempt += 1) {
@@ -97,17 +93,9 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
       await context.browserManager.withContext(operation, signal, async (browserContext, page) => {
     const loginPage = new HapvidaLoginPage(page, portalUrl, context.config.authTimeoutMs, portalLabel);
     const cardPage = new HapvidaCardPage(page, context.config.actionTimeoutMs ?? 30_000, portalUrl);
-    const movementPortalUrl = context.config.hapvidaMovementPortalUrl;
-    const movementAccessPage = new HapvidaMovementAccessPage(page, movementPortalUrl);
-    const menuPage = new HapvidaMovementMainMenuPage(page);
-    const activeUsersPage = new HapvidaActiveUsersPage(page);
 
     if (portalUrl) {
       context.browserManager.validateAllowedUrl(portalUrl, operation);
-    }
-
-    if (portal === "hapvida" && context.config.features.cardIssueActiveUsersPreflight && movementPortalUrl) {
-      context.browserManager.validateAllowedUrl(movementPortalUrl, operation);
     }
 
     const loadCredential = async () => {
@@ -119,49 +107,16 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
           `Nao foi possivel renovar a sessao ${portalLabel} sem uma credencial segura cadastrada para o Koa.`,
         );
       });
-      if (requestedCompanyCode && credential.username.trim() !== requestedCompanyCode) {
+      if (requestedCompanyCode && (normalizePortalLoginCode(credential.username) !== requestedCompanyCode ||
+          operation.credentialRef !== credentialRefForLogin(operation.companyId, portal, requestedCompanyCode))) {
         throw createReauthRequiredError("Informe a senha do codigo de empresa solicitado. O acesso salvo pertence a outro codigo.");
       }
+      credential = { ...credential, username: normalizePortalLoginCode(credential.username) };
       assertNotAborted(signal);
       return credential;
     };
 
-    const activeUsersCheck = !allBeneficiaries && portal === "hapvida" && context.config.features.cardIssueActiveUsersPreflight
-      ? await (async () => {
-          await context.updateStatus("authenticating", "Abrindo Sistema de Movimentacao Hapvida");
-          await movementAccessPage.open().catch((error) => {
-            if (error instanceof AutomationError && error.code === "PORTAL_URL_NOT_CONFIGURED") {
-              throw new AutomationError("ACTIVE_USERS_LIST_UNAVAILABLE", "URL do Sistema de Movimentacao Hapvida nao configurada.", {
-                safeDetails:
-                  "Configure HAPVIDA_MOVEMENT_PORTAL_URL para executar o pre-check da Lista Usuarios Ativos.",
-                step: "checking_active_users",
-                retryable: false,
-              });
-            }
-            throw error;
-          });
-          assertNotAborted(signal);
-
-          await context.updateStatus("authenticating", "Selecionando acesso da empresa");
-          const movementMenuAlreadyLoaded = await menuPage.quickAccessHeading().or(menuPage.menuHeading()).isVisible().catch(() => false);
-          if (!movementMenuAlreadyLoaded) {
-            await movementAccessPage.login(await loadCredential());
-          }
-          await menuPage.waitForLoaded();
-          assertNotAborted(signal);
-
-          const preflightResult = await new ActiveUsersPreflightService({
-            operation,
-            context,
-            signal,
-            menuPage,
-            activeUsersPage,
-          }).validateCardIssue({ beneficiaryName, beneficiaryCpf: cpf });
-          assertNotAborted(signal);
-          return preflightResult;
-        })()
-      : undefined;
-
+    // The card portal's list is authoritative for card issuance. Movement uses a separate access and menu.
     await context.updateStatus("authenticating", `Abrindo portal de carteirinha ${portalLabel}`);
     // A saved portal session cannot establish which contract the user requested.
     if (requestedCompanyCode) await browserContext.clearCookies();
@@ -377,7 +332,6 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
       operator: operation.portal,
       portalStatus: allBeneficiaries ? `${selected.length} carteirinhas emitidas` : "Carteirinha emitida",
       artifactId: artifact.id,
-      activeUser: activeUsersCheck?.snapshot.target,
       finishedAt: new Date().toISOString(),
     };
 

@@ -1,6 +1,6 @@
 import pg from "pg";
 import type { CredentialResolver } from "./CredentialResolver.js";
-import { credentialRefForLogin } from "./credentialIdentity.js";
+import { credentialRefForLogin, normalizePortalLoginCode } from "./credentialIdentity.js";
 import type { PortalName } from "../types.js";
 import { AutomationError } from "../errors.js";
 
@@ -30,13 +30,14 @@ export class PostgresCredentialResolver implements CredentialResolver {
       `SELECT operator
        FROM public.automation_credentials
        WHERE company_id = $1
-         AND metadata->>'portalLoginCode' = $2
+         AND upper(btrim(metadata->>'portalLoginCode')) = $2
+         AND credential_ref = operator || ':' || company_id::text || ':login:' || $2
          AND operator IN ('hapvida', 'ndi')
          AND status = 'active'
          AND last_verified_at IS NOT NULL
        ORDER BY last_verified_at DESC, created_at DESC
        LIMIT 1`,
-      [input.companyId, input.portalLoginCode.trim()],
+      [input.companyId, normalizePortalLoginCode(input.portalLoginCode)],
     ).catch(() => {
       throw new AutomationError("CREDENTIAL_STORE_UNAVAILABLE", "Nao foi possivel consultar os acessos validados da empresa.", {
         step: "load_credential", retryable: true,
@@ -47,6 +48,8 @@ export class PostgresCredentialResolver implements CredentialResolver {
   }
 
   async resolve(input: { companyId: string; operator: string; portalLoginCode?: string }) {
+    const code = input.portalLoginCode?.trim() ? normalizePortalLoginCode(input.portalLoginCode) : undefined;
+    const expectedRef = credentialRefForLogin(input.companyId, input.operator, code);
     const result = await this.pool.query<{
       id: string;
       credential_ref: string;
@@ -55,17 +58,21 @@ export class PostgresCredentialResolver implements CredentialResolver {
        FROM public.automation_credentials
        WHERE company_id = $1
          AND operator = $2
-         AND ($3::text IS NULL OR metadata->>'portalLoginCode' = $3::text)
+         AND ($3::text IS NULL OR (upper(btrim(metadata->>'portalLoginCode')) = $3::text AND credential_ref = $4))
          AND status IN ('active', 'needs_verification')
        ORDER BY (status = 'active') DESC, last_verified_at DESC NULLS LAST, created_at DESC
        LIMIT 1`,
-      [input.companyId, input.operator, input.portalLoginCode?.trim() || null],
-    );
+      [input.companyId, input.operator, code ?? null, expectedRef],
+    ).catch(() => {
+      throw new AutomationError("CREDENTIAL_STORE_UNAVAILABLE", "Nao foi possivel consultar os acessos da empresa.", {
+        step: "load_credential", retryable: true,
+      });
+    });
 
     const credential = result.rows[0];
-    if (!credential) {
+    if (!credential || (code && credential.credential_ref !== expectedRef)) {
       return {
-        credentialRef: credentialRefForLogin(input.companyId, input.operator, input.portalLoginCode),
+        credentialRef: expectedRef,
       };
     }
 

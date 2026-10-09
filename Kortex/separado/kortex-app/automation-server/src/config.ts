@@ -234,7 +234,7 @@ export function loadConfig(): AutomationConfig {
     secretsDir,
     databasePath: path.join(dataDir, "operations.sqlite"),
     hapvidaPortalUrl: optionalEnv(process.env.HAPVIDA_CARD_PORTAL_URL) ?? optionalEnv(process.env.HAPVIDA_PORTAL_URL),
-    hapvidaCardPortalUrl: optionalEnv(process.env.HAPVIDA_CARD_PORTAL_URL) ?? optionalEnv(process.env.HAPVIDA_PORTAL_URL),
+    hapvidaCardPortalUrl: optionalEnv(process.env.HAPVIDA_CARD_PORTAL_URL) ?? "https://webhap.hapvida.com.br/pls/webhap/pk_carteira_provisoria.login_empresa_form",
     hapvidaMovementPortalUrl: optionalEnv(process.env.HAPVIDA_MOVEMENT_PORTAL_URL) ?? optionalEnv(process.env.HAPVIDA_PORTAL_URL),
     receitaCpfLookupUrl: optionalEnv(process.env.RECEITA_CPF_LOOKUP_URL),
     cnsLookupUrl: optionalEnv(process.env.CNS_LOOKUP_URL),

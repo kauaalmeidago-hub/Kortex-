@@ -146,7 +146,7 @@ describe("automatic card portal search", () => {
     mocks.emit.mockResolvedValue(undefined);
     await searchCardPortals(f.operation, f.controller.signal, f.context);
     expect(mocks.emit).toHaveBeenCalledOnce();
-    expect(f.resolve).not.toHaveBeenCalled();
+    expect(f.resolve).toHaveBeenCalledOnce();
     expect(f.repository.get(f.operation.id)?.portal).toBe("hapvida");
   });
 
@@ -291,7 +291,7 @@ describe("automatic card portal search", () => {
     const f = fixture(); mocks.emit.mockRejectedValue(new AutomationError(code, "Interrompido."));
     await expect(searchCardPortals(f.operation, f.controller.signal, f.context)).rejects.toMatchObject({ code });
     expect(mocks.emit).toHaveBeenCalledOnce();
-    expect(f.resolve).not.toHaveBeenCalled();
+    expect(f.resolve).toHaveBeenCalledOnce();
   });
 
   it("reports an incomplete search when one portal is unavailable", async () => {
@@ -301,6 +301,38 @@ describe("automatic card portal search", () => {
       throw new AutomationError("PORTAL_URL_NOT_CONFIGURED", "NDI indisponivel.");
     });
     await expect(searchCardPortals(f.operation, f.controller.signal, f.context)).rejects.toMatchObject({ code: "CARD_PORTAL_SEARCH_INCOMPLETE", safeDetails: expect.stringContaining("NDI: PORTAL_URL_NOT_CONFIGURED") });
+  });
+  it.each(["auto", "selected"])("repairs an initial NDI request with a Hapvida reference for another code (%s)", async portalSearch => {
+    const f = fixture("ndi");
+    f.operation.credentialRef = "hapvida:company-1:login:0OTHER";
+    f.operation.input = { ...f.operation.input, portalSearch, contractCode: " ekkry " };
+    mocks.emit.mockImplementation(async operation => {
+      expect(operation.portal).toBe("ndi");
+      expect(operation.credentialRef).toBe("ndi:company-1:login:EKKRY");
+      expect(operation.input.contractCode).toBe("EKKRY");
+      expect(operation.credentialId).toBeUndefined();
+    });
+    await searchCardPortals(f.operation, f.controller.signal, f.context);
+    expect(f.repository.get(f.operation.id)).toMatchObject({ portal: "ndi", credentialRef: "ndi:company-1:login:EKKRY" });
+    expect(mocks.emit).toHaveBeenCalledOnce();
+  });
+  it("rechecks a legacy cached absence before deciding a beneficiary is missing", async () => {
+    const f = fixture("ndi");
+    f.operation.result = { cardPortalSearch: { requestKey: JSON.stringify(["company-1", "0ABC", "BENEFICIARIO DE TESTE", null, null, null, "2026-10-01", "2026-10-31"]),
+      visited: ["hapvida", "ndi"], notFound: ["hapvida"] } };
+    const checked: string[] = [];
+    mocks.emit.mockImplementation(async operation => { checked.push(operation.portal); if (operation.portal === "ndi") throw notFound(); });
+    await searchCardPortals(f.operation, f.controller.signal, f.context);
+    expect(checked).toEqual(["ndi", "hapvida"]);
+  });
+  it("honors an explicitly selected portal even if an automatic search previously cached an absence", async () => {
+    const f = fixture("ndi");
+    mocks.emit.mockRejectedValue(notFound());
+    await expect(searchCardPortals(f.operation, f.controller.signal, f.context)).rejects.toMatchObject({ code: "BENEFICIARY_NOT_FOUND" });
+    f.operation.input.portalSearch = "selected";
+    mocks.emit.mockReset().mockResolvedValue(undefined);
+    await searchCardPortals(f.operation, f.controller.signal, f.context);
+    expect(mocks.emit).toHaveBeenCalledOnce();
   });
 
   it.each(["BENEFICIARY_NOT_ACTIVE", "ACTIVE_USERS_LIST_UNAVAILABLE"])("continues to NDI after the optional Hapvida preflight returns %s", async code => {

@@ -18,10 +18,12 @@ const html = body => `<!doctype html><html><head><meta charset="utf-8"><title>Em
   <style>body { font: 16px Arial; color: #111; } .card { width: 620px; min-height: 175px; padding: 16px; border: 1px solid #345; margin: 12px; break-inside: avoid; }
   .card h2 { color: #345; }</style></head><body>${body}</body></html>`;
 const inline = value => JSON.stringify(value).replaceAll("<", "\\u003c");
-const master = place => `<label><input id="selecionar_todos_${place}" type="checkbox" onchange="document.querySelectorAll('input[id^=member-]').forEach(input => input.checked = this.checked); window.fixtureMasterSelected = this.checked;">Selecionar todos</label>`;
+const master = place => place === "button"
+  ? `<button type="button" onclick="document.querySelectorAll('input[id^=member-]').forEach(input => input.checked = true); window.fixtureMasterSelected = true;">Selecionar tudo</button>`
+  : `<label><input id="selecionar_tudos_${place}" type="checkbox" onchange="document.querySelectorAll('input[id^=member-]').forEach(input => input.checked = this.checked); window.fixtureMasterSelected = this.checked;">Selecionar ${place === "outside" ? "tudo" : "todos"}</label>`;
 const selection = (people, options = {}) => {
   const cell = options.legacy ? "td" : "th";
-  return `<table><thead><tr><${cell}>Nome do beneficiário</${cell}><${cell}>Carteirinha</${cell}>
+  return `${options.master === "button" || options.master === "outside" ? master(options.master) : ""}<table><thead><tr><${cell}>Nome do beneficiário</${cell}><${cell}>Carteirinha</${cell}>
     ${options.legacy ? `<${cell}>Produto</${cell}>` : ""}${options.sharedCpf ? `<${cell}>CPF</${cell}>` : ""}
     <${cell}>${options.master === "header" ? master("header") : "Selecionar"}</${cell}></tr></thead><tbody>${people.map((name, index) =>
     `<tr><td>${name}</td><td>${id(index)}</td>${options.legacy ? "<td>ASSISTENCIA MEDICA</td>" : ""}${options.sharedCpf ? "<td>111.222.333-44</td>" : ""}
@@ -115,10 +117,10 @@ async function workflowCase(label, { portal = "ndi", bulk = false, frame = false
       assert.equal(pdfs[0].metadata.companyId, companyId);
       assert.equal(events.filter(event => event.type === "artifact.created").length, 1);
       assert.deepEqual(events.filter(event => event.step === "card_print_requested").map(event => event.data), [
-        { operator: portal, command: bulk && printAll ? "all" : "selected", beneficiaryScope: bulk ? "all" : "single", beneficiaryCount: bulk ? people.length : 1 },
+        { operator: portal, command: "selected", beneficiaryScope: bulk ? "all" : "single", beneficiaryCount: bulk ? people.length : 1 },
       ]);
       assert.equal(actions.length, 1);
-      assert.equal(actions[0].all, bulk && printAll);
+      assert.equal(actions[0].all, false);
       assert.equal(actions[0].checked.length, bulk ? people.length : 1);
       if (bulk && masterPlace) assert.equal(actions[0].masterSelected, true);
       if (sameTab) {
@@ -150,6 +152,8 @@ try {
   await workflowCase("hapvida-all-other-company-print-all", { portal: "hapvida", bulk: true, legacy: true, master: "header", printAll: true,
     allLabel: "Imprimir todos", companyCode: "0SECOND", companyId: "company-second", people: ["PESSOA DA EMPRESA SEGUNDA A", "PESSOA DA EMPRESA SEGUNDA B", "PESSOA DA EMPRESA SEGUNDA C"] });
   await workflowCase("ndi-all-footer-control-print-all", { bulk: true, legacy: true, master: "footer", printAll: true, allLabel: "Imprimir todas", frame: true });
+  await workflowCase("ndi-all-select-everything-button-print-selected", { bulk: true, master: "button", printAll: true, companyCode: "EKKRY" });
+  await workflowCase("hapvida-all-select-everything-outside-table-print-selected", { portal: "hapvida", bulk: true, master: "outside", printAll: true });
   await workflowCase("ndi-individual-keeps-selected-print-button", { legacy: true, master: "header", printAll: true, sameTab: true });
   await workflowCase("ndi-individual-large-list-without-popup-delay", { sameTab: true, people: Array.from({ length: 100 }, (_, index) => `PESSOA DE EMPRESA TESTE ${String.fromCharCode(65 + index % 26)} ${String.fromCharCode(65 + Math.floor(index / 26))}`) });
 

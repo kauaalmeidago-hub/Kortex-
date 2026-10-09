@@ -108,9 +108,9 @@ export function inspectCardSelectionControls(elements: unknown[], expected: unkn
     const hints = normalize([control.id, control.name, control.getAttribute("onclick")].filter(Boolean).join(" "));
     const header = row && (row.closest("thead") || Array.from(row.children as any[]).some(cell =>
       /^(nome(?:\s+(?:completo|do|da|beneficiario|usuario|segurado))*|beneficiario|usuario|segurado)$/.test(normalize(cell.innerText ?? ""))));
-    const bulk = Boolean(header) || /^(?:(?:selecionar|marcar|desmarcar)\s+)?(?:todos|todas|all)(?:\s+(?:os|as))?(?:\s+(?:beneficiarios|carteirinhas))?$/.test(label) ||
-      /(?:seleciona\w*|marca\w*|check|select)[_\s-]*(?:todos|todas|all)|(?:^|[_\s-])(?:todos|todas|all)(?:$|[_\s-])/.test(hints) ||
-      /^(?:(?:selecionar|marcar|desmarcar)\s+)?(?:todos|todas)(?:\s+(?:os|as))?(?:\s+beneficiarios)?$/.test(normalize(row?.innerText ?? ""));
+    const bulk = Boolean(header) || /^(?:(?:selecionar|marcar|desmarcar)\s+)?(?:todos|todas|tudo|all)(?:\s+(?:os|as))?(?:\s+(?:beneficiarios|carteirinhas))?$/.test(label) ||
+      /(?:seleciona\w*|marca\w*|check|select)[_\s-]*(?:todos|todas|tudo|all)|(?:^|[_\s-])(?:todos|todas|tudo|all)(?:$|[_\s-])/.test(hints) ||
+      /^(?:(?:selecionar|marcar|desmarcar)\s+)?(?:todos|todas|tudo)(?:\s+(?:os|as))?(?:\s+beneficiarios)?$/.test(normalize(row?.innerText ?? ""));
     return { index, selected: native ? Boolean(control.checked) : control.getAttribute("aria-checked") === "true",
       enabled: !control.disabled && control.getAttribute("aria-disabled") !== "true", native, bulk,
       inRow: Boolean(row), expected: expectedSet.has(control) };

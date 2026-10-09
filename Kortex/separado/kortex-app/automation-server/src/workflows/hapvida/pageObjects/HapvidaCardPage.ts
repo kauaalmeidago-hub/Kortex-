@@ -64,12 +64,6 @@ export class HapvidaCardPage {
       .or(this.page.locator('input[value*="imprimir selecionados" i], input[value*="imprimir selecionadas" i]'));
   }
 
-  printAllButton() {
-    return this.page.getByRole("button", { name: /imprimir\s+(?:todos|todas|tudo)/i })
-      .or(this.page.getByRole("link", { name: /imprimir\s+(?:todos|todas|tudo)/i }))
-      .or(this.page.locator('input[value*="imprimir todos" i], input[value*="imprimir todas" i], input[value*="imprimir tudo" i]'));
-  }
-
   private async visibleEnabledButton(buttons: Locator) {
     for (const button of await buttons.all()) {
       if (await button.isVisible() && await button.isEnabled() && await button.getAttribute("aria-disabled") !== "true") return button;
@@ -78,7 +72,11 @@ export class HapvidaCardPage {
   }
 
   async waitForPeriodForm() {
-    await this.periodHeading().waitFor({ state: "visible" });
+    await this.periodHeading().waitFor({ state: "visible", timeout: this.previewTimeoutMs }).catch(() => {
+      throw new AutomationError("PORTAL_RESULTS_NOT_READY", "O portal de carteirinhas nao apresentou o formulario de periodo.", {
+        step: "access_card_portal", retryable: true,
+      });
+    });
   }
 
   async fillPeriod(startDate: string, endDate: string) {
@@ -266,6 +264,7 @@ export class HapvidaCardPage {
     try {
       const controls = this.page.locator(CONTROL_SELECTOR);
       const bulkControls = (await controls.evaluateAll(inspectCardSelectionControls)).filter(state => state.bulk && state.enabled);
+      let bulkActivated = false;
       for (const state of bulkControls) {
         const selection = await this.findSelectionControl(this.page.locator("body"), controls.nth(state.index));
         if (!selection) continue;
@@ -273,7 +272,13 @@ export class HapvidaCardPage {
           if (state.native && !selection.label) await selection.control.check();
           else await selection.target.click();
         }
+        bulkActivated = true;
         break;
+      }
+      if (!bulkActivated) {
+        const name = /^(?:selecionar|marcar)\s+(?:todos|todas|tudo)(?:\s+(?:os|as))?(?:\s+(?:beneficiarios|beneficiários|carteirinhas))?$/i;
+        const action = await this.visibleEnabledButton(this.page.getByRole("button", { name }).or(this.page.getByRole("link", { name })));
+        if (action) await action.click();
       }
       for (const selection of selections) {
         if (await this.isSelected(selection.control)) continue;
@@ -391,10 +396,10 @@ export class HapvidaCardPage {
     return describeCardDeliveryMembers(await this.page.locator(ROW_SELECTOR).evaluateAll(inspectCardListRows), selected);
   }
 
-  async requestSelectedCards(beneficiaries: BeneficiarySearchInput[], allBeneficiaries = false,
+  async requestSelectedCards(beneficiaries: BeneficiarySearchInput[], _allBeneficiaries = false,
     onPrinted?: (command: "all" | "selected") => Promise<void>) {
-    const allButton = allBeneficiaries ? await this.visibleEnabledButton(this.printAllButton()) : undefined;
-    const button = allButton ?? await this.visibleEnabledButton(this.printSelectedButton());
+    // Both an individual and TODOS use the confirmed checkboxes and Imprimir selecionados.
+    const button = await this.visibleEnabledButton(this.printSelectedButton());
     if (!button) throw new AutomationError("PORTAL_CHANGED", "Nao encontrei o comando de impressao correspondente ao pedido.", {
       step: "print_selected_cards", retryable: true,
     });
@@ -403,7 +408,7 @@ export class HapvidaCardPage {
     const popup = new Promise<Page>(resolve => { onPopup = resolve; this.page.on("popup", onPopup); });
     try {
       await button.click();
-      await onPrinted?.(allButton ? "all" : "selected");
+      await onPrinted?.("selected");
       const inCurrentPage = waitForRenderedCards(this.page, beneficiaries, this.previewTimeoutMs, this.portalUrl, cancelled.signal)
         .then(() => this.page);
       const resultPage = await Promise.race([popup, inCurrentPage]);
