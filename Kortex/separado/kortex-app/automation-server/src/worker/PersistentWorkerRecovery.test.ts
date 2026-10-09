@@ -70,9 +70,9 @@ describe("worker queue connectivity recovery", () => {
     expect(mocks.workflow).toHaveBeenCalledTimes(1);
   });
 
-  it("locks and renews both portals for an automatic card search and releases both", async () => {
+  it.each(["auto", undefined])("locks and renews both portals for automatic or legacy search (mode=%s)", async (mode) => {
     vi.useFakeTimers(); const { worker, repository, operation } = fixture();
-    operation.input.portalSearch = "auto";
+    if (mode) operation.input.portalSearch = mode;
     repository.claimNext.mockResolvedValueOnce(operation as never);
     let finish!: () => void;
     mocks.workflow.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
@@ -84,6 +84,18 @@ describe("worker queue connectivity recovery", () => {
     worker.stop(); finish(); await run;
     expect(repository.releaseLock.mock.calls.map(([key]) => key)).toEqual(["hapvida:company:synthetic-company", "ndi:company:synthetic-company"]);
     expect(mocks.workflow).toHaveBeenCalledOnce();
+    expect(repository.upsertWorkerHeartbeat).toHaveBeenCalledWith("recovery-test", "online", expect.objectContaining({
+      cardIssueWorkflowVersion: 2, cardPortalSearchDefault: "auto",
+    }));
+  });
+
+  it("locks only the explicitly selected portal", async () => {
+    const { worker, repository, operation } = fixture(); operation.input.portalSearch = "selected";
+    repository.claimNext.mockResolvedValueOnce(operation as never);
+    mocks.workflow.mockImplementation(async () => { worker.stop(); });
+    await worker.run();
+    expect(repository.acquireLock.mock.calls.map(([key]) => key)).toEqual(["hapvida:company:synthetic-company"]);
+    expect(repository.releaseLock).toHaveBeenCalledOnce();
   });
 
   it("does not start a search if the second portal is locked by another operation", async () => {

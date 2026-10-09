@@ -24,18 +24,8 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-async function firstVisible(locators: Locator[]) {
-  const fallback = locators[0];
-  if (!fallback) throw new Error("At least one locator is required.");
-
-  for (const locator of locators) {
-    if (await locator.first().isVisible().catch(() => false)) {
-      return locator.first();
-    }
-  }
-
-  return fallback.first();
-}
+const ROW_SELECTOR = 'tr, [role="row"]';
+const CONTROL_SELECTOR = 'input[type="checkbox"], input[type="radio"], [role="checkbox"], [role="radio"]';
 
 export class HapvidaCardPage {
   constructor(private readonly page: Page, private readonly previewTimeoutMs = 30_000) {}
@@ -83,21 +73,85 @@ export class HapvidaCardPage {
 
   async submitPeriod() {
     await this.periodSubmitButton().click();
+    await this.waitForBeneficiaryList();
   }
 
   async selectBeneficiary(input: BeneficiarySearchInput) {
     const row = await this.findSingleBeneficiaryRow(input);
-    const checkbox = row.getByRole("checkbox").first();
-
-    if (!(await checkbox.isVisible().catch(() => false))) {
+    const selection = await this.findSelectionControl(row);
+    if (!selection) {
+      const controls = await row.locator(CONTROL_SELECTOR).count();
       throw new AutomationError("PORTAL_CHANGED", "Nao encontrei o seletor do beneficiario no portal.", {
-        safeDetails: "A linha do beneficiario apareceu, mas nao havia checkbox visivel para selecao.",
+        safeDetails: `A linha do beneficiario apareceu, mas nao havia um controle habilitado ou um rotulo visivel associado. Controles encontrados: ${controls}.`,
         step: "select_beneficiary",
-        retryable: false,
+        retryable: true,
       });
     }
 
-    await checkbox.check().catch(async () => checkbox.click());
+    try {
+      const native = /^(checkbox|radio)$/i.test(await selection.control.getAttribute("type") ?? "");
+      const checked = native ? await selection.control.isChecked() : await selection.control.getAttribute("aria-checked") === "true";
+      if (!checked) {
+        if (selection.label || !native) await selection.target.click();
+        else await selection.control.check();
+      }
+      const confirmed = native ? await selection.control.isChecked() : await selection.control.getAttribute("aria-checked") === "true";
+      if (!confirmed) throw new Error("Selection was not confirmed");
+    } catch {
+      throw new AutomationError("BENEFICIARY_SELECTION_FAILED", "Nao foi possivel confirmar a selecao do beneficiario.", {
+        safeDetails: "A emissao foi interrompida antes de imprimir porque o portal nao confirmou o controle selecionado.",
+        step: "confirm_beneficiary_selection", retryable: true,
+      });
+    }
+  }
+
+  private async waitForBeneficiaryList() {
+    const ready = await this.page.waitForFunction(() => {
+      const scope = globalThis as unknown as { document: {
+        body?: { innerText: string };
+        querySelectorAll(selector: string): ArrayLike<{ innerText: string; getBoundingClientRect(): { width: number; height: number }; querySelector(selector: string): unknown }>;
+      }; getComputedStyle(element: unknown): { display: string; visibility: string } };
+      const visible = (element: { getBoundingClientRect(): { width: number; height: number } }) => {
+        const rect = element.getBoundingClientRect(), style = scope.getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+      };
+      const doc = scope.document;
+      if (Array.from(doc.querySelectorAll('[aria-busy="true"], [role="progressbar"]')).some(visible)) return false;
+      const text = (doc.body?.innerText ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+      if (/nenhum\s+(?:beneficiario|usuario|registro)|sem\s+(?:registros|resultados|beneficiarios)|nao\s+(?:foi|foram)\s+encontrad/.test(text)) return true;
+      const print = Array.from(doc.querySelectorAll('button, input[type="button"], input[type="submit"], a')).some(element =>
+        visible(element) && /imprimir\s+selecionados/i.test(element.innerText || (element as unknown as { value?: string }).value || ""));
+      return print && Array.from(doc.querySelectorAll('tr, [role="row"]')).some(row =>
+        visible(row) && !row.querySelector('tr, [role="row"]') && Boolean(row.innerText.trim()));
+    }, undefined, { timeout: this.previewTimeoutMs }).catch(() => {
+      throw new AutomationError("PORTAL_RESULTS_NOT_READY", "O portal nao confirmou o carregamento da lista de beneficiarios.", {
+        safeDetails: "A consulta nao ficou pronta para selecionar e imprimir. Essa falha nao confirma ausencia do beneficiario.",
+        step: "find_beneficiary", retryable: true,
+      });
+    });
+    await ready.dispose();
+  }
+
+  private async findSelectionControl(row: Locator) {
+    const controls = row.locator(CONTROL_SELECTOR);
+    for (let index = 0; index < await controls.count(); index += 1) {
+      const control = controls.nth(index);
+      if (!(await control.isEnabled().catch(() => false))) continue;
+      if (await control.isVisible().catch(() => false)) return { control, target: control, label: false };
+      const id = await control.getAttribute("id");
+      const labels = row.locator("label");
+      for (let labelIndex = 0; labelIndex < await labels.count(); labelIndex += 1) {
+        const label = labels.nth(labelIndex);
+        if (id && await label.getAttribute("for") === id && await label.isVisible().catch(() => false)) {
+          return { control, target: label, label: true };
+        }
+      }
+      const wrappingLabel = control.locator("xpath=ancestor::label[1]");
+      if (await wrappingLabel.count() && await wrappingLabel.isVisible().catch(() => false)) {
+        return { control, target: wrappingLabel, label: true };
+      }
+    }
+    return undefined;
   }
 
   async requestSelectedCards() {
@@ -188,7 +242,9 @@ export class HapvidaCardPage {
       if (text.includes(expectedName)) exactNameRows.push(row);
     }
 
-    let filteredRows = exactNameRows;
+    const selectableRows: Locator[] = [];
+    for (const row of exactNameRows) if (await this.findSelectionControl(row)) selectableRows.push(row);
+    let filteredRows = selectableRows.length ? selectableRows : exactNameRows;
     const cpf = onlyDigits(input.cpf);
     if (filteredRows.length > 1 && cpf) {
       const byCpf: Locator[] = [];
@@ -197,6 +253,15 @@ export class HapvidaCardPage {
         if (rowDigits.includes(cpf)) byCpf.push(row);
       }
       filteredRows = byCpf;
+    }
+
+    const birthDate = input.birthDate?.replace(/^(\d{4})-(\d{2})-(\d{2})$/, "$3/$2/$1");
+    if (filteredRows.length > 1 && birthDate) {
+      const byBirthDate: Locator[] = [];
+      for (const row of filteredRows) {
+        if (onlyDigits(await row.innerText().catch(() => "")).includes(onlyDigits(birthDate))) byBirthDate.push(row);
+      }
+      filteredRows = byBirthDate;
     }
 
     if (filteredRows.length === 0) {
@@ -219,14 +284,15 @@ export class HapvidaCardPage {
   }
 
   private async collectCandidateRows(beneficiaryName: string) {
-    const byRole = this.page.getByRole("row").filter({ hasText: new RegExp(escapeRegExp(beneficiaryName), "i") });
-    const byTable = this.page.locator("tr").filter({ hasText: new RegExp(escapeRegExp(beneficiaryName), "i") });
-    const preferred = await firstVisible([byRole, byTable]);
-    const count = await preferred.count();
+    const candidates = this.page.locator(ROW_SELECTOR);
+    const count = await candidates.count();
+    const expected = new RegExp(`(?:^|[^a-z0-9])${escapeRegExp(normalizeText(beneficiaryName))}(?:$|[^a-z0-9])`);
     const rows: Locator[] = [];
 
     for (let index = 0; index < count; index += 1) {
-      rows.push(preferred.nth(index));
+      const row = candidates.nth(index);
+      if (!(await row.isVisible().catch(() => false)) || await row.locator(ROW_SELECTOR).count()) continue;
+      if (expected.test(normalizeText(await row.innerText().catch(() => "")))) rows.push(row);
     }
 
     return rows;

@@ -34,6 +34,41 @@ beforeEach(() => { mocks.emit.mockReset(); });
 afterEach(() => { repositories.splice(0).forEach(repository => repository.close()); });
 
 describe("automatic card portal search", () => {
+  it("upgrades a legacy request to automatic search before continuing to NDI", async () => {
+    const f = fixture(); delete f.operation.input.portalSearch;
+    await f.repository.update(f.operation.id, { input: f.operation.input });
+    const calls: string[] = [];
+    mocks.emit.mockImplementation(async (operation: OperationRecord) => {
+      calls.push(operation.portal);
+      expect(operation.input.portalSearch).toBe("auto");
+      if (operation.portal === "hapvida") throw new AutomationError("AUTHENTICATION_FAILED", "Acesso rejeitado.");
+    });
+    await searchCardPortals(f.operation, f.controller.signal, f.context);
+    expect(calls).toEqual(["hapvida", "ndi"]);
+    expect(f.repository.get(f.operation.id)).toMatchObject({ id: "card-search", input: { portalSearch: "auto" }, portal: "ndi" });
+  });
+
+  it.each(["PORTAL_RESULTS_NOT_READY", "PORTAL_CHANGED"])("continues to NDI when %s occurs before beneficiary selection", async (code) => {
+    const f = fixture(); const calls: string[] = [];
+    mocks.emit.mockImplementation(async (operation: OperationRecord) => {
+      calls.push(operation.portal);
+      if (operation.portal === "hapvida") throw new AutomationError(code, "Lista indisponivel.", { step: "select_beneficiary" });
+    });
+    await searchCardPortals(f.operation, f.controller.signal, f.context);
+    expect(calls).toEqual(["hapvida", "ndi"]);
+    expect(f.repository.get(f.operation.id)?.result?.cardPortalSearch).toMatchObject({ notFound: [] });
+  });
+
+  it("does not report absence when a portal list never becomes ready", async () => {
+    const f = fixture();
+    mocks.emit.mockImplementation(async (operation: OperationRecord) => {
+      if (operation.portal === "hapvida") throw new AutomationError("PORTAL_RESULTS_NOT_READY", "Lista indisponivel.");
+      throw notFound();
+    });
+    await expect(searchCardPortals(f.operation, f.controller.signal, f.context)).rejects.toMatchObject({ code: "CARD_PORTAL_SEARCH_INCOMPLETE" });
+    expect(f.repository.get(f.operation.id)?.result?.cardPortalSearch).toMatchObject({ notFound: ["ndi"] });
+  });
+
   it("stops after the preferred portal issues a card", async () => {
     const f = fixture();
     mocks.emit.mockResolvedValue(undefined);
@@ -135,7 +170,7 @@ describe("automatic card portal search", () => {
     expect(calls).toEqual(["ndi", "hapvida"]);
   });
 
-  it.each(["CARD_VALIDATION_FAILED", "PDF_VALIDATION_FAILED", "BENEFICIARY_AMBIGUOUS", "CARD_PREVIEW_NOT_FOUND", "HUMAN_VERIFICATION_REQUIRED"])("stops without switching portals after %s", async (code) => {
+  it.each(["CARD_VALIDATION_FAILED", "PDF_VALIDATION_FAILED", "BENEFICIARY_AMBIGUOUS", "CARD_PREVIEW_NOT_FOUND", "HUMAN_VERIFICATION_REQUIRED", "BENEFICIARY_SELECTION_FAILED", "PORTAL_CHANGED"])("stops without switching portals after %s", async (code) => {
     const f = fixture(); mocks.emit.mockRejectedValue(new AutomationError(code, "Interrompido."));
     await expect(searchCardPortals(f.operation, f.controller.signal, f.context)).rejects.toMatchObject({ code });
     expect(mocks.emit).toHaveBeenCalledOnce();

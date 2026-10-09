@@ -57,13 +57,15 @@ Se a sessao expirar e nao existir credencial segura no `SecretProvider`, o worke
 
 ## Busca de carteirinha em Hapvida e NDI
 
-Novos pedidos de carteirinha usam `portalSearch: "auto"`. O worker consulta o portal inicial e, se o acesso for rejeitado, faltar credencial ou o beneficiario nao for encontrado, consulta o outro portal na mesma operacao. Ao confirmar uma carteirinha e gerar um PDF valido, a busca termina; `operator` no resultado e nos metadados do arquivo identifica a operadora. Uma previa incorreta, nome ambiguo ou PDF invalido interrompe a busca para revisao, sem tentar emitir em outro portal.
+Pedidos de carteirinha usam `portalSearch: "auto"`, inclusive pedidos antigos sem essa propriedade; somente `portalSearch: "selected"` limita a busca a uma operadora. O worker consulta o portal inicial e, se o acesso for rejeitado, faltar credencial ou o beneficiario nao for encontrado, consulta o outro portal na mesma operacao. Uma lista que nao carregou ou um seletor indisponivel antes de qualquer selecao tambem permite consultar o outro portal, sem registrar ausencia do beneficiario. Ao confirmar uma carteirinha e gerar um PDF valido, a busca termina; `operator` no resultado e nos metadados do arquivo identifica a operadora. Uma selecao nao confirmada, previa incorreta, nome ambiguo ou PDF invalido interrompe a busca para revisao.
 
 Hapvida utiliza `HAPVIDA_CARD_PORTAL_URL`. NDI utiliza `NDI_CARD_PORTAL_URL`, com padrao `https://sigo.sh.srv.br/pls/webmin/pk_carteira_provisoria.login_empresa_form`. As credenciais salvas sao selecionadas separadamente por empresa, operadora e codigo. Somente a senha enviada explicitamente para aquela busca automatica pode ser tentada nos dois portais em memoria; uma senha Hapvida previamente salva nao e reutilizada em NDI. Com "Lembrar", cada acesso confirmado recebe seu proprio arquivo DPAPI e cadastro da operadora correta.
 
 Se apenas um portal precisar de autenticacao, a retomada consulta esse portal sem repetir uma busca ja concluida para o mesmo beneficiario, codigo e periodo. "Beneficiario nao encontrado em Hapvida ou NDI" exige ausencia confirmada nos dois. Se algum portal estiver indisponivel, o pedido informa que a busca ficou incompleta. O pre-check opcional de usuarios ativos Hapvida nao e executado em NDI. Inclusao e exclusao NDI continuam aguardando mapeamento.
 
 `npm run test:card-portals` testa em Chromium os dois formularios, periodo, selecao, geracao real de PDF, troca de operadora, referencia de credencial e falhas sem arquivo, com paginas sinteticas e todas as requisicoes interceptadas. Esse teste nao acessa os portais reais. Depois de atualizar a instalacao permanente, valide uma carteirinha NDI real no computador do worker. Para limitar um pedido ao portal escolhido na API local, informe `portalSearch: "selected"`.
+
+A selecao examina todas as linhas visiveis correspondentes ao nome, prioriza linhas com controle habilitado e aceita checkbox, radio ou rotulo associado ao controle oculto. Homonimos exigem CPF ou data de nascimento que diferencie as linhas. O worker aguarda a lista depois da consulta e confirma a selecao antes de imprimir. `npm run test:card-selection` verifica esses layouts e o carregamento atrasado em Chromium com dados sinteticos. O heartbeat da versao corrigida informa `cardIssueWorkflowVersion: 2` e `cardPortalSearchDefault: "auto"`, permitindo verificar se a instalacao em execucao recebeu essa atualizacao.
 
 ## Reautenticacao pelo Koa
 
@@ -172,7 +174,7 @@ Variaveis principais:
 - `FEATURE_KOA_INCLUSION=false`: mantem inclusao bloqueada ate validacao real.
 - `FEATURE_KOA_EXCLUSION=false`: mantem exclusao bloqueada ate validacao real.
 - `HAPVIDA_CARD_PORTAL_URL`: URL da emissao de carteirinha Hapvida.
-- `NDI_CARD_PORTAL_URL`: URL da emissao de carteirinha NDI. O contrato ja reconhece NDI, mas o workflow ainda retorna `PORTAL_MAPPING_REQUIRED` ate o DOM real ser mapeado.
+- `NDI_CARD_PORTAL_URL`: URL da emissao de carteirinha NDI. Utiliza o fluxo de carteirinha compartilhado; movimentacoes NDI continuam aguardando mapeamento.
 - `HAPVIDA_PORTAL_URL`: alias legado para URL inicial do portal Hapvida.
 - `HAPVIDA_AUTHENTICATED_SELECTOR`: seletor real de area autenticada do portal.
 

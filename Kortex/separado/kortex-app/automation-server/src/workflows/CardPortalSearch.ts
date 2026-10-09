@@ -10,7 +10,11 @@ const canSearchAnotherPortal = new Set(["AUTHENTICATION_FAILED", "REAUTH_REQUIRE
   "BENEFICIARY_NOT_ACTIVE", "ACTIVE_USERS_LIST_UNAVAILABLE", "PORTAL_URL_NOT_CONFIGURED", "PORTAL_AUTH_UNAVAILABLE"]);
 
 export async function searchCardPortals(operation: OperationRecord, signal: AbortSignal, context: WorkflowContext) {
-  if (operation.input.portalSearch !== "auto") return emitCard(operation, signal, context);
+  if (operation.input.portalSearch === "selected") return emitCard(operation, signal, context);
+  if (operation.input.portalSearch !== "auto") {
+    operation.input = { ...operation.input, portalSearch: "auto" };
+    await context.repository.update(operation.id, { input: operation.input });
+  }
 
   const contractCode = portalLoginCode(operation.input);
   const requestKey = JSON.stringify([contractCode, operation.input.beneficiaryName, operation.input.cpf,
@@ -65,7 +69,10 @@ export async function searchCardPortals(operation: OperationRecord, signal: Abor
       return;
     } catch (error) {
       assertNotAborted(signal);
-      if (!(error instanceof AutomationError) || !canSearchAnotherPortal.has(error.code)) throw error;
+      if (!(error instanceof AutomationError)) throw error;
+      const listFailureBeforeSelection = error.code === "PORTAL_RESULTS_NOT_READY" ||
+        (error.code === "PORTAL_CHANGED" && error.step === "select_beneficiary");
+      if (!canSearchAnotherPortal.has(error.code) && !listFailureBeforeSelection) throw error;
       // Never switch after selecting/printing a card, an ambiguous match, or an invalid PDF.
       failures.push({ portal, error });
       if (error.code === "BENEFICIARY_NOT_FOUND") progress.notFound.push(portal);

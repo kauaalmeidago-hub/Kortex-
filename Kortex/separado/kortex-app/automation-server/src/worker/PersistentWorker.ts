@@ -92,7 +92,7 @@ export class PersistentWorker {
     const controller = new AbortController();
     const credentialGeneration = this.deps.ephemeralCredentialStore?.snapshotGeneration();
     this.currentController = controller;
-    const lockKeys = operation.type === "CARD_ISSUE" && operation.input.portalSearch === "auto"
+    const lockKeys = operation.type === "CARD_ISSUE" && operation.input.portalSearch !== "selected"
       ? [`hapvida:company:${operation.companyId}`, `ndi:company:${operation.companyId}`]
       : [`${operation.portal}:company:${operation.companyId}`];
     const acquiredLocks: string[] = [];
@@ -205,6 +205,8 @@ export class PersistentWorker {
       repositoryMode: this.deps.config.repositoryMode,
       browserProvider: this.deps.config.browserProvider,
       cardIssueEnabled: this.deps.config.features.cardIssue,
+      cardIssueWorkflowVersion: 2,
+      cardPortalSearchDefault: "auto",
       inclusionPreviewEnabled: this.deps.config.features.inclusionPreview,
       inclusionSubmitEnabled: this.deps.config.features.inclusion,
       exclusionPreviewEnabled: this.deps.config.features.exclusionPreview,

@@ -64,7 +64,7 @@ describe("Koa reauthentication handoff", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ ok: true, status: "queued", operationId: operation.id });
     expect(store.get(operation.id, operation.credentialRef)).toMatchObject({
-      username: "0ABC", password: "synthetic-password", metadata: { rememberOnDevice: remember },
+      username: "0ABC", password: "synthetic-password", metadata: { rememberOnDevice: remember, autoPortalCredential: true },
     });
     expect(launch).not.toHaveBeenCalled();
     expect(repository.create).not.toHaveBeenCalled();
@@ -95,6 +95,12 @@ describe("Koa reauthentication handoff", () => {
     expect(store.get(operation.id, "hapvida:company-1:login:0ABC")).toBeUndefined();
     expect(JSON.stringify({ operation, events, response: response.json() })).not.toMatch(/synthetic-password|autoPortalCredential/);
     expect(launch).not.toHaveBeenCalled();
+  });
+
+  it("keeps a selected portal credential restricted to that portal", async () => {
+    operation.input.portalSearch = "selected";
+    expect((await submit()).statusCode).toBe(200);
+    expect(store.get(operation.id, operation.credentialRef)?.metadata?.autoPortalCredential).toBe(false);
   });
 
   it("rebinds a corrected company code to the queued operation and its ephemeral password", async () => {

@@ -810,6 +810,8 @@ function safeKoaErrorMessage(code?: string) {
   if (code === "CARD_PORTAL_SEARCH_INCOMPLETE") return "Não consegui concluir a busca em Hapvida e NDI. Verifique o acesso ao portal indicado.";
   if (code === "CREDENTIAL_NOT_FOUND") return "Credencial segura não encontrada.";
   if (code === "BENEFICIARY_NOT_FOUND") return "Beneficiário não encontrado.";
+  if (code === "BENEFICIARY_SELECTION_FAILED") return "O portal não confirmou a seleção do beneficiário. A emissão foi interrompida antes de imprimir.";
+  if (code === "PORTAL_RESULTS_NOT_READY") return "A lista de beneficiários não terminou de carregar. Tente a consulta novamente.";
   if (code === "BENEFICIARY_NOT_ACTIVE") return "Beneficiário não está ativo na Hapvida.";
   if (code === "BENEFICIARY_ALREADY_ACTIVE") return "Beneficiário já está ativo na Hapvida.";
   if (code === "CNS_LOOKUP_FAILED") return "Não consegui consultar o CNS.";

@@ -39,13 +39,14 @@ const config = {
   features: { cardIssue: true, cardIssueActiveUsersPreflight: false }, traceAuth: false,
 };
 
-async function check(name, outcomes, expectedOperator, expectedError) {
+async function check(name, outcomes, expectedOperator, expectedError, legacy = false) {
   const repository = new OperationRepository(":memory:");
   const now = new Date().toISOString();
   const operation = { id: `fixture-${name}`, type: "CARD_ISSUE", portal: "hapvida", status: "starting", companyId: "synthetic-company",
     credentialRef: "hapvida:synthetic-company:login:0TEST",
     input: { portalSearch: "auto", contractCode: "0TEST", beneficiaryName: "MARIA DE TESTE", periodStart: "2026-10-01", periodEnd: "2026-10-31" },
     artifacts: [], createdAt: now, updatedAt: now };
+  if (legacy) delete operation.input.portalSearch;
   repository.create(operation);
   const store = new EphemeralCredentialStore();
   store.put(operation.id, operation.credentialRef, { username: "0TEST", password: "synthetic-password", metadata: { autoPortalCredential: true } }, 60000);
@@ -70,7 +71,7 @@ async function check(name, outcomes, expectedOperator, expectedError) {
         assert.equal(url.searchParams.get("end"), "31/10/2026");
         const card = html(`<section><p>${portal === "ndi" ? "NDI" : "Hapvida"}</p><p>Nome: MARIA DE TESTE</p><p>Codigo: 000000</p><p>Plano: TESTE</p></section>`);
         markup = outcomes[portal] === "not_found" ? html("<p>Nenhum beneficiario encontrado</p>")
-          : html(`<table><tr><td>MARIA DE TESTE</td><td><input type="checkbox"></td></tr></table>
+          : html(`<table><tr><td>MARIA DE TESTE</td><td>${outcomes[portal] === "missing_control" ? "" : '<input type="checkbox">'}</td></tr></table>
             <button id="print">Imprimir selecionados</button><script>
               document.getElementById('print').onclick = () => { const target = window.open('about:blank');
                 target.document.write(${JSON.stringify(card)}); target.document.close(); };
@@ -100,6 +101,7 @@ async function check(name, outcomes, expectedOperator, expectedError) {
       const result = repository.get(operation.id);
       assert.equal(result.status, "success"); assert.equal(result.portal, expectedOperator);
       assert.equal(result.result.operator, expectedOperator); assert.equal(pdfs.length, 1);
+      assert.equal(result.input.portalSearch, "auto");
       assert.equal(pdfs[0].metadata.operator, expectedOperator);
       assert(savedSessions.includes(expectedOperator));
     }
@@ -115,6 +117,8 @@ try {
   await check("hapvida-success", { hapvida: "found", ndi: "found" }, "hapvida");
   await check("hapvida-not-found-ndi-pdf", { hapvida: "not_found", ndi: "found" }, "ndi");
   await check("hapvida-rejected-ndi-pdf", { hapvida: "rejected", ndi: "found" }, "ndi");
+  await check("legacy-hapvida-rejected-ndi-pdf", { hapvida: "rejected", ndi: "found" }, "ndi", undefined, true);
+  await check("legacy-hapvida-missing-control-ndi-pdf", { hapvida: "missing_control", ndi: "found" }, "ndi", undefined, true);
   await check("both-not-found", { hapvida: "not_found", ndi: "not_found" }, undefined, "BENEFICIARY_NOT_FOUND");
   await check("both-accesses-rejected", { hapvida: "rejected", ndi: "rejected" }, undefined, "AUTHENTICATION_FAILED");
 } finally { await browser.close(); await rm(root, { recursive: true, force: true }); }

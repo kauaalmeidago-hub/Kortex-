@@ -359,7 +359,7 @@ export async function createServer({ config, repository, eventBus, queue, creden
         {
           username: companyCode,
           password: parsed.data.password,
-          metadata: { rememberOnDevice: parsed.data.rememberOnDevice, autoPortalCredential: operation.input.portalSearch === "auto", submittedAt: new Date().toISOString() },
+          metadata: { rememberOnDevice: parsed.data.rememberOnDevice, autoPortalCredential: operation.input.portalSearch !== "selected", submittedAt: new Date().toISOString() },
         },
         config.authChallengeTtlMinutes * 60 * 1000,
       );
