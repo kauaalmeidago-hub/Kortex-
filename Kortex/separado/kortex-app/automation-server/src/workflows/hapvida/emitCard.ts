@@ -305,6 +305,14 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
       await loginPage.login(await loadCredential());
       assertNotAborted(signal);
 
+      // A definite credential rejection does not need the authenticated-selector timeout.
+      if (await loginPage.invalidIdentificationMessage().isVisible().catch(() => false)) {
+        throw new AutomationError("AUTHENTICATION_FAILED", `Credencial ${portalLabel} nao aceita pelo portal.`, {
+          safeDetails: "O portal retornou Identificacao invalida para o codigo/senha cadastrados.",
+          step: "authenticate", retryable: false,
+        });
+      }
+
       const sessionAfterLogin = await context.browserManager.validatePortalSession(portal, page);
       if (!sessionAfterLogin) {
         if (await loginPage.invalidIdentificationMessage().isVisible().catch(() => false)) {
@@ -373,7 +381,10 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
     assertNotAborted(signal);
 
     await context.updateStatus("processing", "Emitindo carteirinha");
-    const resultPage = await cardPage.requestSelectedCards();
+    const resultPage = await cardPage.requestSelectedCards(selected, allBeneficiaries, async command => {
+      await context.emitEvent({ operationId: operation.id, type: "operation.step", step: "card_print_requested",
+        data: { operator: portal, command, beneficiaryScope: allBeneficiaries ? "all" : "single", beneficiaryCount: selected.length } });
+    });
     const resultCardPage = new HapvidaCardPage(resultPage, context.config.actionTimeoutMs ?? 30_000, portalUrl);
     assertNotAborted(signal);
 

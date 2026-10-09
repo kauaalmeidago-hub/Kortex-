@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { AutomationError } from "../../../errors.js";
 import { waitForRenderedCards, type CardBeneficiary } from "../cardPreview.js";
+import { inspectCardListRows, inspectCardSelectionControls } from "../cardList.js";
 
 export interface BeneficiarySearchInput extends CardBeneficiary {}
 
@@ -54,9 +55,22 @@ export class HapvidaCardPage {
 
   printSelectedButton() {
     return this.page
-      .getByRole("button", { name: /imprimir\s+selecionados/i })
-      .or(this.page.getByRole("link", { name: /imprimir\s+selecionados/i }))
+      .getByRole("button", { name: /imprimir\s+(?:(?:os|as)\s+)?selecionad[oa]s/i })
+      .or(this.page.getByRole("link", { name: /imprimir\s+(?:(?:os|as)\s+)?selecionad[oa]s/i }))
       .or(this.page.locator('input[value*="imprimir selecionados" i], input[value*="imprimir selecionadas" i]'));
+  }
+
+  printAllButton() {
+    return this.page.getByRole("button", { name: /imprimir\s+(?:todos|todas|tudo)/i })
+      .or(this.page.getByRole("link", { name: /imprimir\s+(?:todos|todas|tudo)/i }))
+      .or(this.page.locator('input[value*="imprimir todos" i], input[value*="imprimir todas" i], input[value*="imprimir tudo" i]'));
+  }
+
+  private async visibleEnabledButton(buttons: Locator) {
+    for (const button of await buttons.all()) {
+      if (await button.isVisible() && await button.isEnabled() && await button.getAttribute("aria-disabled") !== "true") return button;
+    }
+    return undefined;
   }
 
   async waitForPeriodForm() {
@@ -123,19 +137,22 @@ export class HapvidaCardPage {
       }
     }
     const rows = this.page.locator(ROW_SELECTOR);
+    const snapshot = await rows.evaluateAll(inspectCardListRows);
     const selections: Array<{ control: Locator; target: Locator; label: boolean; input: BeneficiarySearchInput }> = [];
-    for (let index = 0; index < await rows.count(); index += 1) {
-      const row = rows.nth(index);
-      if (!await row.isVisible() || await row.locator(ROW_SELECTOR).count() || await row.locator("th").count()) continue;
+    for (const identity of snapshot) {
+      if (!identity.visible || !identity.selectable || identity.kind === "header" || identity.kind === "bulk") continue;
+      const row = rows.nth(identity.index);
       const selection = await this.findSelectionControl(row);
       if (!selection) continue;
-      const identity = await this.readRowIdentity(row);
       if (!identity.beneficiaryName) {
+        const states = await row.locator(CONTROL_SELECTOR).evaluateAll(inspectCardSelectionControls);
+        if (states.every(state => state.bulk)) continue;
         throw new AutomationError("CARD_BATCH_INCOMPLETE", "Nao foi possivel identificar todos os beneficiarios da lista.", {
           safeDetails: "Uma linha selecionavel nao apresentou um nome identificavel. Nenhuma carteirinha foi impressa.", step: "select_beneficiary",
         });
       }
-      selections.push({ ...selection, input: identity });
+      const { beneficiaryName, cpf, cardIdentifiers, requireIdentifier } = identity;
+      selections.push({ ...selection, input: { beneficiaryName, cpf, cardIdentifiers, requireIdentifier } });
     }
     if (!selections.length) throw new AutomationError("BENEFICIARY_NOT_FOUND", "Nao ha beneficiarios disponiveis no periodo informado.", { step: "find_beneficiary" });
     const identityCandidates = new Map(selections.map(selection => [selection, [...(selection.input.cardIdentifiers ?? []), ...(selection.input.cpf ? [selection.input.cpf] : [])]]));
@@ -154,10 +171,22 @@ export class HapvidaCardPage {
     }
     await this.clearSelections();
     try {
+      const controls = this.page.locator(CONTROL_SELECTOR);
+      const bulkControls = (await controls.evaluateAll(inspectCardSelectionControls)).filter(state => state.bulk && state.enabled);
+      for (const state of bulkControls) {
+        const selection = await this.findSelectionControl(this.page.locator("body"), controls.nth(state.index));
+        if (!selection) continue;
+        if (!await this.isSelected(selection.control)) {
+          if (state.native && !selection.label) await selection.control.check();
+          else await selection.target.click();
+        }
+        break;
+      }
       for (const selection of selections) {
+        if (await this.isSelected(selection.control)) continue;
         const native = /^(checkbox|radio)$/i.test(await selection.control.getAttribute("type") ?? "");
         if (native && !selection.label) await selection.control.check();
-        else if (!await this.isSelected(selection.control)) await selection.target.click();
+        else await selection.target.click();
       }
       await this.assertSelectedControls(selections.map(selection => selection.control));
     } catch {
@@ -177,9 +206,10 @@ export class HapvidaCardPage {
     const controls = this.page.locator(`${ROW_SELECTOR.split(", ").map(row => `${row} ${CONTROL_SELECTOR.split(", ").join(`, ${row} `)}`).join(", ")}`);
     const exceptHandle = except ? await except.elementHandle() : undefined;
     try {
-      for (let index = 0; index < await controls.count(); index += 1) {
-        const control = controls.nth(index);
-        if (!await control.isEnabled() || !await this.isSelected(control)) continue;
+      const selected = (await controls.evaluateAll(inspectCardSelectionControls)).filter(state => state.selected && state.enabled);
+      for (const state of selected) {
+        const control = controls.nth(state.index);
+        if (!await this.isSelected(control)) continue;
         if (exceptHandle && await control.evaluate((element, target) => element === target, exceptHandle)) continue;
         const type = await control.getAttribute("type");
         if (type === "radio") continue;
@@ -195,40 +225,23 @@ export class HapvidaCardPage {
   }
 
   private async assertSelectedControls(expected: Locator[]) {
-    for (const control of expected) if (!await this.isSelected(control)) throw new AutomationError("BENEFICIARY_SELECTION_FAILED", "A selecao nao foi confirmada.", { step: "confirm_beneficiary_selection" });
-    const checked = this.page.locator('tr input:checked, [role="row"] input:checked, tr [aria-checked="true"], [role="row"] [aria-checked="true"]');
-    if (await checked.count() !== expected.length) throw new AutomationError("BENEFICIARY_SELECTION_FAILED", "O portal manteve uma selecao diferente da solicitada.", { step: "confirm_beneficiary_selection" });
+    const handles = await Promise.all(expected.map(control => control.elementHandle()));
+    try {
+      const states = await this.page.locator(CONTROL_SELECTOR).evaluateAll(inspectCardSelectionControls, handles);
+      const chosen = states.filter(state => state.expected);
+      if (chosen.length !== expected.length || chosen.some(state => !state.selected)) {
+        throw new AutomationError("BENEFICIARY_SELECTION_FAILED", "A selecao nao foi confirmada.", { step: "confirm_beneficiary_selection" });
+      }
+      if (states.some(state => state.inRow && state.selected && !state.bulk && !state.expected)) {
+        throw new AutomationError("BENEFICIARY_SELECTION_FAILED", "O portal manteve uma selecao diferente da solicitada.", { step: "confirm_beneficiary_selection" });
+      }
+    } finally { await Promise.all(handles.map(handle => handle?.dispose())); }
   }
 
   private async readRowIdentity(row: Locator): Promise<BeneficiarySearchInput> {
-    return row.evaluate(element => {
-      const node = element as any;
-      const normalize = (text: string) => text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
-      const cells = Array.from(node.children as any[]).filter(cell => /^(TD|TH)$/.test(cell.tagName) || cell.getAttribute("role") === "cell");
-      const table = node.closest("table");
-      const header = table && (Array.from(table.querySelectorAll("tr") as any[]).find(row => row.querySelector("th") && !row.querySelector("tr")));
-      const headings = header ? Array.from(header.children as any[]).map(cell => normalize(cell.innerText ?? "")) : [];
-      let nameIndex = headings.findIndex(label => /\bnome\b/.test(label));
-      if (nameIndex < 0) nameIndex = headings.findIndex(label => /^(beneficiario|usuario|segurado)$/.test(label));
-      const candidates = cells.map(cell => (cell.innerText ?? "").trim()).filter(text => /^[\p{L} .'-]+$/u.test(text) &&
-        text.split(/\s+/).length >= 2 && !/\b(plano|selecionar|imprimir|carteira|contrato|titular|dependente)\b/i.test(text));
-      const beneficiaryName = nameIndex >= 0 ? (cells[nameIndex]?.innerText ?? "").trim() : candidates.length === 1 ? candidates[0] : "";
-      const cardIdentifiers: string[] = [];
-      let cpf: string | undefined;
-      let requireIdentifier = false;
-      headings.forEach((label, index) => {
-        const digits = (cells[index]?.innerText ?? "").replace(/\D/g, "");
-        if (/\bcpf\b/.test(label) && digits.length === 11) cpf = digits;
-        if (/\b(carteira|carteirinha|matricula)\b|(codigo|cd\.?|cod\.?).*(beneficiario|usuario|segurado)/.test(label) && digits.length >= 6 && !/^0+$/.test(digits)) {
-          cardIdentifiers.push(digits);
-          if (/\b(carteira|carteirinha)\b/.test(label)) requireIdentifier = true;
-        }
-      });
-      for (const input of node.querySelectorAll('input[name*="cd_beneficiario"], input[name*="cd_usuario"], input[name*="carteira"], input[name*="matricula"]')) {
-        const digits = (input.value ?? "").replace(/\D/g, ""); if (digits.length >= 6 && !/^0+$/.test(digits)) cardIdentifiers.push(digits);
-      }
-      return { beneficiaryName, cpf, cardIdentifiers: [...new Set(cardIdentifiers)], requireIdentifier };
-    });
+    const identity = (await row.evaluate(inspectCardListRows))[0]!;
+    const { beneficiaryName, cpf, cardIdentifiers, requireIdentifier } = identity;
+    return { beneficiaryName, cpf, cardIdentifiers, requireIdentifier };
   }
 
   private async waitForBeneficiaryList() {
@@ -246,7 +259,7 @@ export class HapvidaCardPage {
       const text = (doc.body?.innerText ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
       if (/nenhum\s+(?:beneficiario|usuario|registro)|sem\s+(?:registros|resultados|beneficiarios)|nao\s+(?:foi|foram)\s+encontrad/.test(text)) return true;
       const print = Array.from(doc.querySelectorAll('button, input[type="button"], input[type="submit"], a')).some(element =>
-        visible(element) && /imprimir\s+selecionados/i.test(element.innerText || (element as unknown as { value?: string }).value || ""));
+        visible(element) && /imprimir\s+(?:(?:os|as)\s+)?(?:selecionad[oa]s|todos|todas|tudo)/i.test(element.innerText || (element as unknown as { value?: string }).value || ""));
       return print && Array.from(doc.querySelectorAll('tr, [role="row"]')).some(row =>
         visible(row) && !row.querySelector('tr, [role="row"]') && Boolean(row.innerText.trim()));
     }, undefined, { timeout: this.previewTimeoutMs }).catch(() => {
@@ -280,13 +293,25 @@ export class HapvidaCardPage {
     return undefined;
   }
 
-  async requestSelectedCards() {
-    const popupPromise = this.page.waitForEvent("popup", { timeout: 5000 }).catch(() => undefined);
-    await this.printSelectedButton().click();
-    const popup = await popupPromise;
-    const resultPage = popup ?? this.page;
-    await resultPage.waitForLoadState("domcontentloaded").catch(() => undefined);
-    return resultPage;
+  async requestSelectedCards(beneficiaries: BeneficiarySearchInput[], allBeneficiaries = false,
+    onPrinted?: (command: "all" | "selected") => Promise<void>) {
+    const allButton = allBeneficiaries ? await this.visibleEnabledButton(this.printAllButton()) : undefined;
+    const button = allButton ?? await this.visibleEnabledButton(this.printSelectedButton());
+    if (!button) throw new AutomationError("PORTAL_CHANGED", "Nao encontrei o comando de impressao correspondente ao pedido.", {
+      step: "print_selected_cards", retryable: true,
+    });
+    const cancelled = new AbortController();
+    let onPopup!: (popup: Page) => void;
+    const popup = new Promise<Page>(resolve => { onPopup = resolve; this.page.on("popup", onPopup); });
+    try {
+      await button.click();
+      await onPrinted?.(allButton ? "all" : "selected");
+      const inCurrentPage = waitForRenderedCards(this.page, beneficiaries, this.previewTimeoutMs, this.portalUrl, cancelled.signal)
+        .then(() => this.page);
+      const resultPage = await Promise.race([popup, inCurrentPage]);
+      await resultPage.waitForLoadState("domcontentloaded", { timeout: this.previewTimeoutMs });
+      return resultPage;
+    } finally { cancelled.abort(); this.page.off("popup", onPopup); }
   }
 
   async waitForCardPreview(input: BeneficiarySearchInput) {

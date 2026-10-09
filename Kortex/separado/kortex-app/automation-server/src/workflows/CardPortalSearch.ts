@@ -30,7 +30,13 @@ export async function searchCardPortals(operation: OperationRecord, signal: Abor
     visited: [],
   };
   const original = { portal: operation.portal, credentialRef: operation.credentialRef, credentialId: operation.credentialId };
-  const order = [original.portal, ...portals.filter(portal => portal !== original.portal)];
+  // A verified access for this exact company/code avoids probing the wrong portal on every new request.
+  // A resumed authentication request keeps its current portal and its operation-scoped RAM credential.
+  const preferred = contractCode && previous?.requestKey !== requestKey
+    ? await context.credentialResolver?.preferredCardPortal?.({ companyId: operation.companyId, portalLoginCode: contractCode })
+    : undefined;
+  const first = preferred ?? original.portal;
+  const order = [first, ...portals.filter(portal => portal !== first)];
   const failures: Array<{ portal: PortalName; error: AutomationError }> = [];
   let submittedCredential: PortalCredential | undefined;
 

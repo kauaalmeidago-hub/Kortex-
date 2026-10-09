@@ -16,12 +16,15 @@ await context.route("**/*", (route) => route.abort());
 try {
   const cases = [
     { name: "hidden-title-real-card", markup: card, reproduce: true },
+    { name: "real-card-with-print-button", markup: card.replace("</body>", "<button>Imprimir todos</button></body>") },
     { name: "hidden-title-and-visible-heading", markup: html("<h1>Carteira Provisória</h1><p>MARIA DE TESTE</p>") },
     { name: "delayed-card-content", markup: html(`<p id="name"></p><script>setTimeout(() => document.getElementById('name').textContent = 'MARIA DE TESTE', 100);</script>`) },
     { name: "wrong-beneficiary", markup: html("<p>Nome: JOAO DE TESTE</p>"), error: "CARD_VALIDATION_FAILED" },
     { name: "title-only", markup: html(""), error: "CARD_PREVIEW_NOT_FOUND" },
     { name: "hidden-beneficiary", markup: html('<p hidden>MARIA DE TESTE</p>'), error: "CARD_PREVIEW_NOT_FOUND" },
     { name: "selection-list", markup: html('<table><tr><td>MARIA DE TESTE</td><td><input type="checkbox"></td></tr></table>'), error: "CARD_PREVIEW_NOT_FOUND" },
+    { name: "hidden-checkbox-selection-list", markup: html('<table><tr><td>MARIA DE TESTE</td><td><input id="member" hidden type="checkbox"><label for="member">Selecionar</label></td></tr></table><button>Imprimir selecionados</button>'), error: "CARD_PREVIEW_NOT_FOUND" },
+    { name: "aria-selection-list", markup: html('<table><tr><td>MARIA DE TESTE</td><td><span role="checkbox" aria-checked="true">Selecionar</span></td></tr></table>'), error: "CARD_PREVIEW_NOT_FOUND" },
     { name: "login-form", markup: html('<p>MARIA DE TESTE</p><input type="password">'), error: "CARD_PREVIEW_NOT_FOUND" },
     { name: "portal-error", markup: html("<p>Não foi possível gerar a carteirinha de MARIA DE TESTE</p>"), error: "CARD_PREVIEW_NOT_FOUND" },
   ];
@@ -56,7 +59,7 @@ try {
       const card = ${JSON.stringify(card)};
       document.getElementById('print').onclick = () => { ${writeCard} };
     </script>`));
-    const result = await new HapvidaCardPage(page).requestSelectedCards();
+    const result = await new HapvidaCardPage(page).requestSelectedCards([expected]);
     assert.equal(result === page, mode === "same-tab");
     await new HapvidaCardPage(result, 1500).waitForCardPreview(expected);
     validateCardPdfBytes(await result.pdf({ format: "A4", printBackground: true }));

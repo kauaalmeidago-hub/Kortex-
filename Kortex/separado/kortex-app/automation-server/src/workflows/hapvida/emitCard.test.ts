@@ -143,6 +143,7 @@ describe("CARD_ISSUE authentication in the execution context", () => {
     expect(mocks.remember).not.toHaveBeenCalled();
     expect(f.artifactSave).not.toHaveBeenCalled();
     expect(f.events.some((event) => event.type === "authentication.succeeded")).toBe(false);
+    expect(f.validate).not.toHaveBeenCalled();
   });
 
   it("confirms database storage after a validated login even without a local DPAPI copy", async () => {

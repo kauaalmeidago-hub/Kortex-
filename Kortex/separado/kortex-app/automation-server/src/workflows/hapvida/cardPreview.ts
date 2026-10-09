@@ -10,7 +10,7 @@ export interface CardBeneficiary {
   requireIdentifier?: boolean;
 }
 
-export async function waitForRenderedCards(page: Page, beneficiaries: CardBeneficiary[], timeoutMs: number, portalUrl?: string) {
+export async function waitForRenderedCards(page: Page, beneficiaries: CardBeneficiary[], timeoutMs: number, portalUrl?: string, signal?: AbortSignal) {
   if (!beneficiaries.length || beneficiaries.some(input => !input.beneficiaryName.trim())) {
     throw new AutomationError("MISSING_REQUIRED_DATA", "Faltam beneficiarios para validar as carteirinhas.", { step: "validate_card_preview" });
   }
@@ -18,6 +18,7 @@ export async function waitForRenderedCards(page: Page, beneficiaries: CardBenefi
   const deadline = Date.now() + timeoutMs;
   let lastStates: Array<{ document: boolean; matches: boolean[]; frame: Frame }> = [];
   while (!page.isClosed() && Date.now() < deadline) {
+    signal?.throwIfAborted();
     const parentTitle = await page.title().catch(() => "");
     const states = await Promise.all(page.frames().map(async frame => {
       try {
@@ -44,7 +45,9 @@ export async function waitForRenderedCards(page: Page, beneficiaries: CardBenefi
           const text = normalize(`${body.innerText} ${readonly}`);
           const cardMarker = /carteira\s+provisoria|carteirinha|cartao\s+(?:do\s+beneficiario|de\s+identificacao)/
             .test(`${normalize(doc.title)} ${normalize(parentTitle)} ${text}`);
-          const operationForm = doc.querySelector('input[type="password"]') || Array.from(doc.querySelectorAll('input[type="checkbox"], input[type="radio"], #p_cd_empresa, #p_cd_senha') as any[]).some(visible);
+          const selectionForm = Array.from(doc.querySelectorAll('input[type="checkbox"], input[type="radio"], [role="checkbox"], [role="radio"], #p_cd_empresa, #p_cd_senha') as any[])
+            .some(control => visible(control) || Array.from(control.labels ?? []).some(visible) || (control.closest("label") && visible(control.closest("label"))));
+          const operationForm = doc.querySelector('input[type="password"]') || selectionForm;
           const portalError = /identificacao\s+invalida|sessao\s+expirada|acesso\s+negado|nao\s+foi\s+possivel\s+(?:emitir|gerar)/.test(text);
           const matches = beneficiaries.map(input => {
             const name = normalize(input.beneficiaryName);
@@ -77,6 +80,7 @@ export async function waitForRenderedCards(page: Page, beneficiaries: CardBenefi
     if (!uncovered.size) return documents;
     await delay(Math.min(100, Math.max(0, deadline - Date.now())));
   }
+  signal?.throwIfAborted();
   const matched = beneficiaries.filter((_, index) => lastStates.some(state => state.matches[index])).length;
   const safeDetails = `Documentos legiveis: ${lastStates.filter(state => state.document).length}; beneficiarios confirmados: ${matched}/${beneficiaries.length}; frames examinados: ${lastStates.length}.`;
   if (lastStates.some(state => state.document)) {

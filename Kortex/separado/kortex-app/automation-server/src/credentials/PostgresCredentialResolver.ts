@@ -1,6 +1,8 @@
 import pg from "pg";
 import type { CredentialResolver } from "./CredentialResolver.js";
 import { credentialRefForLogin } from "./credentialIdentity.js";
+import type { PortalName } from "../types.js";
+import { AutomationError } from "../errors.js";
 
 const { Pool } = pg;
 
@@ -20,6 +22,28 @@ export class PostgresCredentialResolver implements CredentialResolver {
 
   async close() {
     await this.pool.end();
+  }
+
+  async preferredCardPortal(input: { companyId: string; portalLoginCode: string }): Promise<PortalName | undefined> {
+    if (!input.portalLoginCode.trim()) return undefined;
+    const result = await this.pool.query<{ operator: string }>(
+      `SELECT operator
+       FROM public.automation_credentials
+       WHERE company_id = $1
+         AND metadata->>'portalLoginCode' = $2
+         AND operator IN ('hapvida', 'ndi')
+         AND status = 'active'
+         AND last_verified_at IS NOT NULL
+       ORDER BY last_verified_at DESC, created_at DESC
+       LIMIT 1`,
+      [input.companyId, input.portalLoginCode.trim()],
+    ).catch(() => {
+      throw new AutomationError("CREDENTIAL_STORE_UNAVAILABLE", "Nao foi possivel consultar os acessos validados da empresa.", {
+        step: "load_credential", retryable: true,
+      });
+    });
+    const operator = result.rows[0]?.operator;
+    return operator === "hapvida" || operator === "ndi" ? operator : undefined;
   }
 
   async resolve(input: { companyId: string; operator: string; portalLoginCode?: string }) {

@@ -1,4 +1,5 @@
 import { credentialRefForLogin } from "./credentialIdentity.js";
+import type { PortalName } from "../types.js";
 
 export interface ResolvedCredential {
   credentialId?: string;
@@ -7,6 +8,7 @@ export interface ResolvedCredential {
 
 export interface CredentialResolver {
   resolve(input: { companyId: string; operator: string; credentialRef?: string; portalLoginCode?: string }): Promise<ResolvedCredential>;
+  preferredCardPortal?(input: { companyId: string; portalLoginCode: string }): Promise<PortalName | undefined>;
 }
 
 export class ExplicitCredentialResolver implements CredentialResolver {
