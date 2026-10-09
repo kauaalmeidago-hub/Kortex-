@@ -25,7 +25,8 @@
     "permanent:status": "node scripts/install-permanent.mjs status",
     "permanent:stop": "node scripts/install-permanent.mjs stop",
     "permanent:remove": "node scripts/install-permanent.mjs remove",
-    "permanent:check": "npm run build && node scripts/check-permanent-runtime.mjs"
+    "permanent:check": "npm run build && node scripts/check-permanent-runtime.mjs",
+    "test:single-card-capture": "npm run build && node scripts/check-single-card-capture.mjs"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.2",

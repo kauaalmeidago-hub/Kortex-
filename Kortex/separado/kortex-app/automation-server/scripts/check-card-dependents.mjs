@@ -19,12 +19,12 @@ const html = body => `<!doctype html><html><head><meta charset="utf-8"><title>Ca
 const primary = "TITULAR DE TESTE", dependent = "DEPENDENTE DE TESTE", unrelated = "OUTRO TITULAR DE TESTE";
 const cardId = index => String(900000000001 + index);
 
-async function check(label, { portal = "ndi", include = false, change = false, unexpected = false, missing = false, disabled = false } = {}) {
+async function check(label, { portal = "ndi", include = false, change = false, unexpected = false, missing = false, disabled = false, locked = false, noDependentControl = false, requestedDependent = false } = {}) {
   const repository = new OperationRepository(":memory:"), store = new EphemeralCredentialStore();
   const portalUrl = `https://${portal === "ndi" ? "sigo.sh.srv.br" : "webhap.hapvida.com.br"}/card`;
   const now = new Date().toISOString();
   let operation = { id: `fixture-${label}`, type: "CARD_ISSUE", status: "starting", companyId: "company-fixture", portal,
-    credentialRef: `${portal}:company-fixture:login:0TEST`, input: { contractCode: "0TEST", beneficiaryName: primary,
+    credentialRef: `${portal}:company-fixture:login:0TEST`, input: { contractCode: "0TEST", beneficiaryName: requestedDependent ? dependent : primary,
       periodStart: "2026-01-01", periodEnd: "2026-10-09" }, artifacts: [], createdAt: now, updatedAt: now };
   repository.create(operation);
   store.put(operation.id, operation.credentialRef, { username: "0TEST", password: "synthetic-password" }, 300000);
@@ -41,15 +41,15 @@ async function check(label, { portal = "ndi", include = false, change = false, u
         const cards = people.map((name, index) => `<section class="card"><h2>Carteira Provisória - ${portal}</h2><p>Nome: ${name}</p><p>Carteirinha: ${cardId(index)}</p><p>Plano: TESTE</p></section>`);
         const list = html(`<table><tr><th>Nome do beneficiário</th><th>Carteirinha</th><th>Tipo</th><th>Matrícula do titular</th><th>Selecionar</th></tr>
           ${people.map((name, index) => `<tr><td>${name}</td><td>${cardId(index)}</td><td>${index === 1 ? "Dependente" : "Titular"}</td><td>${index === 1 ? cardId(0) : ""}</td>
-            <td><input id="member-${index}" type="checkbox" ${index === 2 ? "checked" : ""} ${disabled && index === 1 ? "disabled" : ""}
-              ${index === 0 ? 'onchange="document.getElementById(\'member-1\').checked = this.checked"' : ""}></td></tr>`).join("")}</table>
+            <td>${noDependentControl && index === 1 ? "" : `<input id="member-${index}" type="checkbox" ${index === 2 ? "checked" : ""} ${(disabled || locked) && index === 1 ? "disabled" : ""}
+              ${index === 0 ? 'onchange="const child=document.getElementById(\'member-1\');if(child)child.checked = this.checked"' : ""}>`}</td></tr>`).join("")}</table>
           <button id="print">Imprimir selecionados</button><button id="print-all">Imprimir tudo</button><script>
             document.getElementById('print-all').onclick = () => { throw new Error('A family request must never print the whole company'); };
             document.getElementById('print').onclick = async () => {
               const chosen = Array.from(document.querySelectorAll('input[id^=member-]:checked')).map(input => Number(input.id.split('-')[1]));
               await window.fixturePrinted(chosen);
               const cards = ${JSON.stringify(cards)};
-              const selected = ${unexpected ? "[0,1]" : "chosen"}.map(index => cards[index]); ${missing ? "selected.pop();" : ""}
+              const selected = ${unexpected || noDependentControl ? "[0,1]" : "chosen"}.map(index => cards[index]); ${missing ? "selected.pop();" : ""}
               const content = ${JSON.stringify(html("__CARDS__"))}.replace('__CARDS__', selected.join(''));
               document.open(); document.write(content); document.close();
             };</script>`);
@@ -82,6 +82,15 @@ async function check(label, { portal = "ndi", include = false, change = false, u
   const app = await createServer({ config, repository, queue: { enqueue: id => queued.push(id) }, credentialResolver: new ExplicitCredentialResolver(), eventBus: new OperationEventBus() });
   try {
     await run(); operation = repository.get(operation.id);
+    if (requestedDependent) {
+      assert.equal(operation.status, "success"); assert.equal(pdfs.length, 1);
+      assert.equal(operation.result.beneficiaryCount, 1); assert.deepEqual(operation.result.beneficiaryNames, [dependent]);
+      assert.equal(operation.result.cardDependentConfirmation, undefined);
+      assert.deepEqual(actions, [noDependentControl ? [0] : [1]]);
+      assert(!JSON.stringify({ operation, events: repository.getEvents(operation.id) }).includes("synthetic-password"));
+      console.log(JSON.stringify({ case: label, result: "PASS", pdfs: pdfs.length }));
+      return;
+    }
     assert.equal(operation.status, "awaiting_confirmation");
     assert.equal(pdfs.length, 0); assert.equal(actions.length, 0);
     assert.deepEqual(operation.result.cardDependentConfirmation.dependentNames, [dependent]);
@@ -91,8 +100,8 @@ async function check(label, { portal = "ndi", include = false, change = false, u
       payload: { confirmationId: before, includeDependents: include } });
     assert.equal(accepted.statusCode, 202, accepted.body); assert.deepEqual(queued, [operation.id]);
     operation = repository.get(operation.id); changed = change;
-    if (unexpected || missing || disabled) {
-      await assert.rejects(run, error => error.code === (disabled ? "BENEFICIARY_SELECTION_FAILED" : "CARD_VALIDATION_FAILED"));
+    if (missing) {
+      await assert.rejects(run, error => error.code === "CARD_VALIDATION_FAILED");
       assert.equal(pdfs.length, 0); assert.notEqual(repository.get(operation.id).status, "success");
     } else {
       await run(); operation = repository.get(operation.id);
@@ -103,7 +112,7 @@ async function check(label, { portal = "ndi", include = false, change = false, u
         assert.equal(pdfs.length, 0); assert.equal(actions.length, 0);
       } else {
         assert.equal(operation.status, "success"); assert.equal(pdfs.length, 1);
-        assert.deepEqual(actions, [include ? [0, 1] : [0]]);
+        assert.deepEqual(actions, [noDependentControl ? [0] : [0, 1]]);
         assert.equal(operation.result.beneficiaryCount, include ? 2 : 1);
         assert.deepEqual(operation.result.beneficiaryNames, include ? [primary, dependent] : [primary]);
         assert.equal(operation.result.cardDependentConfirmation.decision, include ? "with" : "without");
@@ -118,9 +127,15 @@ try {
   for (const portal of ["ndi", "hapvida"]) {
     await check(`${portal}-family-with-authorized-dependent`, { portal, include: true });
     await check(`${portal}-family-without-auto-selected-dependent`, { portal, include: false });
+    await check(`${portal}-forced-family-delivers-only-primary`, { portal, unexpected: true, locked: true });
+    await check(`${portal}-forced-family-delivers-authorized-dependents`, { portal, include: true, locked: true });
+    await check(`${portal}-holder-only-control-captures-primary`, { portal, noDependentControl: true });
+    await check(`${portal}-holder-only-control-delivers-authorized-family`, { portal, include: true, noDependentControl: true });
+    await check(`${portal}-direct-dependent-with-holder-only-control`, { portal, requestedDependent: true, noDependentControl: true });
+    await check(`${portal}-direct-dependent-from-forced-family-preview`, { portal, requestedDependent: true, unexpected: true });
   }
   await check("changed-family-requires-new-choice", { include: true, change: true });
-  await check("unauthorized-dependent-in-preview-blocked", { unexpected: true });
+  await check("combined-preview-delivers-only-primary", { unexpected: true });
   await check("authorized-dependent-missing-in-preview-blocked", { include: true, missing: true });
-  await check("unselectable-authorized-dependent-blocked", { include: true, disabled: true });
+  await check("auto-selected-disabled-dependent-accepted", { include: true, disabled: true });
 } finally { await browser.close(); }

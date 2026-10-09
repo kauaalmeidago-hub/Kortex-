@@ -9,14 +9,13 @@ import { HapvidaLoginPage } from "./pageObjects/HapvidaLoginPage.js";
 import { HapvidaCardPage, type BeneficiarySearchInput } from "./pageObjects/HapvidaCardPage.js";
 import { isAllBeneficiariesRequest } from "./cardIssueScope.js";
 import { materializeCardDocuments } from "./cardPreview.js";
+import { prepareSingleCardPrint, type CardPrintBox } from "./singleCardCapture.js";
 import { HapvidaMovementAccessPage } from "./pageObjects/HapvidaMovementAccessPage.js";
 import { HapvidaMovementMainMenuPage } from "./pageObjects/HapvidaMovementMainMenuPage.js";
 import { HapvidaActiveUsersPage } from "./pageObjects/HapvidaActiveUsersPage.js";
 import { validateCardPdfBytes } from "./downloadValidation.js";
 import { pendingCardDependents, type CardDependentConfirmation } from "./cardDependents.js";
 import { portalLoginCode } from "../../credentials/credentialIdentity.js";
-
-type CardPrintBox = { width: number; height: number };
 
 function readString(input: Record<string, unknown>, keys: string[]) {
   for (const key of keys) {
@@ -58,89 +57,14 @@ function safeFileNamePart(value: string) {
     .slice(0, 90) || "beneficiario";
 }
 
-async function prepareCardOnlyPrint(page: Page, beneficiaryName: string, title: string) {
-  return page.evaluate<CardPrintBox | undefined, { beneficiaryName: string; title: string }>(
-    ({ beneficiaryName, title }) => {
-      const doc = (globalThis as unknown as { document: any }).document;
-      const normalize = (text: string) => text
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f\u00ad\u200b-\u200d\ufeff]/g, "")
-        .replace(/\s+/g, " ")
-        .trim()
-        .toLowerCase();
-
-      const expectedName = normalize(beneficiaryName);
-      const cardPattern = /carteira\s+provisoria|carteirinha|cartao\s+(?:do\s+beneficiario|de\s+identificacao)/;
-      const candidates = Array.from(doc.body.querySelectorAll("body *") as any[])
-        .filter((element) => {
-          const rect = element.getBoundingClientRect();
-          if (rect.width < 250 || rect.height < 120) return false;
-          const text = normalize(element.innerText ?? "");
-          return text.includes(expectedName) && cardPattern.test(text);
-        })
-        .sort((left, right) => {
-          const leftRect = left.getBoundingClientRect();
-          const rightRect = right.getBoundingClientRect();
-          return (leftRect.width * leftRect.height) - (rightRect.width * rightRect.height);
-        });
-
-      const card = candidates[0];
-      if (!card) return undefined;
-
-      doc.title = title;
-      doc.getElementById("koa-card-print-root")?.remove();
-      doc.getElementById("koa-card-print-style")?.remove();
-
-      const root = doc.createElement("main");
-      root.id = "koa-card-print-root";
-      root.appendChild(card.cloneNode(true));
-      doc.body.appendChild(root);
-
-      const style = doc.createElement("style");
-      style.id = "koa-card-print-style";
-      style.textContent = `
-        @page { margin: 0; size: auto; }
-        html, body {
-          margin: 0 !important;
-          padding: 0 !important;
-          background: #ffffff !important;
-        }
-        body > :not(#koa-card-print-root) {
-          display: none !important;
-        }
-        #koa-card-print-root {
-          display: block !important;
-          margin: 0 !important;
-          padding: 12px !important;
-          width: max-content !important;
-          background: #ffffff !important;
-        }
-        #koa-card-print-root input,
-        #koa-card-print-root button {
-          display: none !important;
-        }
-      `;
-      doc.head.appendChild(style);
-
-      const rect = root.getBoundingClientRect();
-      return {
-        width: Math.max(1, Math.ceil(rect.width)),
-        height: Math.max(1, Math.ceil(rect.height)),
-      };
-    },
-    { beneficiaryName, title },
-  ).catch(() => undefined);
-}
-
-async function printCurrentPageToPdf(page: Page, beneficiaryName: string, title: string, batch = false) {
-  const printBox = batch ? undefined : await prepareCardOnlyPrint(page, beneficiaryName, title);
+async function printCurrentPageToPdf(page: Page, printBox?: CardPrintBox) {
   const printOptions = printBox
     ? {
         width: `${printBox.width}px`,
         height: `${printBox.height}px`,
         margin: { top: "0", right: "0", bottom: "0", left: "0" },
         printBackground: true,
-        preferCSSPageSize: true,
+        preferCSSPageSize: false,
       }
     : {
         format: "A4" as const,
@@ -155,7 +79,7 @@ async function printCurrentPageToPdf(page: Page, beneficiaryName: string, title:
     try {
       const pdf = await session.send("Page.printToPDF", {
         printBackground: true,
-        preferCSSPageSize: true,
+        preferCSSPageSize: !printBox,
         ...(printBox
           ? {
               paperWidth: printBox.width / 96,
@@ -376,10 +300,11 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
 
     await context.updateStatus("processing", allBeneficiaries ? "Selecionando todos os beneficiarios da empresa" : "Localizando beneficiario");
     let selected: BeneficiarySearchInput[];
-    let excludedDependents: BeneficiarySearchInput[] = [];
+    let otherBeneficiaries: BeneficiarySearchInput[] = [];
     if (allBeneficiaries) selected = await cardPage.selectAllBeneficiaries();
     else {
       const family = await cardPage.inspectBeneficiaryFamily({ beneficiaryName, cpf, birthDate });
+      otherBeneficiaries = family.otherBeneficiaries ?? family.dependents;
       assertNotAborted(signal);
       const previous = operation.result?.cardDependentConfirmation as CardDependentConfirmation | undefined;
       if (family.dependents.length || previous) {
@@ -397,12 +322,11 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
           if (credential) context.retainCardConfirmationCredential?.(operation, credential);
           return;
         }
-        if (confirmation.decision === "with") selected = await cardPage.selectBeneficiaries([family.beneficiary, ...family.dependents]);
+        if (confirmation.decision === "with") selected = await cardPage.selectBeneficiaries([family.beneficiary, ...family.dependents], true);
         else {
-          excludedDependents = family.dependents;
-          selected = [await cardPage.selectBeneficiary(family.beneficiary)];
+          selected = [await cardPage.selectBeneficiary(family.beneficiary, family.automaticCompanions ?? family.dependents)];
         }
-      } else selected = [await cardPage.selectBeneficiary(family.beneficiary)];
+      } else selected = [await cardPage.selectBeneficiary(family.beneficiary, family.automaticCompanions ?? [])];
     }
     if (!selected.length) throw new AutomationError("BENEFICIARY_NOT_FOUND", "Nao ha beneficiarios disponiveis para emitir.", { step: "find_beneficiary" });
     assertNotAborted(signal);
@@ -419,14 +343,16 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
     const multipleCards = allBeneficiaries || selected.length > 1;
     const documents = multipleCards
       ? await resultCardPage.waitForCardPreviews(selected)
-      : [await resultCardPage.waitForCardPreview(selected[0]!, excludedDependents)].filter((frame): frame is NonNullable<typeof frame> => Boolean(frame));
+      : [await resultCardPage.waitForCardPreview(selected[0]!)].filter((frame): frame is NonNullable<typeof frame> => Boolean(frame));
     assertNotAborted(signal);
-    if (documents?.length) await materializeCardDocuments(resultPage, documents, multipleCards);
+    if (multipleCards && documents?.length) await materializeCardDocuments(resultPage, documents, true);
 
     const fileName = allBeneficiaries ? `carteirinhas-empresa-${safeFileNamePart(requestedCompanyCode!)}.pdf`
       : `${multipleCards ? "carteirinhas" : "carteirinha"}-${safeFileNamePart(beneficiaryName)}.pdf`;
     const pdfTitle = allBeneficiaries ? `Carteirinhas da empresa - ${requestedCompanyCode}` : `Carteirinha - ${beneficiaryName.trim()}`;
-    const pdfBytes = validateCardPdfBytes(await printCurrentPageToPdf(resultPage, beneficiaryName, pdfTitle, multipleCards), fileName);
+    const printBox = multipleCards ? undefined : await prepareSingleCardPrint(resultPage, documents, selected[0]!, otherBeneficiaries, pdfTitle);
+    assertNotAborted(signal);
+    const pdfBytes = validateCardPdfBytes(await printCurrentPageToPdf(resultPage, printBox), fileName);
     const savedArtifact = await context.artifactStorage.save({
       operationId: operation.id,
       workspaceId: operation.workspaceId,

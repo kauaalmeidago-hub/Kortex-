@@ -88,10 +88,24 @@ export class HapvidaCardPage {
     await this.waitForBeneficiaryList();
   }
 
-  async selectBeneficiary(input: BeneficiarySearchInput) {
+  async selectBeneficiary(input: BeneficiarySearchInput, automaticDependents: BeneficiarySearchInput[] = []) {
     const row = await this.findSingleBeneficiaryRow(input);
+    const identity = await this.readRowIdentity(row);
+    if (input.cpf && identity.cpf && onlyDigits(input.cpf) !== identity.cpf) {
+      throw new AutomationError("BENEFICIARY_NOT_FOUND", "O CPF da linha nao corresponde ao pedido.", { step: "find_beneficiary" });
+    }
     const selection = await this.findSelectionControl(row);
     if (!selection) {
+      const snapshot = await this.page.locator(ROW_SELECTOR).evaluateAll(inspectCardListRows);
+      const index = await row.evaluate(element => Array.from((globalThis as unknown as { document: any }).document.querySelectorAll('tr, [role="row"]')).indexOf(element));
+      const holders = snapshot.filter(candidate => candidate.index !== index && candidate.visible && candidate.selectable &&
+        findCardDependents(snapshot, candidate.index).some(dependent => dependent.index === index));
+      if (holders.length === 1) {
+        const holder = holders[0]!;
+        const dependents = findCardDependents(snapshot, holder.index);
+        await this.selectBeneficiary(holder, dependents);
+        return { ...input, cpf: input.cpf ?? identity.cpf, cardIdentifiers: identity.cardIdentifiers, requireIdentifier: identity.requireIdentifier };
+      }
       const controls = await row.locator(CONTROL_SELECTOR).count();
       throw new AutomationError("PORTAL_CHANGED", "Nao encontrei o seletor do beneficiario no portal.", {
         safeDetails: `A linha do beneficiario apareceu, mas nao havia um controle habilitado ou um rotulo visivel associado. Controles encontrados: ${controls}.`,
@@ -100,12 +114,13 @@ export class HapvidaCardPage {
       });
     }
 
-    const identity = await this.readRowIdentity(row);
-    if (input.cpf && identity.cpf && onlyDigits(input.cpf) !== identity.cpf) {
-      throw new AutomationError("BENEFICIARY_NOT_FOUND", "O CPF da linha nao corresponde ao pedido.", { step: "find_beneficiary" });
+    // Keep linked family controls when the portal forces a joint print; the PDF capture isolates the requested card.
+    const permitted = [selection.control];
+    for (const dependent of automaticDependents) {
+      const linkedRow = await this.findSingleBeneficiaryRow(dependent);
+      permitted.push(...await linkedRow.locator(CONTROL_SELECTOR).all());
     }
-    // Old portal lists can contain preselected rows. Never print another person's card with this request.
-    await this.clearSelections(selection.control);
+    await this.clearSelections(permitted);
 
     try {
       const native = /^(checkbox|radio)$/i.test(await selection.control.getAttribute("type") ?? "");
@@ -122,8 +137,8 @@ export class HapvidaCardPage {
         step: "confirm_beneficiary_selection", retryable: true,
       });
     }
-    await this.clearSelections(selection.control, true);
-    await this.assertSelectedControls([selection.control]);
+    await this.clearSelections(permitted, true);
+    await this.assertSelectedControls([selection.control], permitted);
     return { ...input, cpf: input.cpf ?? identity.cpf, cardIdentifiers: identity.cardIdentifiers, requireIdentifier: identity.requireIdentifier };
   }
 
@@ -139,10 +154,37 @@ export class HapvidaCardPage {
       cpf: input.cpf ?? identity.cpf, cardIdentifiers: identity.cardIdentifiers, requireIdentifier: identity.requireIdentifier };
     const dependents = findCardDependents(snapshot, index).map(({ beneficiaryName, cpf, cardIdentifiers, requireIdentifier }) =>
       ({ beneficiaryName, cpf, cardIdentifiers, requireIdentifier }));
-    return { beneficiary, dependents };
+    const holders = snapshot.filter(candidate => candidate.index !== index && candidate.visible &&
+      findCardDependents(snapshot, candidate.index).some(dependent => dependent.index === index));
+    const automaticCompanions = holders.length === 1
+      ? [holders[0]!, ...findCardDependents(snapshot, holders[0]!.index)].filter(member => member.index !== index)
+        .map(({ beneficiaryName, cpf, cardIdentifiers, requireIdentifier }) => ({ beneficiaryName, cpf, cardIdentifiers, requireIdentifier }))
+      : dependents;
+    const otherBeneficiaries = snapshot.filter(row => row.visible && row.kind === "beneficiary" && row.index !== index)
+      .map(({ beneficiaryName, cpf, cardIdentifiers, requireIdentifier }) => ({ beneficiaryName, cpf, cardIdentifiers, requireIdentifier }));
+    return { beneficiary, dependents, otherBeneficiaries, automaticCompanions };
   }
 
-  async selectBeneficiaries(inputs: BeneficiarySearchInput[]) {
+  async selectBeneficiaries(inputs: BeneficiarySearchInput[], automaticFamily = false) {
+    if (automaticFamily) {
+      const primary = inputs[0];
+      if (!primary) return [];
+      await this.selectBeneficiary(primary, inputs.slice(1));
+      for (const input of inputs.slice(1)) {
+        const row = await this.findSingleBeneficiaryRow(input);
+        const controls = row.locator(CONTROL_SELECTOR);
+        if (!await controls.count()) continue; // Some portals print dependents only through the holder's selection.
+        if ((await Promise.all((await controls.all()).map(control => this.isSelected(control)))).some(Boolean)) continue;
+        const selection = await this.findSelectionControl(row);
+        if (!selection) throw new AutomationError("BENEFICIARY_SELECTION_FAILED", "Um beneficiario autorizado nao possui selecao disponivel.", { step: "confirm_beneficiary_selection" });
+        if (/^(checkbox|radio)$/i.test(await selection.control.getAttribute("type") ?? "") && !selection.label) await selection.control.check();
+        else await selection.target.click();
+      }
+      const permitted: Locator[] = [];
+      for (const input of inputs) permitted.push(...await (await this.findSingleBeneficiaryRow(input)).locator(CONTROL_SELECTOR).all());
+      await this.assertSelectedControls([], permitted);
+      return inputs;
+    }
     const selections = [];
     for (const input of inputs) {
       const row = await this.findSingleBeneficiaryRow(input);
@@ -265,12 +307,11 @@ export class HapvidaCardPage {
     } finally { await Promise.all(exceptHandles.map(handle => handle?.dispose())); }
   }
 
-  private async assertSelectedControls(expected: Locator[]) {
-    const handles = await Promise.all(expected.map(control => control.elementHandle()));
+  private async assertSelectedControls(expected: Locator[], permitted: Locator[] = expected) {
+    const handles = await Promise.all(permitted.map(control => control.elementHandle()));
     try {
       const states = await this.page.locator(CONTROL_SELECTOR).evaluateAll(inspectCardSelectionControls, handles);
-      const chosen = states.filter(state => state.expected);
-      if (chosen.length !== expected.length || chosen.some(state => !state.selected)) {
+      if ((await Promise.all(expected.map(control => this.isSelected(control)))).some(selected => !selected)) {
         throw new AutomationError("BENEFICIARY_SELECTION_FAILED", "A selecao nao foi confirmada.", { step: "confirm_beneficiary_selection" });
       }
       if (states.some(state => state.inRow && state.selected && !state.bulk && !state.expected)) {

@@ -27,7 +27,7 @@ export function KoaCardDependentConfirmation({ confirmation, onConfirm, onCancel
     <ul className="mt-2 list-disc space-y-1 pl-4 text-sm text-foreground">
       {confirmation.dependentNames.map((name, index) => <li key={`${name}-${index}`}>{name}</li>)}
     </ul>
-    <p className="mt-3 text-sm text-muted-foreground">Você autoriza emitir as carteirinhas dos dependentes junto com a do beneficiário? A impressão está aguardando sua escolha.</p>
+    <p className="mt-3 text-sm text-muted-foreground">Deseja receber também as carteirinhas dos dependentes? Se escolher “Sem dependentes”, entregarei somente a carteirinha de {confirmation.beneficiaryName}, mesmo que o portal gere a família junta.</p>
     {error && <p role="alert" className="mt-2 text-sm text-destructive">{error}</p>}
     <div className="mt-3 flex flex-wrap gap-2">
       <button type="button" disabled={submitting} onClick={() => void choose(true)} className="rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground disabled:opacity-50">Com dependentes</button>

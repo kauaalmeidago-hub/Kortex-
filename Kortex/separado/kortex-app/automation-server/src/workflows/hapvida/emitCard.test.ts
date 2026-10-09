@@ -7,7 +7,7 @@ import type { OperationEvent, OperationRecord } from "../../types.js";
 const mocks = vi.hoisted(() => ({
   open: vi.fn(), ready: vi.fn(), login: vi.fn(), passwordVisible: vi.fn(), invalid: vi.fn(),
   periodForm: vi.fn(), fillPeriod: vi.fn(), submitPeriod: vi.fn(), selectBeneficiary: vi.fn(),
-  requestCards: vi.fn(), preview: vi.fn(), selectAll: vi.fn(), previews: vi.fn(), inspectFamily: vi.fn(), selectMany: vi.fn(), remember: vi.fn(), loginPages: [] as unknown[], cardPages: [] as unknown[], loginOptions: [] as unknown[],
+  requestCards: vi.fn(), preview: vi.fn(), selectAll: vi.fn(), previews: vi.fn(), inspectFamily: vi.fn(), selectMany: vi.fn(), capture: vi.fn(), remember: vi.fn(), loginPages: [] as unknown[], cardPages: [] as unknown[], loginOptions: [] as unknown[],
 }));
 vi.mock("./pageObjects/HapvidaLoginPage.js", () => ({ HapvidaLoginPage: class {
   constructor(page: unknown, url: unknown, _timeout: unknown, label: unknown) { mocks.loginPages.push(page); mocks.loginOptions.push({ url, label }); }
@@ -24,6 +24,7 @@ vi.mock("./pageObjects/HapvidaCardPage.js", () => ({ HapvidaCardPage: class {
 vi.mock("../../authentication/RememberedCredentialService.js", () => ({ RememberedCredentialService: class {
   saveValidatedCredential = mocks.remember;
 } }));
+vi.mock("./singleCardCapture.js", () => ({ prepareSingleCardPrint: mocks.capture }));
 import { emitCard } from "./emitCard.js";
 import { AutomationError } from "../../errors.js";
 import { pendingCardDependents } from "./cardDependents.js";
@@ -65,6 +66,7 @@ describe("CARD_ISSUE authentication in the execution context", () => {
     mocks.loginPages.length = 0; mocks.cardPages.length = 0; mocks.loginOptions.length = 0;
     mocks.passwordVisible.mockResolvedValue(false); mocks.invalid.mockResolvedValue(false);
     mocks.remember.mockResolvedValue({ rememberedOnDevice: true, metadataRegistered: true });
+    mocks.capture.mockResolvedValue({ width: 640, height: 420 });
     mocks.inspectFamily.mockImplementation(async beneficiary => ({ beneficiary, dependents: [] }));
     mocks.selectBeneficiary.mockImplementation(async beneficiary => beneficiary);
     mocks.selectMany.mockImplementation(async beneficiaries => beneficiaries);
@@ -284,8 +286,22 @@ describe("CARD_ISSUE authentication in the execution context", () => {
     expect(f.operation.status).toBe("success");
     expect(f.operation.result?.beneficiaryCount).toBe(decision === "with" ? 2 : 1);
     expect(mocks.requestCards).toHaveBeenCalledWith(decision === "with" ? [family.beneficiary, ...family.dependents] : [family.beneficiary], false, expect.any(Function));
-    if (decision === "without") expect(mocks.preview).toHaveBeenCalledWith(family.beneficiary, family.dependents);
+    if (decision === "without") {
+      expect(mocks.preview).toHaveBeenCalledWith(family.beneficiary);
+      expect(mocks.selectBeneficiary).toHaveBeenCalledWith(family.beneficiary, family.dependents);
+      expect(mocks.capture).toHaveBeenCalledWith(f.page, [], family.beneficiary, family.dependents, expect.any(String));
+    }
     else expect(mocks.previews).toHaveBeenCalledWith([family.beneficiary, ...family.dependents]);
+  });
+
+  it("does not fall back to delivering the family PDF when individual capture fails", async () => {
+    const f = fixture(false);
+    mocks.capture.mockRejectedValue(new AutomationError("CARD_CAPTURE_FAILED", "Cartao ambiguo."));
+    await expect(emitCard(f.operation, new AbortController().signal, f.context)).rejects.toMatchObject({ code: "CARD_CAPTURE_FAILED" });
+    expect(f.page.pdf).not.toHaveBeenCalled();
+    expect(f.artifactSave).not.toHaveBeenCalled();
+    expect(f.operation.artifacts).toEqual([]);
+    expect(f.operation.status).not.toBe("success");
   });
 
   it("requires a new choice if the dependent identity changed while awaiting approval", async () => {
