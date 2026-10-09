@@ -420,6 +420,14 @@ export async function submitOperationAuthentication(input: {
   }>(response);
 }
 
+export async function confirmOperationCardDependents(operationId: string, confirmationId: string, includeDependents: boolean) {
+  if (!useLocalApi || !automationBaseUrl) throw new Error("A confirmação precisa ser enviada ao Koa Worker local.");
+  const response = await localFetch(`${automationBaseUrl}/api/operations/${encodeURIComponent(operationId)}/card-dependents`, {
+    method: "POST", headers: await headers(), body: JSON.stringify({ confirmationId, includeDependents }),
+  });
+  return parseResponse<AutomationOperationResponse>(response);
+}
+
 export function getArtifactUrl(operationId: string, fileName: string) {
   if (!useLocalApi) return "";
   const url = new URL(`${automationBaseUrl}/api/operations/${operationId}/artifacts/${encodeURIComponent(fileName)}`);

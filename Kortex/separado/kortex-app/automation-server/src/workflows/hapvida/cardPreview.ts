@@ -10,13 +10,14 @@ export interface CardBeneficiary {
   requireIdentifier?: boolean;
 }
 
-export async function waitForRenderedCards(page: Page, beneficiaries: CardBeneficiary[], timeoutMs: number, portalUrl?: string, signal?: AbortSignal) {
+export async function waitForRenderedCards(page: Page, beneficiaries: CardBeneficiary[], timeoutMs: number, portalUrl?: string, signal?: AbortSignal,
+  excluded: CardBeneficiary[] = []) {
   if (!beneficiaries.length || beneficiaries.some(input => !input.beneficiaryName.trim())) {
     throw new AutomationError("MISSING_REQUIRED_DATA", "Faltam beneficiarios para validar as carteirinhas.", { step: "validate_card_preview" });
   }
   const expectedOrigin = portalUrl ? new URL(portalUrl).origin : undefined;
   const deadline = Date.now() + timeoutMs;
-  let lastStates: Array<{ document: boolean; matches: boolean[]; frame: Frame }> = [];
+  let lastStates: Array<{ document: boolean; matches: boolean[]; unexpected?: boolean; frame: Frame }> = [];
   while (!page.isClosed() && Date.now() < deadline) {
     signal?.throwIfAborted();
     const parentTitle = await page.title().catch(() => "");
@@ -29,7 +30,7 @@ export async function waitForRenderedCards(page: Page, beneficiaries: CardBenefi
           const element = await frame.frameElement();
           try { if (!await element.isVisible()) return undefined; } finally { await element.dispose(); }
         }
-        const state = await frame.evaluate(({ beneficiaries, parentTitle }) => {
+        const state = await frame.evaluate(({ beneficiaries, parentTitle, excluded }) => {
           const scope = globalThis as unknown as { document: any; getComputedStyle(element: unknown): any };
           const doc = scope.document, body = doc.body;
           const normalize = (text: string) => text.normalize("NFD").replace(/[\u0300-\u036f\u00ad\u200b-\u200d\ufeff]/g, "")
@@ -49,7 +50,7 @@ export async function waitForRenderedCards(page: Page, beneficiaries: CardBenefi
             .some(control => visible(control) || Array.from(control.labels ?? []).some(visible) || (control.closest("label") && visible(control.closest("label"))));
           const operationForm = doc.querySelector('input[type="password"]') || selectionForm;
           const portalError = /identificacao\s+invalida|sessao\s+expirada|acesso\s+negado|nao\s+foi\s+possivel\s+(?:emitir|gerar)/.test(text);
-          const matches = beneficiaries.map(input => {
+          const matchesBeneficiary = (input: CardBeneficiary) => {
             const name = normalize(input.beneficiaryName);
             const fullName = new RegExp(`(?:^|[^a-z0-9])${escape(name)}(?:$|[^a-z0-9])`).test(text);
             const prefix = name.split(" ").slice(0, 2).join(" ");
@@ -61,11 +62,12 @@ export async function waitForRenderedCards(page: Page, beneficiaries: CardBenefi
             });
             // A shortened printed name needs an identifier from the selected row. Homonyms always need it.
             return input.requireIdentifier ? (fullName || namePrefix) && identity : fullName || (namePrefix && identity);
-          });
+          };
+          const matches = beneficiaries.map(matchesBeneficiary);
           const document = cardMarker && !operationForm && !portalError && Boolean(text) &&
             (matches.some(Boolean) || /\bnome\b|\bplano\b|\bvalidade\b|\bcodigo\b/.test(text));
-          return { document, matches: document ? matches : beneficiaries.map(() => false) };
-        }, { beneficiaries, parentTitle });
+          return { document, matches: document ? matches : beneficiaries.map(() => false), unexpected: document && excluded.some(matchesBeneficiary) };
+        }, { beneficiaries, parentTitle, excluded });
         return { ...state, frame };
       } catch { return undefined; }
     }));
@@ -77,7 +79,12 @@ export async function waitForRenderedCards(page: Page, beneficiaries: CardBenefi
       if (!covered.length) continue;
       documents.push(state.frame); covered.forEach(index => uncovered.delete(index));
     }
-    if (!uncovered.size) return documents;
+    if (!uncovered.size) {
+      if (lastStates.some(state => state.unexpected)) {
+        throw new AutomationError("CARD_VALIDATION_FAILED", "O portal incluiu dependentes que nao foram autorizados para este PDF.", { step: "validate_card_preview", retryable: false });
+      }
+      return documents;
+    }
     await delay(Math.min(100, Math.max(0, deadline - Date.now())));
   }
   signal?.throwIfAborted();

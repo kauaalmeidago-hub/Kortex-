@@ -29,6 +29,7 @@ const cases = [
   { name: "homonyms-resolved-by-birth-date", body: table(row(`${name} 01/01/1990`, box("first")) + row(`${name} 02/02/1992`, box("chosen"))), input: { birthDate: "1992-02-02" }, selected: ["chosen"] },
   { name: "identifier-does-not-match", body: table(row(`${name} 111.111.111-11`, box("first")) + row(`${name} 222.222.222-22`, box("second"))), input: { cpf: "33333333333" }, error: "BENEFICIARY_NOT_FOUND" },
   { name: "other-name-prefix", body: table(row("MARIA DE TESTEIRA", box("other")) + row(name, box("chosen"))), selected: ["chosen"] },
+  { name: "another-full-name-containing-requested-name", body: table(row("OUTRA MARIA DE TESTE", box("other")) + row(name, box("chosen"))), selected: ["chosen"] },
   { name: "missing-control", body: table(row(name, "")), error: "PORTAL_CHANGED" },
   { name: "disabled-control", body: table(row(name, box("disabled", "disabled"))), error: "PORTAL_CHANGED" },
   { name: "unconfirmed-selection", body: table(row(name, '<span role="checkbox" aria-checked="false" tabindex="0">Selecionar</span>')), error: "BENEFICIARY_SELECTION_FAILED" },

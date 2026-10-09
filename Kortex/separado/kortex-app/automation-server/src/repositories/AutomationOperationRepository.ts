@@ -9,6 +9,7 @@ export interface AutomationOperationRepository {
   ): OperationRecord | undefined | Promise<OperationRecord | undefined>;
   appendEvent(event: OperationEvent): OperationEvent | Promise<OperationEvent>;
   getEvents(operationId: string, afterId?: number | string): OperationEvent[] | Promise<OperationEvent[]>;
+  confirmCardDependents?(id: string, confirmationId: string, decision: "with" | "without", approvedBy: string): OperationRecord | undefined | Promise<OperationRecord | undefined>;
   close?(): void | Promise<void>;
 }
 

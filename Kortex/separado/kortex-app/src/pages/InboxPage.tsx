@@ -33,6 +33,7 @@ import {
 import { pipelines } from "@/data/mockData";
 import {
   cancelOperation,
+  confirmOperationCardDependents,
   createOperation,
   getOperation,
   submitOperationAuthentication,
@@ -40,6 +41,7 @@ import {
   type AutomationOperationResponse,
   type AutomationOperationStatus,
 } from "@/services/automationApi";
+import { KoaCardDependentConfirmation, type CardDependentChoice } from "@/components/KoaCardDependentConfirmation";
 import type { OperationConnectionState } from "@/services/operationMonitoring";
 import { useAuth } from "@/contexts/AuthContext";
 import { validateKoaPeriod } from "@/utils/koaDate";
@@ -669,6 +671,7 @@ type KoaOperation = {
     beneficiaryName?: string;
     beneficiaryScope?: "single" | "all";
     beneficiaryCount?: number;
+    cardDependentConfirmation?: CardDependentChoice;
     beneficiaryCpfMasked?: string;
     contractCode?: string;
     cancellationReason?: string;
@@ -817,6 +820,7 @@ function safeKoaErrorMessage(code?: string) {
   if (code === "CARD_BATCH_INCOMPLETE") return "Não consegui confirmar a lista completa para emitir todas as carteirinhas.";
   if (code === "BENEFICIARY_NOT_FOUND") return "Beneficiário não encontrado.";
   if (code === "BENEFICIARY_SELECTION_FAILED") return "O portal não confirmou a seleção do beneficiário. A emissão foi interrompida antes de imprimir.";
+  if (code === "CARD_DEPENDENTS_CHANGED") return "A lista de dependentes mudou. Faça um novo pedido para conferir os nomes antes da emissão.";
   if (code === "PORTAL_RESULTS_NOT_READY") return "A lista de beneficiários não terminou de carregar. Tente a consulta novamente.";
   if (code === "BENEFICIARY_NOT_ACTIVE") return "Beneficiário não está ativo na Hapvida.";
   if (code === "BENEFICIARY_ALREADY_ACTIVE") return "Beneficiário já está ativo na Hapvida.";
@@ -875,6 +879,7 @@ function mapAutomationOperation(response: AutomationOperationResponse, type: Koa
           beneficiaryName: typeof response.result.beneficiaryName === "string" ? response.result.beneficiaryName : undefined,
           beneficiaryScope: response.result.beneficiaryScope === "all" ? "all" : "single",
           beneficiaryCount: typeof response.result.beneficiaryCount === "number" ? response.result.beneficiaryCount : undefined,
+          cardDependentConfirmation: response.result.cardDependentConfirmation as CardDependentChoice | undefined,
           beneficiaryCpfMasked: typeof response.result.beneficiaryCpfMasked === "string" ? response.result.beneficiaryCpfMasked : undefined,
           contractCode: typeof response.result.contractCode === "string" ? response.result.contractCode : undefined,
           cancellationReason: typeof response.result.cancellationReason === "string" ? response.result.cancellationReason : undefined,
@@ -1327,6 +1332,32 @@ function KoaPanel({
     }
   };
 
+  const handleConfirmCardDependents = async (confirmationId: string, includeDependents: boolean) => {
+    if (!operation) return "Operação não encontrada.";
+    try {
+      const confirmed = await confirmOperationCardDependents(operation.id, confirmationId, includeDependents);
+      const mapped = mapAutomationOperation(confirmed, operation.type);
+      setOperation(mapped);
+      setPhase(phaseFromOperationStatus(mapped.status));
+      setHistory(current => [...current, { id: createKoaEntryId("dependent-choice"), kind: "user",
+        text: includeDependents ? "Autorizo a emissão com os dependentes apresentados." : "Autorizo a emissão somente do beneficiário, sem dependentes." }]);
+      operationUnsubscribeRef.current?.();
+      operationUnsubscribeRef.current = await subscribeToOperation(operation.id, {
+        onEvent: () => {
+          void getOperation(operation.id).then(updated => {
+            if (activeOperationIdRef.current !== operation.id) return;
+            const next = mapAutomationOperation(updated, operation.type);
+            setOperation(next); setPhase(phaseFromOperationStatus(next.status));
+          }).catch(() => undefined);
+        },
+        onConnectionState: setOperationConnectionState,
+      });
+      return undefined;
+    } catch (error) {
+      return error instanceof Error ? error.message : "Não consegui registrar sua escolha.";
+    }
+  };
+
   const renderEntry = (entry: KoaChatEntry) => {
     if (entry.kind === "user") return <KoaUserBubble key={entry.id}>{entry.text}</KoaUserBubble>;
     if (entry.kind === "assistant") return <KoaAssistantBubble key={entry.id}>{entry.text}</KoaAssistantBubble>;
@@ -1342,6 +1373,7 @@ function KoaPanel({
             onRetry={handleRetry}
             onCancelOperation={handleCancelOperation}
             onSubmitAuthentication={handleSubmitAuthentication}
+            onConfirmCardDependents={handleConfirmCardDependents}
           />
         );
       }
@@ -1691,12 +1723,14 @@ function KoaOperationResult({
   onRetry,
   onCancelOperation,
   onSubmitAuthentication,
+  onConfirmCardDependents,
 }: {
   operation: KoaOperation;
   defaultCompanyCode?: string;
   onRetry: () => void;
   onCancelOperation: () => void;
   onSubmitAuthentication: (input: { password: string; rememberOnDevice: boolean; companyCode?: string }) => Promise<string | undefined>;
+  onConfirmCardDependents: (confirmationId: string, includeDependents: boolean) => Promise<string | undefined>;
 }) {
   if (operation.status === "cancelled") {
     return (
@@ -1739,6 +1773,10 @@ function KoaOperationResult({
   }
 
   if (operation.status === "awaiting_confirmation") {
+    if (operation.type === "card" && operation.result?.cardDependentConfirmation) {
+      return <KoaCardDependentConfirmation key={operation.result.cardDependentConfirmation.id}
+        confirmation={operation.result.cardDependentConfirmation} onConfirm={onConfirmCardDependents} onCancel={onCancelOperation} />;
+    }
     const dependents = operation.result?.dependentsFound ?? [];
     const resultRows = [
       operation.result?.beneficiaryName ? { label: operation.type === "inclusion" ? "Beneficiário" : "Titular", value: operation.result.beneficiaryName } : null,
@@ -1839,7 +1877,7 @@ function KoaOperationResult({
   const resultRows = [
     operation.type === "card" && operation.result?.operator ? { label: "Operadora", value: operation.result.operator === "ndi" ? "NDI" : "Hapvida" } : null,
     operation.result?.beneficiaryName ? { label: "Beneficiário", value: operation.result.beneficiaryName } : null,
-    operation.result?.beneficiaryScope === "all" ? { label: "Beneficiários", value: `${operation.result.beneficiaryCount ?? 0} carteirinhas` } : null,
+    operation.result?.beneficiaryScope === "all" || (operation.result?.beneficiaryCount ?? 0) > 1 ? { label: "Beneficiários", value: `${operation.result?.beneficiaryCount ?? 0} carteirinhas` } : null,
     operation.result?.portalStatusCode ? { label: "Código Hapvida", value: operation.result.portalStatusCode } : null,
     operation.result?.status ? { label: "Status", value: operation.result.status } : null,
     operation.result?.protocol ? { label: "Protocolo", value: operation.result.protocol } : null,
@@ -1852,8 +1890,8 @@ function KoaOperationResult({
         : operation.type === "exclusion"
           ? "Solicitação de exclusão registrada no portal."
           : operationSuccessMessage(operation.type)
-      : operation.type === "card" && operation.result?.beneficiaryScope === "all"
-        ? `${operation.result.beneficiaryCount ?? 0} carteirinhas emitidas e validadas.`
+      : operation.type === "card" && (operation.result?.beneficiaryScope === "all" || (operation.result?.beneficiaryCount ?? 0) > 1)
+        ? `${operation.result?.beneficiaryCount ?? 0} carteirinhas emitidas e validadas.`
         : operationSuccessMessage(operation.type);
 
   return (
@@ -1870,7 +1908,7 @@ function KoaOperationResult({
         </div>
       )}
       {operation.result?.fileName && (
-        <KoaArtifactDownload operationId={operation.id} fileName={operation.result.fileName} label={operation.type === "card" ? operation.result.beneficiaryScope === "all" ? "Baixar todas as carteirinhas" : "Baixar carteirinha" : "Baixar comprovante"} />
+        <KoaArtifactDownload operationId={operation.id} fileName={operation.result.fileName} label={operation.type === "card" ? operation.result.beneficiaryScope === "all" ? "Baixar todas as carteirinhas" : (operation.result.beneficiaryCount ?? 0) > 1 ? "Baixar carteirinhas autorizadas" : "Baixar carteirinha" : "Baixar comprovante"} />
       )}
     </div>
   );

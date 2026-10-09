@@ -165,6 +165,17 @@ export class OperationRepository implements AutomationOperationRepository {
     return next;
   }
 
+  confirmCardDependents(id: string, confirmationId: string, decision: "with" | "without", approvedBy: string) {
+    const result = this.db.prepare(`UPDATE operations SET status = 'queued', current_step = 'card_dependents_confirmed',
+      result_json = json_set(result_json, '$.cardDependentConfirmation.decision', ?, '$.cardDependentConfirmation.approvedBy', ?,
+        '$.cardDependentConfirmation.approvedAt', ?), updated_at = ?, finished_at = NULL, error_json = NULL
+      WHERE id = ? AND type = 'CARD_ISSUE' AND status = 'awaiting_confirmation'
+        AND json_extract(result_json, '$.cardDependentConfirmation.id') = ?
+        AND json_extract(result_json, '$.cardDependentConfirmation.decision') IS NULL`)
+      .run(decision, approvedBy, new Date().toISOString(), new Date().toISOString(), id, confirmationId);
+    return result.changes ? this.get(id) : undefined;
+  }
+
   appendEvent(event: OperationEvent) {
     const result = this.db
       .prepare(

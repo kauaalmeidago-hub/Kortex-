@@ -2,6 +2,7 @@ import type { Locator, Page } from "playwright";
 import { AutomationError } from "../../../errors.js";
 import { waitForRenderedCards, type CardBeneficiary } from "../cardPreview.js";
 import { inspectCardListRows, inspectCardSelectionControls } from "../cardList.js";
+import { findCardDependents } from "../cardDependents.js";
 
 export interface BeneficiarySearchInput extends CardBeneficiary {}
 
@@ -121,8 +122,47 @@ export class HapvidaCardPage {
         step: "confirm_beneficiary_selection", retryable: true,
       });
     }
+    await this.clearSelections(selection.control, true);
     await this.assertSelectedControls([selection.control]);
     return { ...input, cpf: input.cpf ?? identity.cpf, cardIdentifiers: identity.cardIdentifiers, requireIdentifier: identity.requireIdentifier };
+  }
+
+  async inspectBeneficiaryFamily(input: BeneficiarySearchInput) {
+    const row = await this.findSingleBeneficiaryRow(input);
+    const identity = await this.readRowIdentity(row);
+    if (input.cpf && identity.cpf && onlyDigits(input.cpf) !== identity.cpf) {
+      throw new AutomationError("BENEFICIARY_NOT_FOUND", "O CPF da linha nao corresponde ao pedido.", { step: "find_beneficiary" });
+    }
+    const index = await row.evaluate(element => Array.from((globalThis as unknown as { document: any }).document.querySelectorAll('tr, [role="row"]')).indexOf(element));
+    const snapshot = await this.page.locator(ROW_SELECTOR).evaluateAll(inspectCardListRows);
+    const beneficiary = { ...input, beneficiaryName: identity.beneficiaryName || input.beneficiaryName,
+      cpf: input.cpf ?? identity.cpf, cardIdentifiers: identity.cardIdentifiers, requireIdentifier: identity.requireIdentifier };
+    const dependents = findCardDependents(snapshot, index).map(({ beneficiaryName, cpf, cardIdentifiers, requireIdentifier }) =>
+      ({ beneficiaryName, cpf, cardIdentifiers, requireIdentifier }));
+    return { beneficiary, dependents };
+  }
+
+  async selectBeneficiaries(inputs: BeneficiarySearchInput[]) {
+    const selections = [];
+    for (const input of inputs) {
+      const row = await this.findSingleBeneficiaryRow(input);
+      const selection = await this.findSelectionControl(row);
+      if (!selection) throw new AutomationError("BENEFICIARY_SELECTION_FAILED", "Um beneficiario autorizado nao possui selecao disponivel.", { step: "confirm_beneficiary_selection" });
+      selections.push(selection);
+    }
+    await this.clearSelections();
+    try {
+      for (const selection of selections) {
+        if (await this.isSelected(selection.control)) continue;
+        if (/^(checkbox|radio)$/i.test(await selection.control.getAttribute("type") ?? "") && !selection.label) await selection.control.check();
+        else await selection.target.click();
+      }
+      await this.clearSelections(selections.map(selection => selection.control), true);
+      await this.assertSelectedControls(selections.map(selection => selection.control));
+    } catch {
+      throw new AutomationError("BENEFICIARY_SELECTION_FAILED", "O portal nao confirmou todos os beneficiarios autorizados.", { step: "confirm_beneficiary_selection", retryable: true });
+    }
+    return inputs;
   }
 
   async selectAllBeneficiaries(): Promise<BeneficiarySearchInput[]> {
@@ -202,15 +242,16 @@ export class HapvidaCardPage {
       ? control.isChecked() : await control.getAttribute("aria-checked") === "true";
   }
 
-  private async clearSelections(except?: Locator) {
+  private async clearSelections(except?: Locator | Locator[], skipBulk = false) {
     const controls = this.page.locator(`${ROW_SELECTOR.split(", ").map(row => `${row} ${CONTROL_SELECTOR.split(", ").join(`, ${row} `)}`).join(", ")}`);
-    const exceptHandle = except ? await except.elementHandle() : undefined;
+    const exceptHandles = await Promise.all((Array.isArray(except) ? except : except ? [except] : []).map(control => control.elementHandle()));
     try {
       const selected = (await controls.evaluateAll(inspectCardSelectionControls)).filter(state => state.selected && state.enabled);
       for (const state of selected) {
+        if (skipBulk && state.bulk) continue;
         const control = controls.nth(state.index);
         if (!await this.isSelected(control)) continue;
-        if (exceptHandle && await control.evaluate((element, target) => element === target, exceptHandle)) continue;
+        if (exceptHandles.length && await control.evaluate((element, targets) => targets.includes(element), exceptHandles)) continue;
         const type = await control.getAttribute("type");
         if (type === "radio") continue;
         if (type === "checkbox" && await control.isVisible()) await control.uncheck();
@@ -221,7 +262,7 @@ export class HapvidaCardPage {
           await selection.target.click();
         }
       }
-    } finally { await exceptHandle?.dispose(); }
+    } finally { await Promise.all(exceptHandles.map(handle => handle?.dispose())); }
   }
 
   private async assertSelectedControls(expected: Locator[]) {
@@ -314,8 +355,8 @@ export class HapvidaCardPage {
     } finally { cancelled.abort(); this.page.off("popup", onPopup); }
   }
 
-  async waitForCardPreview(input: BeneficiarySearchInput) {
-    return (await waitForRenderedCards(this.page, [input], this.previewTimeoutMs, this.portalUrl))[0];
+  async waitForCardPreview(input: BeneficiarySearchInput, excluded: BeneficiarySearchInput[] = []) {
+    return (await waitForRenderedCards(this.page, [input], this.previewTimeoutMs, this.portalUrl, undefined, excluded))[0];
   }
 
   async waitForCardPreviews(inputs: BeneficiarySearchInput[]) {
@@ -343,6 +384,14 @@ export class HapvidaCardPage {
     const selectableRows: Locator[] = [];
     for (const row of exactNameRows) if (await this.findSelectionControl(row)) selectableRows.push(row);
     let filteredRows = selectableRows.length ? selectableRows : exactNameRows;
+    if (filteredRows.length > 1 && input.cardIdentifiers?.length) {
+      const identified: Locator[] = [];
+      for (const row of filteredRows) {
+        const identity = await this.readRowIdentity(row);
+        if (identity.cardIdentifiers?.some(id => input.cardIdentifiers!.includes(id))) identified.push(row);
+      }
+      filteredRows = identified;
+    }
     const cpf = onlyDigits(input.cpf);
     if (filteredRows.length > 1 && cpf) {
       const byCpf: Locator[] = [];
@@ -383,17 +432,11 @@ export class HapvidaCardPage {
 
   private async collectCandidateRows(beneficiaryName: string) {
     const candidates = this.page.locator(ROW_SELECTOR);
-    const count = await candidates.count();
-    const expected = new RegExp(`(?:^|[^a-z0-9])${escapeRegExp(normalizeText(beneficiaryName))}(?:$|[^a-z0-9])`);
-    const rows: Locator[] = [];
-
-    for (let index = 0; index < count; index += 1) {
-      const row = candidates.nth(index);
-      if (!(await row.isVisible().catch(() => false)) || await row.locator(ROW_SELECTOR).count()) continue;
-      if (expected.test(normalizeText(await row.innerText().catch(() => "")))) rows.push(row);
-    }
-
-    return rows;
+    const name = normalizeText(beneficiaryName);
+    const expected = new RegExp(`(?:^|[^a-z0-9])${escapeRegExp(name)}(?:$|[^a-z0-9])`);
+    const snapshot = await candidates.evaluateAll(inspectCardListRows);
+    return snapshot.filter(row => row.visible && (row.beneficiaryName
+      ? normalizeText(row.beneficiaryName) === name : expected.test(row.text ?? ""))).map(row => candidates.nth(row.index));
   }
 }
 

@@ -147,6 +147,10 @@ export class PersistentWorker {
           : this.deps.secretProvider,
         artifactStorage: this.deps.artifactStorage,
         credentialResolver: this.deps.credentialResolver,
+        retainCardConfirmationCredential: this.deps.ephemeralCredentialStore ? (op, credential) => {
+          this.deps.ephemeralCredentialStore!.put(op.id, op.credentialRef, { ...credential,
+            metadata: { ...credential.metadata, autoPortalCredential: false } }, 5 * 60_000);
+        } : undefined,
         updateStatus: (status, step, data) => this.updateStatus(operation.id, status, step, data),
         emitEvent: (event) => this.emitEvent({ ...event, operationId: event.operationId ?? operation.id }),
       });
@@ -205,7 +209,8 @@ export class PersistentWorker {
       repositoryMode: this.deps.config.repositoryMode,
       browserProvider: this.deps.config.browserProvider,
       cardIssueEnabled: this.deps.config.features.cardIssue,
-      cardIssueWorkflowVersion: 4,
+      cardIssueWorkflowVersion: 5,
+      cardIssueDependentConfirmationEnabled: this.deps.config.features.cardIssue,
       cardIssuePrintAllEnabled: this.deps.config.features.cardIssue,
       cardPortalPreferenceVersion: 1,
       cardIssueBatchEnabled: this.deps.config.features.cardIssue,

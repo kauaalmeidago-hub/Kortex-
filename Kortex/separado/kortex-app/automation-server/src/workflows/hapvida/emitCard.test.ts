@@ -7,7 +7,7 @@ import type { OperationEvent, OperationRecord } from "../../types.js";
 const mocks = vi.hoisted(() => ({
   open: vi.fn(), ready: vi.fn(), login: vi.fn(), passwordVisible: vi.fn(), invalid: vi.fn(),
   periodForm: vi.fn(), fillPeriod: vi.fn(), submitPeriod: vi.fn(), selectBeneficiary: vi.fn(),
-  requestCards: vi.fn(), preview: vi.fn(), selectAll: vi.fn(), previews: vi.fn(), remember: vi.fn(), loginPages: [] as unknown[], cardPages: [] as unknown[], loginOptions: [] as unknown[],
+  requestCards: vi.fn(), preview: vi.fn(), selectAll: vi.fn(), previews: vi.fn(), inspectFamily: vi.fn(), selectMany: vi.fn(), remember: vi.fn(), loginPages: [] as unknown[], cardPages: [] as unknown[], loginOptions: [] as unknown[],
 }));
 vi.mock("./pageObjects/HapvidaLoginPage.js", () => ({ HapvidaLoginPage: class {
   constructor(page: unknown, url: unknown, _timeout: unknown, label: unknown) { mocks.loginPages.push(page); mocks.loginOptions.push({ url, label }); }
@@ -19,12 +19,14 @@ vi.mock("./pageObjects/HapvidaCardPage.js", () => ({ HapvidaCardPage: class {
   waitForPeriodForm = mocks.periodForm; fillPeriod = mocks.fillPeriod; submitPeriod = mocks.submitPeriod;
   selectBeneficiary = mocks.selectBeneficiary; requestSelectedCards = mocks.requestCards; waitForCardPreview = mocks.preview;
   selectAllBeneficiaries = mocks.selectAll; waitForCardPreviews = mocks.previews;
+  inspectBeneficiaryFamily = mocks.inspectFamily; selectBeneficiaries = mocks.selectMany;
 } }));
 vi.mock("../../authentication/RememberedCredentialService.js", () => ({ RememberedCredentialService: class {
   saveValidatedCredential = mocks.remember;
 } }));
 import { emitCard } from "./emitCard.js";
 import { AutomationError } from "../../errors.js";
+import { pendingCardDependents } from "./cardDependents.js";
 
 function fixture(remember: boolean) {
   const now = new Date().toISOString();
@@ -63,6 +65,9 @@ describe("CARD_ISSUE authentication in the execution context", () => {
     mocks.loginPages.length = 0; mocks.cardPages.length = 0; mocks.loginOptions.length = 0;
     mocks.passwordVisible.mockResolvedValue(false); mocks.invalid.mockResolvedValue(false);
     mocks.remember.mockResolvedValue({ rememberedOnDevice: true, metadataRegistered: true });
+    mocks.inspectFamily.mockImplementation(async beneficiary => ({ beneficiary, dependents: [] }));
+    mocks.selectBeneficiary.mockImplementation(async beneficiary => beneficiary);
+    mocks.selectMany.mockImplementation(async beneficiaries => beneficiaries);
   });
 
   it.each([false, true])("logs in once, continues to PDF in the same context and respects remember=%s", async (remember) => {
@@ -243,6 +248,55 @@ describe("CARD_ISSUE authentication in the execution context", () => {
     await expect(emitCard(f.operation, new AbortController().signal, f.context)).rejects.toMatchObject({ code: "PDF_VALIDATION_FAILED" });
     expect(f.artifactSave).not.toHaveBeenCalled();
     expect(f.events.some((event) => event.type === "artifact.created" || event.type === "operation.success")).toBe(false);
+  });
+
+  it("does not store or deliver an interrupted PDF even when its header and page exist", async () => {
+    const f = fixture(false);
+    vi.mocked(f.page.pdf).mockResolvedValue(Buffer.from("%PDF-1.7\n1 0 obj << /Type /Page >> endobj\n"));
+    await expect(emitCard(f.operation, new AbortController().signal, f.context)).rejects.toMatchObject({ code: "PDF_VALIDATION_FAILED" });
+    expect(f.artifactSave).not.toHaveBeenCalled();
+    expect(f.operation.artifacts).toEqual([]);
+    expect(f.operation.status).not.toBe("success");
+    expect(f.events.some(event => event.type === "artifact.created" || event.type === "operation.success")).toBe(false);
+  });
+
+  it("pauses before selecting or printing when the portal identifies dependents", async () => {
+    const f = fixture(false);
+    const family = { beneficiary: { beneficiaryName: "Beneficiario de teste" }, dependents: [{ beneficiaryName: "DEPENDENTE DE TESTE" }] };
+    mocks.inspectFamily.mockResolvedValue(family);
+    const retained = vi.fn(); f.context.retainCardConfirmationCredential = retained;
+    await emitCard(f.operation, new AbortController().signal, f.context);
+    expect(f.operation.status).toBe("awaiting_confirmation");
+    expect(f.operation.result?.cardDependentConfirmation).toMatchObject({ beneficiaryName: family.beneficiary.beneficiaryName, dependentNames: ["DEPENDENTE DE TESTE"] });
+    expect(mocks.selectBeneficiary).not.toHaveBeenCalled();
+    expect(mocks.requestCards).not.toHaveBeenCalled();
+    expect(f.artifactSave).not.toHaveBeenCalled();
+    expect(retained).toHaveBeenCalledOnce();
+    expect(JSON.stringify(f.operation)).not.toContain("synthetic-password");
+  });
+
+  it.each(["with", "without"] as const)("resumes the same operation with its authorized %s choice", async decision => {
+    const f = fixture(false);
+    const family = { beneficiary: { beneficiaryName: "Beneficiario de teste" }, dependents: [{ beneficiaryName: "DEPENDENTE DE TESTE" }] };
+    mocks.inspectFamily.mockResolvedValue(family);
+    f.operation.result = { cardDependentConfirmation: { ...pendingCardDependents(f.operation, family.beneficiary, family.dependents), decision, approvedBy: "user-1" } };
+    await emitCard(f.operation, new AbortController().signal, f.context);
+    expect(f.operation.status).toBe("success");
+    expect(f.operation.result?.beneficiaryCount).toBe(decision === "with" ? 2 : 1);
+    expect(mocks.requestCards).toHaveBeenCalledWith(decision === "with" ? [family.beneficiary, ...family.dependents] : [family.beneficiary], false, expect.any(Function));
+    if (decision === "without") expect(mocks.preview).toHaveBeenCalledWith(family.beneficiary, family.dependents);
+    else expect(mocks.previews).toHaveBeenCalledWith([family.beneficiary, ...family.dependents]);
+  });
+
+  it("requires a new choice if the dependent identity changed while awaiting approval", async () => {
+    const f = fixture(false);
+    const beneficiary = { beneficiaryName: "Beneficiario de teste" }, dependent = { beneficiaryName: "DEPENDENTE DE TESTE", cardIdentifiers: ["900001"] };
+    f.operation.result = { cardDependentConfirmation: { ...pendingCardDependents(f.operation, beneficiary, [dependent]), decision: "with" } };
+    mocks.inspectFamily.mockResolvedValue({ beneficiary, dependents: [{ ...dependent, cardIdentifiers: ["900002"] }] });
+    await emitCard(f.operation, new AbortController().signal, f.context);
+    expect(f.operation.status).toBe("awaiting_confirmation");
+    expect(mocks.requestCards).not.toHaveBeenCalled();
+    expect(f.artifactSave).not.toHaveBeenCalled();
   });
 
   it("issues all returned NDI beneficiaries in one PDF after verifying every selection", async () => {

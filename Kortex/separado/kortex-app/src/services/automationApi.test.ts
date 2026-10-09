@@ -42,6 +42,16 @@ describe("card file downloads from the chat", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(mock.refreshSession).not.toHaveBeenCalled();
   });
+  it("submits the dependent decision for the existing operation with the user's authenticated session", async () => {
+    fetchMock.mockResolvedValueOnce(new Response('{"operationId":"operation-1","status":"queued"}', { status: 202 }));
+    const { confirmOperationCardDependents } = await import("./automationApi");
+    await confirmOperationCardDependents("operation-1", "choice-1", false);
+    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:4777/api/operations/operation-1/card-dependents", expect.objectContaining({
+      method: "POST", headers: expect.objectContaining({ authorization: "Bearer current-user-jwt" }),
+      body: JSON.stringify({ confirmationId: "choice-1", includeDependents: false }),
+    }));
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
   it("does not send an unauthenticated order to the worker", async () => {
     mock.getSession.mockResolvedValue({ data: { session: null } });
     const { createOperation } = await import("./automationApi");

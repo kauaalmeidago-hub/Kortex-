@@ -14,6 +14,7 @@
     "test:card-portals": "npm run build && node scripts/check-card-portals.mjs",
     "test:card-selection": "npm run build && node scripts/check-card-selection.mjs",
     "test:card-batch": "npm run build && node scripts/check-card-batch.mjs",
+    "test:card-dependents": "npm run build && node scripts/check-card-dependents.mjs",
     "test:portal-sessions": "npm run build && node scripts/check-portal-sessions.mjs",
     "browser:onboard": "tsx src/scripts/koa-browser-onboard.ts",
     "browser:check": "tsx src/scripts/koa-browser-check.ts",

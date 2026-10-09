@@ -45,6 +45,7 @@ export class OperationQueue {
     if (persistentCancel) {
       const operation = await persistentCancel.call(this.deps.repository, operationId);
       if (!operation) return { ok: false, reason: "not_found" as const };
+      if (operation.status === "cancelled" || operation.status === "cancelling") this.deps.ephemeralCredentialStore?.clear(operationId);
       this.controllers.get(operationId)?.abort();
       return { ok: true, operation };
     }
@@ -53,6 +54,7 @@ export class OperationQueue {
     if (!operation) return { ok: false, reason: "not_found" as const };
 
     if (operation.status === "awaiting_confirmation" || operation.status === "awaiting_human_verification") {
+      this.deps.ephemeralCredentialStore?.clear(operationId);
       const cancelled = await this.setStatus(operation.id, "cancelled", "Operacao cancelada antes do submit definitivo", true);
       return { ok: true, operation: cancelled };
     }
@@ -132,6 +134,10 @@ export class OperationQueue {
           : this.deps.secretProvider,
         artifactStorage: this.deps.artifactStorage,
         credentialResolver: this.deps.credentialResolver,
+        retainCardConfirmationCredential: this.deps.ephemeralCredentialStore ? (op, credential) => {
+          this.deps.ephemeralCredentialStore!.put(op.id, op.credentialRef, { ...credential,
+            metadata: { ...credential.metadata, autoPortalCredential: false } }, 5 * 60_000);
+        } : undefined,
         updateStatus: (status, step, data) => this.setStatus(nextId, status, step, this.isFinalStatus(status), data),
         emitEvent: (event) => this.emitEvent({ ...event, operationId: event.operationId ?? nextId }),
       });

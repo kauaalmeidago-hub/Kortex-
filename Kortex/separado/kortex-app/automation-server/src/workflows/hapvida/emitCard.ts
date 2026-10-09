@@ -13,6 +13,7 @@ import { HapvidaMovementAccessPage } from "./pageObjects/HapvidaMovementAccessPa
 import { HapvidaMovementMainMenuPage } from "./pageObjects/HapvidaMovementMainMenuPage.js";
 import { HapvidaActiveUsersPage } from "./pageObjects/HapvidaActiveUsersPage.js";
 import { validateCardPdfBytes } from "./downloadValidation.js";
+import { pendingCardDependents, type CardDependentConfirmation } from "./cardDependents.js";
 import { portalLoginCode } from "../../credentials/credentialIdentity.js";
 
 type CardPrintBox = { width: number; height: number };
@@ -374,9 +375,35 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
     assertNotAborted(signal);
 
     await context.updateStatus("processing", allBeneficiaries ? "Selecionando todos os beneficiarios da empresa" : "Localizando beneficiario");
-    const selected: BeneficiarySearchInput[] = allBeneficiaries
-      ? await cardPage.selectAllBeneficiaries()
-      : [await cardPage.selectBeneficiary({ beneficiaryName, cpf, birthDate }) ?? { beneficiaryName, cpf, birthDate }];
+    let selected: BeneficiarySearchInput[];
+    let excludedDependents: BeneficiarySearchInput[] = [];
+    if (allBeneficiaries) selected = await cardPage.selectAllBeneficiaries();
+    else {
+      const family = await cardPage.inspectBeneficiaryFamily({ beneficiaryName, cpf, birthDate });
+      assertNotAborted(signal);
+      const previous = operation.result?.cardDependentConfirmation as CardDependentConfirmation | undefined;
+      if (family.dependents.length || previous) {
+        const confirmation = pendingCardDependents(operation, family.beneficiary, family.dependents);
+        if (!family.dependents.length && previous?.fingerprint !== confirmation.fingerprint) {
+          throw new AutomationError("CARD_DEPENDENTS_CHANGED", "Os dependentes mudaram desde a confirmacao. Refaca o pedido para conferir a lista atual.", { step: "confirm_card_dependents" });
+        }
+        if (!confirmation.decision) {
+          const result = { ...operation.result, beneficiaryName, cardDependentConfirmation: confirmation };
+          await context.repository.update(operation.id, { result });
+          assertNotAborted(signal);
+          Object.assign(operation, { result });
+          await context.updateStatus("awaiting_confirmation", "Aguardando escolha sobre as carteirinhas dos dependentes", result);
+          assertNotAborted(signal);
+          if (credential) context.retainCardConfirmationCredential?.(operation, credential);
+          return;
+        }
+        if (confirmation.decision === "with") selected = await cardPage.selectBeneficiaries([family.beneficiary, ...family.dependents]);
+        else {
+          excludedDependents = family.dependents;
+          selected = [await cardPage.selectBeneficiary(family.beneficiary)];
+        }
+      } else selected = [await cardPage.selectBeneficiary(family.beneficiary)];
+    }
     if (!selected.length) throw new AutomationError("BENEFICIARY_NOT_FOUND", "Nao ha beneficiarios disponiveis para emitir.", { step: "find_beneficiary" });
     assertNotAborted(signal);
 
@@ -389,15 +416,17 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
     assertNotAborted(signal);
 
     await context.updateStatus("verifying", "Validando carteirinha gerada");
-    const documents = allBeneficiaries
+    const multipleCards = allBeneficiaries || selected.length > 1;
+    const documents = multipleCards
       ? await resultCardPage.waitForCardPreviews(selected)
-      : [await resultCardPage.waitForCardPreview(selected[0]!)].filter((frame): frame is NonNullable<typeof frame> => Boolean(frame));
+      : [await resultCardPage.waitForCardPreview(selected[0]!, excludedDependents)].filter((frame): frame is NonNullable<typeof frame> => Boolean(frame));
     assertNotAborted(signal);
-    if (documents?.length) await materializeCardDocuments(resultPage, documents, allBeneficiaries);
+    if (documents?.length) await materializeCardDocuments(resultPage, documents, multipleCards);
 
-    const fileName = allBeneficiaries ? `carteirinhas-empresa-${safeFileNamePart(requestedCompanyCode!)}.pdf` : `carteirinha-${safeFileNamePart(beneficiaryName)}.pdf`;
+    const fileName = allBeneficiaries ? `carteirinhas-empresa-${safeFileNamePart(requestedCompanyCode!)}.pdf`
+      : `${multipleCards ? "carteirinhas" : "carteirinha"}-${safeFileNamePart(beneficiaryName)}.pdf`;
     const pdfTitle = allBeneficiaries ? `Carteirinhas da empresa - ${requestedCompanyCode}` : `Carteirinha - ${beneficiaryName.trim()}`;
-    const pdfBytes = validateCardPdfBytes(await printCurrentPageToPdf(resultPage, beneficiaryName, pdfTitle, allBeneficiaries), fileName);
+    const pdfBytes = validateCardPdfBytes(await printCurrentPageToPdf(resultPage, beneficiaryName, pdfTitle, multipleCards), fileName);
     const savedArtifact = await context.artifactStorage.save({
       operationId: operation.id,
       workspaceId: operation.workspaceId,

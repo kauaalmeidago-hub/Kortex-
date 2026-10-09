@@ -35,6 +35,15 @@ export function validateCardPdfBytes(bytes: Buffer, fileName = "carteirinha.pdf"
   }
 
   const text = bytes.toString("latin1");
+  // Chromium finishes every PDF with this marker. An earlier marker from an
+  // incremental update must not make a truncated final revision look complete.
+  if (!/(?:^|[\r\n])%%EOF[\x00\x09\x0a\x0c\x0d\x20]*$/.test(text)) {
+    throw new AutomationError("PDF_VALIDATION_FAILED", "PDF gerado nao foi concluido.", {
+      safeDetails: "O arquivo nao possui o marcador final de PDF. Nenhuma carteirinha foi salva.",
+      retryable: true,
+    });
+  }
+
   if (!/\/Type\s*\/Page\b/.test(text) && !/\/Count\s+[1-9]/.test(text)) {
     throw new AutomationError("PDF_VALIDATION_FAILED", "PDF gerado nao possui paginas detectaveis.", {
       safeDetails: "A carteirinha precisa ter ao menos uma pagina valida.",
@@ -57,3 +66,4 @@ export async function readAndValidateCardPdf(filePath: string) {
   const bytes = await readFile(filePath);
   return validateCardPdfBytes(bytes, path.basename(filePath));
 }
+
