@@ -3,11 +3,11 @@ import { AutomationError } from "../../errors.js";
 import { waitForRenderedCards, type CardBeneficiary } from "./cardPreview.js";
 
 export interface CardPrintBox { width: number; height: number }
+export interface PrintableCardDocument { html: string; styles: string; baseUri: string; width: number }
 
 // Inspect each card locally: a name on one card and a number on another must never confirm an identity.
-export async function prepareSingleCardPrint(page: Page, frames: Frame[], beneficiary: CardBeneficiary,
-  otherBeneficiaries: CardBeneficiary[], title: string): Promise<CardPrintBox> {
-  const parentTitle = await page.title();
+export async function extractPrintableCard(frames: Frame[], beneficiary: CardBeneficiary,
+  otherBeneficiaries: CardBeneficiary[], parentTitle: string): Promise<PrintableCardDocument> {
   const documents = await Promise.all(frames.map(frame => frame.evaluate(({ beneficiary, otherBeneficiaries, parentTitle }) => {
     const scope = globalThis as unknown as { document: any; getComputedStyle(element: unknown): any };
     const doc = scope.document;
@@ -96,7 +96,12 @@ export async function prepareSingleCardPrint(page: Page, frames: Frame[], benefi
   if (cards.length !== 1) throw new AutomationError("CARD_CAPTURE_FAILED", "Nao foi possivel separar com seguranca a carteirinha escolhida.", {
     safeDetails: `Carteirinhas completas correspondentes: ${cards.length}. Nenhum PDF da familia foi entregue.`, step: "capture_single_card", retryable: false,
   });
-  const card = cards[0]!;
+  return cards[0]!;
+}
+
+export async function prepareSingleCardPrint(page: Page, frames: Frame[], beneficiary: CardBeneficiary,
+  otherBeneficiaries: CardBeneficiary[], title: string): Promise<CardPrintBox> {
+  const card = await extractPrintableCard(frames, beneficiary, otherBeneficiaries, await page.title());
   await page.evaluate(({ card, title }) => {
     const doc = (globalThis as unknown as { document: any }).document;
     doc.head.innerHTML = '<meta charset="utf-8">';

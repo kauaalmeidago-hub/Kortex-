@@ -1,4 +1,3 @@
-import type { Page } from "playwright";
 import { AutomationError, assertNotAborted, createReauthRequiredError } from "../../errors.js";
 import type { OperationArtifact, OperationRecord, OperationResult, PortalCredential } from "../../types.js";
 import type { WorkflowContext } from "../WorkflowContext.js";
@@ -8,8 +7,7 @@ import { ActiveUsersPreflightService } from "./ActiveUsersPreflightService.js";
 import { HapvidaLoginPage } from "./pageObjects/HapvidaLoginPage.js";
 import { HapvidaCardPage, type BeneficiarySearchInput } from "./pageObjects/HapvidaCardPage.js";
 import { isAllBeneficiariesRequest } from "./cardIssueScope.js";
-import { materializeCardDocuments } from "./cardPreview.js";
-import { prepareSingleCardPrint, type CardPrintBox } from "./singleCardCapture.js";
+import { createBrandedCardDelivery } from "./brandedCardDelivery.js";
 import { HapvidaMovementAccessPage } from "./pageObjects/HapvidaMovementAccessPage.js";
 import { HapvidaMovementMainMenuPage } from "./pageObjects/HapvidaMovementMainMenuPage.js";
 import { HapvidaActiveUsersPage } from "./pageObjects/HapvidaActiveUsersPage.js";
@@ -55,47 +53,6 @@ function safeFileNamePart(value: string) {
     .replace(/^-+|-+$/g, "")
     .toLowerCase()
     .slice(0, 90) || "beneficiario";
-}
-
-async function printCurrentPageToPdf(page: Page, printBox?: CardPrintBox) {
-  const printOptions = printBox
-    ? {
-        width: `${printBox.width}px`,
-        height: `${printBox.height}px`,
-        margin: { top: "0", right: "0", bottom: "0", left: "0" },
-        printBackground: true,
-        preferCSSPageSize: false,
-      }
-    : {
-        format: "A4" as const,
-        printBackground: true,
-        preferCSSPageSize: true,
-      };
-
-  try {
-    return await page.pdf(printOptions);
-  } catch {
-    const session = await page.context().newCDPSession(page);
-    try {
-      const pdf = await session.send("Page.printToPDF", {
-        printBackground: true,
-        preferCSSPageSize: !printBox,
-        ...(printBox
-          ? {
-              paperWidth: printBox.width / 96,
-              paperHeight: printBox.height / 96,
-              marginTop: 0,
-              marginRight: 0,
-              marginBottom: 0,
-              marginLeft: 0,
-            }
-          : {}),
-      });
-      return Buffer.from(pdf.data, "base64");
-    } finally {
-      await session.detach().catch(() => undefined);
-    }
-  }
 }
 
 const CARD_PORTAL_AUTH_MAX_ATTEMPTS = 2;
@@ -331,6 +288,8 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
     if (!selected.length) throw new AutomationError("BENEFICIARY_NOT_FOUND", "Nao ha beneficiarios disponiveis para emitir.", { step: "find_beneficiary" });
     assertNotAborted(signal);
 
+    const deliveryMembers = await cardPage.describeSelectedBeneficiaries(selected);
+    assertNotAborted(signal);
     await context.updateStatus("processing", "Emitindo carteirinha");
     const resultPage = await cardPage.requestSelectedCards(selected, allBeneficiaries, async command => {
       await context.emitEvent({ operationId: operation.id, type: "operation.step", step: "card_print_requested",
@@ -345,14 +304,14 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
       ? await resultCardPage.waitForCardPreviews(selected)
       : [await resultCardPage.waitForCardPreview(selected[0]!)].filter((frame): frame is NonNullable<typeof frame> => Boolean(frame));
     assertNotAborted(signal);
-    if (multipleCards && documents?.length) await materializeCardDocuments(resultPage, documents, true);
 
     const fileName = allBeneficiaries ? `carteirinhas-empresa-${safeFileNamePart(requestedCompanyCode!)}.pdf`
-      : `${multipleCards ? "carteirinhas" : "carteirinha"}-${safeFileNamePart(beneficiaryName)}.pdf`;
-    const pdfTitle = allBeneficiaries ? `Carteirinhas da empresa - ${requestedCompanyCode}` : `Carteirinha - ${beneficiaryName.trim()}`;
-    const printBox = multipleCards ? undefined : await prepareSingleCardPrint(resultPage, documents, selected[0]!, otherBeneficiaries, pdfTitle);
+      : `${safeFileNamePart(beneficiaryName)}.pdf`;
+    const pdfTitle = allBeneficiaries ? `carteirinhas da empresa ${requestedCompanyCode!.toLowerCase()}` : beneficiaryName.trim().toLocaleLowerCase("pt-BR");
+    await context.updateStatus("verifying", "Organizando carteirinhas na moldura Alaive");
+    const delivery = await createBrandedCardDelivery(resultPage, documents, deliveryMembers, otherBeneficiaries, pdfTitle, signal);
     assertNotAborted(signal);
-    const pdfBytes = validateCardPdfBytes(await printCurrentPageToPdf(resultPage, printBox), fileName);
+    const pdfBytes = validateCardPdfBytes(delivery.bytes, fileName);
     const savedArtifact = await context.artifactStorage.save({
       operationId: operation.id,
       workspaceId: operation.workspaceId,
@@ -364,6 +323,8 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
         beneficiaryName: allBeneficiaries ? undefined : beneficiaryName,
         beneficiaryScope: allBeneficiaries ? "all" : "single",
         beneficiaryCount: selected.length,
+        cardDeliveryVersion: delivery.deliveryVersion,
+        pageCount: delivery.pageCount,
         companyId: operation.companyId,
         operator: operation.portal,
       },
@@ -390,6 +351,8 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
       beneficiaryScope: allBeneficiaries ? "all" : "single",
       beneficiaryCount: selected.length,
       beneficiaryNames: selected.map(input => input.beneficiaryName),
+      cardDeliveryVersion: delivery.deliveryVersion,
+      pageCount: delivery.pageCount,
       companyId: operation.companyId,
       operator: operation.portal,
       portalStatus: allBeneficiaries ? `${selected.length} carteirinhas emitidas` : "Carteirinha emitida",

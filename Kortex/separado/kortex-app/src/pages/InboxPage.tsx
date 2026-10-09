@@ -820,6 +820,8 @@ function safeKoaErrorMessage(code?: string) {
   if (code === "CARD_BATCH_INCOMPLETE") return "Não consegui confirmar a lista completa para emitir todas as carteirinhas.";
   if (code === "BENEFICIARY_NOT_FOUND") return "Beneficiário não encontrado.";
   if (code === "BENEFICIARY_SELECTION_FAILED") return "O portal não confirmou a seleção do beneficiário. A emissão foi interrompida antes de imprimir.";
+  if (code === "CARD_DELIVERY_FAILED") return "Não consegui concluir a entrega na moldura Alaive. Tente novamente.";
+  if (code === "CARD_FAMILY_MAPPING_FAILED") return "Não consegui confirmar a organização dos titulares e dependentes neste pedido. Confira os dados e tente novamente.";
   if (code === "CARD_CAPTURE_FAILED") return "Não consegui separar a carteirinha escolhida com segurança. Nenhum PDF da família foi entregue. Tente novamente.";
   if (code === "CARD_DEPENDENTS_CHANGED") return "A lista de dependentes mudou. Faça um novo pedido para conferir os nomes antes da emissão.";
   if (code === "PORTAL_RESULTS_NOT_READY") return "A lista de beneficiários não terminou de carregar. Tente a consulta novamente.";

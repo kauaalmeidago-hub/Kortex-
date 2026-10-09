@@ -7,6 +7,7 @@ RUN npm ci
 
 COPY tsconfig.json ./
 COPY src ./src
+COPY assets ./assets
 
 RUN npm run build
 
@@ -18,3 +19,4 @@ ENV KOA_AUTOMATION_HEADLESS=true
 EXPOSE 4777
 
 CMD ["node", "dist/index.js"]
+

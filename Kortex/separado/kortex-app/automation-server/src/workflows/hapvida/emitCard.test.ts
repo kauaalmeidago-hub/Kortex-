@@ -7,7 +7,7 @@ import type { OperationEvent, OperationRecord } from "../../types.js";
 const mocks = vi.hoisted(() => ({
   open: vi.fn(), ready: vi.fn(), login: vi.fn(), passwordVisible: vi.fn(), invalid: vi.fn(),
   periodForm: vi.fn(), fillPeriod: vi.fn(), submitPeriod: vi.fn(), selectBeneficiary: vi.fn(),
-  requestCards: vi.fn(), preview: vi.fn(), selectAll: vi.fn(), previews: vi.fn(), inspectFamily: vi.fn(), selectMany: vi.fn(), capture: vi.fn(), remember: vi.fn(), loginPages: [] as unknown[], cardPages: [] as unknown[], loginOptions: [] as unknown[],
+  requestCards: vi.fn(), preview: vi.fn(), selectAll: vi.fn(), previews: vi.fn(), inspectFamily: vi.fn(), selectMany: vi.fn(), capture: vi.fn(), describeDelivery: vi.fn(), remember: vi.fn(), loginPages: [] as unknown[], cardPages: [] as unknown[], loginOptions: [] as unknown[],
 }));
 vi.mock("./pageObjects/HapvidaLoginPage.js", () => ({ HapvidaLoginPage: class {
   constructor(page: unknown, url: unknown, _timeout: unknown, label: unknown) { mocks.loginPages.push(page); mocks.loginOptions.push({ url, label }); }
@@ -20,11 +20,12 @@ vi.mock("./pageObjects/HapvidaCardPage.js", () => ({ HapvidaCardPage: class {
   selectBeneficiary = mocks.selectBeneficiary; requestSelectedCards = mocks.requestCards; waitForCardPreview = mocks.preview;
   selectAllBeneficiaries = mocks.selectAll; waitForCardPreviews = mocks.previews;
   inspectBeneficiaryFamily = mocks.inspectFamily; selectBeneficiaries = mocks.selectMany;
+  describeSelectedBeneficiaries = mocks.describeDelivery;
 } }));
 vi.mock("../../authentication/RememberedCredentialService.js", () => ({ RememberedCredentialService: class {
   saveValidatedCredential = mocks.remember;
 } }));
-vi.mock("./singleCardCapture.js", () => ({ prepareSingleCardPrint: mocks.capture }));
+vi.mock("./brandedCardDelivery.js", () => ({ createBrandedCardDelivery: mocks.capture }));
 import { emitCard } from "./emitCard.js";
 import { AutomationError } from "../../errors.js";
 import { pendingCardDependents } from "./cardDependents.js";
@@ -42,6 +43,7 @@ function fixture(remember: boolean) {
   } as unknown as Page;
   const browserContext = { clearCookies: vi.fn(async () => undefined) } as unknown as BrowserContext;
   mocks.requestCards.mockResolvedValue(page);
+  mocks.capture.mockImplementation(async (_page, _frames, members) => ({ bytes: await page.pdf({ printBackground: true }), pageCount: Math.ceil(members.length / 2), deliveryVersion: 1, template: members.length === 1 ? "single" : "first" }));
   const validate = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
   const saveSession = vi.fn(async () => undefined);
   const withContext = vi.fn(async (_op, _signal, callback) => callback(browserContext, page));
@@ -66,10 +68,11 @@ describe("CARD_ISSUE authentication in the execution context", () => {
     mocks.loginPages.length = 0; mocks.cardPages.length = 0; mocks.loginOptions.length = 0;
     mocks.passwordVisible.mockResolvedValue(false); mocks.invalid.mockResolvedValue(false);
     mocks.remember.mockResolvedValue({ rememberedOnDevice: true, metadataRegistered: true });
-    mocks.capture.mockResolvedValue({ width: 640, height: 420 });
+    mocks.describeDelivery.mockImplementation(async members => members.map((member, index) => ({ ...member, id: `member-${index}`, role: "beneficiary" })));
     mocks.inspectFamily.mockImplementation(async beneficiary => ({ beneficiary, dependents: [] }));
     mocks.selectBeneficiary.mockImplementation(async beneficiary => beneficiary);
     mocks.selectMany.mockImplementation(async beneficiaries => beneficiaries);
+    mocks.previews.mockResolvedValue([]);
   });
 
   it.each([false, true])("logs in once, continues to PDF in the same context and respects remember=%s", async (remember) => {
@@ -83,9 +86,9 @@ describe("CARD_ISSUE authentication in the execution context", () => {
     expect(f.operation.status).toBe("success");
     expect(f.artifactSave).toHaveBeenCalledOnce();
     expect(f.artifactSave).toHaveBeenCalledWith(expect.objectContaining({
-      fileName: "carteirinha-beneficiario-de-teste.pdf",
+      fileName: "beneficiario-de-teste.pdf",
     }));
-    expect(f.page.pdf).toHaveBeenCalledWith(expect.objectContaining({ width: "640px", height: "420px" }));
+    expect(mocks.capture).toHaveBeenCalledWith(f.page, [], expect.arrayContaining([expect.objectContaining({ beneficiaryName: "Beneficiario de teste" })]), [], "beneficiario de teste", expect.any(AbortSignal));
     const authenticated = f.events.filter((event) => event.type === "authentication.succeeded");
     expect(authenticated).toHaveLength(1);
     expect(authenticated[0]?.data).toEqual({ source: "worker" });
@@ -289,7 +292,7 @@ describe("CARD_ISSUE authentication in the execution context", () => {
     if (decision === "without") {
       expect(mocks.preview).toHaveBeenCalledWith(family.beneficiary);
       expect(mocks.selectBeneficiary).toHaveBeenCalledWith(family.beneficiary, family.dependents);
-      expect(mocks.capture).toHaveBeenCalledWith(f.page, [], family.beneficiary, family.dependents, expect.any(String));
+      expect(mocks.capture).toHaveBeenCalledWith(f.page, [], [expect.objectContaining(family.beneficiary)], family.dependents, "beneficiario de teste", expect.any(AbortSignal));
     }
     else expect(mocks.previews).toHaveBeenCalledWith([family.beneficiary, ...family.dependents]);
   });
@@ -299,6 +302,15 @@ describe("CARD_ISSUE authentication in the execution context", () => {
     mocks.capture.mockRejectedValue(new AutomationError("CARD_CAPTURE_FAILED", "Cartao ambiguo."));
     await expect(emitCard(f.operation, new AbortController().signal, f.context)).rejects.toMatchObject({ code: "CARD_CAPTURE_FAILED" });
     expect(f.page.pdf).not.toHaveBeenCalled();
+    expect(f.artifactSave).not.toHaveBeenCalled();
+    expect(f.operation.artifacts).toEqual([]);
+    expect(f.operation.status).not.toBe("success");
+  });
+
+  it("does not store or announce a raw card when the branded delivery fails", async () => {
+    const f = fixture(false);
+    mocks.capture.mockRejectedValue(new AutomationError("CARD_DELIVERY_FAILED", "Moldura indisponivel."));
+    await expect(emitCard(f.operation, new AbortController().signal, f.context)).rejects.toMatchObject({ code: "CARD_DELIVERY_FAILED" });
     expect(f.artifactSave).not.toHaveBeenCalled();
     expect(f.operation.artifacts).toEqual([]);
     expect(f.operation.status).not.toBe("success");
@@ -328,7 +340,7 @@ describe("CARD_ISSUE authentication in the execution context", () => {
     expect(mocks.previews).toHaveBeenCalledWith(selected);
     expect(f.operation.result).toMatchObject({ operator: "ndi", beneficiaryScope: "all", beneficiaryCount: 2 });
     expect(f.artifactSave).toHaveBeenCalledWith(expect.objectContaining({ fileName: "carteirinhas-empresa-0abc.pdf" }));
-    expect(f.page.pdf).toHaveBeenCalledWith(expect.objectContaining({ format: "A4" }));
+    expect(mocks.capture).toHaveBeenCalledWith(f.page, [], expect.arrayContaining(selected.map(member => expect.objectContaining(member))), [], "carteirinhas da empresa 0abc", expect.any(AbortSignal));
     expect(f.operation.status).toBe("success");
   });
 

@@ -3,6 +3,7 @@ import { AutomationError } from "../../../errors.js";
 import { waitForRenderedCards, type CardBeneficiary } from "../cardPreview.js";
 import { inspectCardListRows, inspectCardSelectionControls } from "../cardList.js";
 import { findCardDependents } from "../cardDependents.js";
+import { describeCardDeliveryMembers } from "../cardDeliveryLayout.js";
 
 export interface BeneficiarySearchInput extends CardBeneficiary {}
 
@@ -251,7 +252,15 @@ export class HapvidaCardPage {
         selection.input.requireIdentifier = true;
       }
     }
-    await this.clearSelections();
+    const forcedDependents = snapshot.filter(row => row.visible && row.kind === "beneficiary" && !row.selectable &&
+      selections.some(selection => {
+        const primary = snapshot.find(candidate => normalizeText(candidate.beneficiaryName) === normalizeText(selection.input.beneficiaryName) &&
+          (!selection.input.cardIdentifiers?.length || [...(candidate.cardIdentifiers ?? []), ...(candidate.cpf ? [candidate.cpf] : [])].some(id => selection.input.cardIdentifiers?.includes(id))));
+        return primary && findCardDependents(snapshot, primary.index).some(dependent => dependent.index === row.index);
+      }));
+    const permitted = selections.map(selection => selection.control);
+    for (const dependent of forcedDependents) permitted.push(...await rows.nth(dependent.index).locator(CONTROL_SELECTOR).all());
+    await this.clearSelections(permitted);
     try {
       const controls = this.page.locator(CONTROL_SELECTOR);
       const bulkControls = (await controls.evaluateAll(inspectCardSelectionControls)).filter(state => state.bulk && state.enabled);
@@ -270,13 +279,14 @@ export class HapvidaCardPage {
         if (native && !selection.label) await selection.control.check();
         else await selection.target.click();
       }
-      await this.assertSelectedControls(selections.map(selection => selection.control));
+      await this.assertSelectedControls(selections.map(selection => selection.control), permitted);
     } catch {
       throw new AutomationError("BENEFICIARY_SELECTION_FAILED", "O portal nao confirmou a selecao completa do lote.", {
         safeDetails: "Nenhum PDF foi gerado porque uma ou mais selecoes nao permaneceram marcadas.", step: "confirm_beneficiary_selection", retryable: true,
       });
     }
-    return selections.map(selection => selection.input);
+    return [...selections.map(selection => selection.input), ...forcedDependents.map(({ beneficiaryName, cpf, cardIdentifiers, requireIdentifier }) =>
+      ({ beneficiaryName, cpf, cardIdentifiers, requireIdentifier }))];
   }
 
   private async isSelected(control: Locator) {
@@ -373,6 +383,10 @@ export class HapvidaCardPage {
       }
     }
     return undefined;
+  }
+
+  async describeSelectedBeneficiaries(selected: BeneficiarySearchInput[]) {
+    return describeCardDeliveryMembers(await this.page.locator(ROW_SELECTOR).evaluateAll(inspectCardListRows), selected);
   }
 
   async requestSelectedCards(beneficiaries: BeneficiarySearchInput[], allBeneficiaries = false,
