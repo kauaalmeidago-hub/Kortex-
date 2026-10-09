@@ -40,10 +40,16 @@ Comandos:
 ```bash
 npm run browser:onboard
 npm run browser:check
+npm run browser:onboard -- --operator=ndi
+npm run browser:check -- --operator=ndi
 npm run session:bootstrap -- --operator=hapvida
 ```
 
-`browser:onboard` abre o Chrome dedicado em modo visivel para o humano autenticar a Conta Google de Relacionamento e/ou o portal Hapvida. `browser:check` valida se a sessao do portal esta autenticada.
+`browser:onboard` abre o Chrome dedicado no portal de carteirinha escolhido; Hapvida e o padrao e `--operator=ndi` seleciona NDI. Depois do login manual e da confirmacao com Enter, somente a sessao validada daquela operadora e salva por DPAPI. Uma tentativa NDI sem login validado nao salva estado e nao substitui a sessao Hapvida.
+
+`browser:check` valida a sessao da operadora escolhida ou tenta renova-la com a credencial segura cadastrada para essa operadora. `REAUTH_REQUIRED` informa falta de acesso validado e nao desabilita o worker nem a emissao Hapvida. Para cadastrar e lembrar o acesso NDI, envie a credencial pelo formulario seguro do chat em um pedido de carteirinha, com "Lembrar neste computador". O worker valida o login antes de salvar o acesso. O onboarding manual salva a sessao, sem ler nem cadastrar a senha.
+
+Se houver mais de uma empresa elegivel, informe `--company-id=<uuid>`. Para verificar um codigo especifico, adicione `--company-code=<codigo>`; o check nao aceita a sessao geral de outro codigo como confirmacao desse acesso. `npm run test:portal-sessions` verifica isolamento de sessoes, login NDI e Hapvida e falhas de autenticacao em Chromium com paginas sinteticas interceptadas, sem acessar os portais reais.
 
 `session:bootstrap` e uma acao administrativa explicita para copiar somente cookies de dominios permitidos de um Chrome autorizado via CDP local para o `SessionManager` do Koa. Ele nao navega no Gmail, nao abre Google Password Manager, nao le senha e nao executa movimentacao. Use apenas quando o Chrome de Relacionamento tiver sido iniciado manualmente com remote debugging e `KOA_EXISTING_CHROME_CDP_URL` configurado.
 
