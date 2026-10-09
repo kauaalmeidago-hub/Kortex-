@@ -30,22 +30,25 @@ const html = body => `<!doctype html><html><head><meta charset="utf-8"><title>Ca
 const manifest = [];
 
 async function check(label, { portal = "ndi", all = false, target = 1, include = false, noDependentControls = false,
-  orphan = false, homonym = false, extraPrintedPerson = false, fallbackPrint = false } = {}) {
+  orphan = false, homonym = false, extraPrintedPerson = false, fallbackPrint = false,
+  chooseHomonym = false, duplicateRow = false, changeBeforeResume = false } = {}) {
   const repository = new OperationRepository(":memory:");
   const now = new Date().toISOString(), url = `https://${portal === "ndi" ? "sigo.sh.srv.br" : "webhap.hapvida.com.br"}/card`;
   const persons = people.map(person => ({ ...person }));
-  if (homonym) persons[4].name = persons[1].name;
+  if (homonym || chooseHomonym) persons[4].name = persons[1].name;
   if (orphan) persons[0].holder = "900000099999";
   let operation = { id:`test-${label}`, type:"CARD_ISSUE", status:"starting", companyId:"company-demo", portal,
     credentialRef:`${portal}:company-demo:login:0DEMO`, input:{ beneficiaryName:all ? "TODOS" : persons[target].name,
       ...(all ? { contractCode:"0DEMO" } : {}), periodStart:"2026-01-01", periodEnd:"2026-10-09" }, artifacts:[], createdAt:now, updatedAt:now };
   repository.create(operation);
   const printed=[], pdfs=[], queued=[];
+  let changed = false;
   const config={ hapvidaCardPortalUrl:url, ndiCardPortalUrl:url, actionTimeoutMs:2000, authTimeoutMs:2000,
     apiToken:"synthetic-api", features:{ cardIssue:true, cardIssueActiveUsersPreflight:false } };
   const list=html(`<table><tr><th>Nome</th><th>Carteirinha</th><th>Tipo</th><th>Matricula do titular</th><th>Selecionar</th></tr>
     ${persons.map((person,index)=>`<tr><td>${person.name}</td><td>${id(index)}</td><td>${person.type}</td><td>${person.holder||""}</td>
     <td>${noDependentControls && person.type==="Dependente" ? "" : `<input type="checkbox" id="member-${index}">`}</td></tr>`).join("")}</table>
+    ${duplicateRow ? `<table id="duplicate-container"></table><script>const duplicate=document.getElementById('member-${target}').closest('tr').cloneNode(true);duplicate.querySelector('input').id='duplicate-row';document.getElementById('member-${target}').closest('table').appendChild(duplicate);</script>` : ""}
     <button id="print">Imprimir selecionados</button><button id="print-all">Imprimir tudo</button><script>
     const persons=${JSON.stringify(persons)};
     async function printCards(all) {
@@ -69,7 +72,7 @@ async function check(label, { portal = "ndi", all = false, target = 1, include =
         const context=await browser.newContext();context.setDefaultTimeout(2500);
         await context.exposeFunction("fixturePrinted",data=>printed.push(data));
         await context.route("**/*",route=>{ const current=new URL(route.request().url());assert.equal(current.origin,new URL(url).origin);
-          return route.fulfill({contentType:"text/html; charset=utf-8",body:current.pathname==="/members"?list:current.pathname==="/auth"?period:all?login:period}); });
+          return route.fulfill({contentType:"text/html; charset=utf-8",body:current.pathname==="/members"?(changed?list.replaceAll(id(target),"900000099999"):list):current.pathname==="/auth"?period:all?login:period}); });
         const originalNewPage=context.newPage.bind(context);
         if (fallbackPrint) context.newPage=async()=>{ const page=await originalNewPage();page.pdf=async()=>{throw new Error("Force the Chromium print fallback");};return page; };
         try{return await callback(context,await context.newPage());}finally{await context.close();}
@@ -85,13 +88,29 @@ async function check(label, { portal = "ndi", all = false, target = 1, include =
   try {
     if(orphan) { await assert.rejects(run,error=>error.code==="CARD_FAMILY_MAPPING_FAILED");assert.equal(pdfs.length,0);console.log(JSON.stringify({case:label,result:"PASS",blocked:true}));return; }
     await run();operation=repository.get(operation.id);
+    if (operation.status === "awaiting_confirmation" && operation.result.cardBeneficiaryConfirmation) {
+      assert(chooseHomonym);assert.equal(pdfs.length,0);assert.equal(printed.length,0);
+      const confirmation = operation.result.cardBeneficiaryConfirmation;
+      const option = confirmation.options.find(option => option.cardNumbers.includes(id(target)));
+      assert(option);assert.equal(confirmation.options.length,2);
+      const response = await app.inject({method:"POST",url:`/api/operations/${operation.id}/card-beneficiary`,headers:{"x-koa-automation-token":"synthetic-api"},payload:{confirmationId:confirmation.id,optionId:option.id}});
+      assert.equal(response.statusCode,202,response.body);
+      if (changeBeforeResume) changed = true;
+      operation=repository.get(operation.id);await run();operation=repository.get(operation.id);
+      if (changeBeforeResume) {
+        assert.equal(operation.status,"awaiting_confirmation");assert.notEqual(operation.result.cardBeneficiaryConfirmation.id,confirmation.id);
+        assert.equal(operation.result.cardBeneficiaryConfirmation.selectedOptionId,undefined);assert.equal(pdfs.length,0);assert.equal(printed.length,0);
+        console.log(JSON.stringify({case:label,result:"PASS",blockedUntilNewChoice:true}));return;
+      }
+    }
     if(operation.status==="awaiting_confirmation") {
       assert.equal(pdfs.length,0);assert.equal(printed.length,0);
       const response=await app.inject({method:"POST",url:`/api/operations/${operation.id}/card-dependents`,headers:{"x-koa-automation-token":"synthetic-api"},payload:{confirmationId:operation.result.cardDependentConfirmation.id,includeDependents:include}});
-      assert.equal(response.statusCode,202,response.body);assert.deepEqual(queued,[operation.id]);
+      assert.equal(response.statusCode,202,response.body);assert(queued.length>0 && queued.every(id=>id===operation.id));
       operation=repository.get(operation.id);await run();operation=repository.get(operation.id);
     }
     assert.equal(operation.status,"success");assert.equal(pdfs.length,1);assert.equal(printed.length,1);
+    if (chooseHomonym || duplicateRow) assert.deepEqual(printed[0].checked,[target]);
     const expected=all?persons.map((_,index)=>index):[target,...(include?persons.map((person,index)=>person.holder===id(target)?index:-1).filter(index=>index>=0):[])];
     assert.equal(operation.result.beneficiaryCount,expected.length);
     assert.deepEqual(new Set(operation.result.beneficiaryNames),new Set(expected.map(index=>persons[index].name)));
@@ -123,5 +142,10 @@ try {
   await check("branded-selected-family-excludes-extra-person",{include:true,extraPrintedPerson:true});
   await check("branded-orphan-dependent-cannot-be-misgrouped",{all:true,orphan:true});
   await check("branded-chromium-print-fallback",{fallbackPrint:true});
+  for(const portal of ["ndi","hapvida"]) {
+    await check(`${portal}-branded-chosen-homonym`,{portal,target:4,chooseHomonym:true});
+    await check(`${portal}-branded-identical-list-row`,{portal,duplicateRow:true});
+    await check(`${portal}-branded-changed-choice-requires-new-decision`,{portal,target:4,chooseHomonym:true,changeBeforeResume:true});
+  }
   if(output)await writeFile(path.join(output,"branded-delivery-manifest.json"),JSON.stringify(manifest,null,2));
 } finally {await browser.close();}

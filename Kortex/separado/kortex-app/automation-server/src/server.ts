@@ -446,6 +446,27 @@ export async function createServer({ config, repository, eventBus, queue, creden
     return reply.code(202).send(operationResponse(confirmed));
   });
 
+  app.post<{ Params: { id: string } }>("/api/operations/:id/card-beneficiary", async (request, reply) => {
+    const parsed = z.object({ confirmationId: z.string().min(1).max(100), optionId: z.string().regex(/^[a-f0-9]{64}$/) }).strict().safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "INVALID_BENEFICIARY_CONFIRMATION" });
+    const operation = await repository.get(request.params.id);
+    if (!operation) return reply.code(404).send({ error: "operation_not_found" });
+    const userId = (request as FastifyRequest & { userId?: string }).userId;
+    if (userId && userId !== operation.requestedBy) return reply.code(403).send({ error: "forbidden" });
+    if (operation.type !== "CARD_ISSUE" || operation.status !== "awaiting_confirmation") return reply.code(409).send({ error: "OPERATION_NOT_AWAITING_BENEFICIARY_CONFIRMATION" });
+    if (!config.features.cardIssue || !repository.confirmCardBeneficiary) return reply.code(409).send({ error: "BENEFICIARY_CONFIRMATION_UNAVAILABLE" });
+    const confirmed = await repository.confirmCardBeneficiary(operation.id, parsed.data.confirmationId, parsed.data.optionId, userId ?? "local-api");
+    if (!confirmed) return reply.code(409).send({ error: "BENEFICIARY_CONFIRMATION_CHANGED" });
+    try {
+      const event = await repository.appendEvent({ operationId: operation.id, type: "operation.queued", status: "queued",
+        step: "card_beneficiary_confirmed", data: { confirmationId: parsed.data.confirmationId, approvedBy: userId ?? "local-api" },
+        createdAt: new Date().toISOString() });
+      eventBus.publish(event);
+    } catch { /* The saved decision already queued the operation; do not replay it. */ }
+    queue.enqueue(operation.id);
+    return reply.code(202).send(operationResponse(confirmed));
+  });
+
   app.get<{ Params: { id: string; fileName: string } }>("/api/operations/:id/artifacts/:fileName", async (request, reply) => {
     const operation = await repository.get(request.params.id);
     if (!operation) return reply.code(404).send({ error: "operation_not_found" });

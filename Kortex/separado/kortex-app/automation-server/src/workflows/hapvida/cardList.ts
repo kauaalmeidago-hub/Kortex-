@@ -10,6 +10,7 @@ export interface CardListRow extends CardBeneficiary {
   holderReferences: string[];
   holderName?: string;
   text?: string;
+  identityText?: string;
 }
 
 // These functions are serialized into the browser. Keep their DOM helpers inside the function.
@@ -83,10 +84,16 @@ export function inspectCardListRows(input: unknown | unknown[]): CardListRow[] {
     const type = normalize(node.getAttribute("data-member-type") ?? "");
     if (type === "holder" || type === "titular") memberType = "holder";
     if (type === "dependent" || type === "dependente") memberType = "dependent";
+    let identityText = rowText;
+    if (leaf && beneficiaryName) {
+      const copy = node.cloneNode(true);
+      for (const control of copy.querySelectorAll('input,button,select,label,[role="checkbox"],[role="radio"]')) control.remove();
+      identityText = normalize(copy.textContent ?? "");
+    }
     return { index, beneficiaryName, cpf, cardIdentifiers: [...new Set(cardIdentifiers)], requireIdentifier,
       kind: headerRow ? "header" : bulkRow ? "bulk" : beneficiaryName ? "beneficiary" : "unknown",
       visible: leaf && visible(node), selectable, tableIndex: tables.get(table) ?? -1, memberType,
-      holderReferences: [...new Set(holderReferences)], holderName, text: rowText };
+      holderReferences: [...new Set(holderReferences)], holderName, text: rowText, identityText };
   });
 }
 

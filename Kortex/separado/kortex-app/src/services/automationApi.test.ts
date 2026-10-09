@@ -59,6 +59,16 @@ describe("card file downloads from the chat", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(mock.refreshSession).not.toHaveBeenCalled();
   });
+  it("submits only the selected beneficiary identifiers with the authenticated session", async () => {
+    fetchMock.mockResolvedValueOnce(new Response('{"operationId":"operation-1","status":"queued"}', { status: 202 }));
+    const { confirmOperationCardBeneficiary } = await import("./automationApi");
+    await confirmOperationCardBeneficiary("operation-1", "choice-1", "a".repeat(64));
+    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:4777/api/operations/operation-1/card-beneficiary", expect.objectContaining({
+      method: "POST", headers: expect.objectContaining({ authorization: "Bearer current-user-jwt" }),
+      body: JSON.stringify({ confirmationId: "choice-1", optionId: "a".repeat(64) }),
+    }));
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
   it("uses the configured local worker token without requiring a Kortex session", async () => {
     vi.stubEnv("VITE_AUTOMATION_API_TOKEN", "local-worker-token");
     mock.getSession.mockResolvedValue({ data: { session: null } });

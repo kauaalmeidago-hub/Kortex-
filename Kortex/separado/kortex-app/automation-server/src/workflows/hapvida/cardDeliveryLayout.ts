@@ -2,6 +2,7 @@ import { AutomationError } from "../../errors.js";
 import type { CardBeneficiary } from "./cardPreview.js";
 import type { CardListRow } from "./cardList.js";
 import { findCardDependents } from "./cardDependents.js";
+import { cardRowFingerprint, distinctCardRows } from "./cardBeneficiaryChoice.js";
 
 export interface CardDeliveryMember extends CardBeneficiary {
   id: string;
@@ -19,6 +20,7 @@ const normalize = (value: string) => value.normalize("NFD").replace(/[\u0300-\u0
 const rowId = (row: CardListRow) => `row-${row.tableIndex}-${row.index}`;
 
 export function describeCardDeliveryMembers(rows: CardListRow[], selected: CardBeneficiary[]): CardDeliveryMember[] {
+  rows = distinctCardRows(rows);
   const people = rows.filter(row => row.visible && row.kind === "beneficiary");
   const parents = new Map<number, CardListRow>();
   const holders = new Set<number>();
@@ -31,6 +33,8 @@ export function describeCardDeliveryMembers(rows: CardListRow[], selected: CardB
   }
   return selected.map(input => {
     let candidates = people.filter(row => normalize(row.beneficiaryName) === normalize(input.beneficiaryName));
+    const rowFingerprint = (input as CardBeneficiary & { rowFingerprint?: string }).rowFingerprint;
+    if (rowFingerprint) candidates = candidates.filter(row => cardRowFingerprint(row) === rowFingerprint);
     if (input.cardIdentifiers?.length) candidates = candidates.filter(row => [...(row.cardIdentifiers ?? []), ...(row.cpf ? [row.cpf] : [])].some(id => input.cardIdentifiers!.includes(id)));
     if (input.cpf) candidates = candidates.filter(row => !row.cpf || row.cpf === input.cpf!.replace(/\D/g, ""));
     if (candidates.length !== 1) throw new AutomationError("CARD_FAMILY_MAPPING_FAILED", "Nao foi possivel conferir a identidade para organizar as carteirinhas.", { step: "organize_card_delivery" });

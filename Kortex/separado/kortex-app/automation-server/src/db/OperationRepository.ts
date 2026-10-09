@@ -176,6 +176,19 @@ export class OperationRepository implements AutomationOperationRepository {
     return result.changes ? this.get(id) : undefined;
   }
 
+  confirmCardBeneficiary(id: string, confirmationId: string, optionId: string, approvedBy: string) {
+    const result = this.db.prepare(`UPDATE operations SET status = 'queued', current_step = 'card_beneficiary_confirmed',
+      result_json = json_set(result_json, '$.cardBeneficiaryConfirmation.selectedOptionId', ?, '$.cardBeneficiaryConfirmation.approvedBy', ?,
+        '$.cardBeneficiaryConfirmation.approvedAt', ?), updated_at = ?, finished_at = NULL, error_json = NULL
+      WHERE id = ? AND type = 'CARD_ISSUE' AND status = 'awaiting_confirmation'
+        AND json_extract(result_json, '$.cardBeneficiaryConfirmation.id') = ?
+        AND json_extract(result_json, '$.cardBeneficiaryConfirmation.selectedOptionId') IS NULL
+        AND EXISTS (SELECT 1 FROM json_each(json_extract(result_json, '$.cardBeneficiaryConfirmation.options'))
+          WHERE json_extract(value, '$.id') = ?)`)
+      .run(optionId, approvedBy, new Date().toISOString(), new Date().toISOString(), id, confirmationId, optionId);
+    return result.changes ? this.get(id) : undefined;
+  }
+
   appendEvent(event: OperationEvent) {
     const result = this.db
       .prepare(

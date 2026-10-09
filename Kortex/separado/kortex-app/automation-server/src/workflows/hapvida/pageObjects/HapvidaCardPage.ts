@@ -4,8 +4,10 @@ import { waitForRenderedCards, type CardBeneficiary } from "../cardPreview.js";
 import { inspectCardListRows, inspectCardSelectionControls } from "../cardList.js";
 import { findCardDependents } from "../cardDependents.js";
 import { describeCardDeliveryMembers } from "../cardDeliveryLayout.js";
+import { cardRowFingerprint, distinctCardRows } from "../cardBeneficiaryChoice.js";
+import type { CardListRow } from "../cardList.js";
 
-export interface BeneficiarySearchInput extends CardBeneficiary {}
+export interface BeneficiarySearchInput extends CardBeneficiary { rowFingerprint?: string }
 
 function normalizeText(value: string) {
   return value
@@ -150,7 +152,7 @@ export class HapvidaCardPage {
       throw new AutomationError("BENEFICIARY_NOT_FOUND", "O CPF da linha nao corresponde ao pedido.", { step: "find_beneficiary" });
     }
     const index = await row.evaluate(element => Array.from((globalThis as unknown as { document: any }).document.querySelectorAll('tr, [role="row"]')).indexOf(element));
-    const snapshot = await this.page.locator(ROW_SELECTOR).evaluateAll(inspectCardListRows);
+    const snapshot = distinctCardRows(await this.page.locator(ROW_SELECTOR).evaluateAll(inspectCardListRows));
     const beneficiary = { ...input, beneficiaryName: identity.beneficiaryName || input.beneficiaryName,
       cpf: input.cpf ?? identity.cpf, cardIdentifiers: identity.cardIdentifiers, requireIdentifier: identity.requireIdentifier };
     const dependents = findCardDependents(snapshot, index).map(({ beneficiaryName, cpf, cardIdentifiers, requireIdentifier }) =>
@@ -439,7 +441,17 @@ export class HapvidaCardPage {
     const selectableRows: Locator[] = [];
     for (const row of exactNameRows) if (await this.findSelectionControl(row)) selectableRows.push(row);
     let filteredRows = selectableRows.length ? selectableRows : exactNameRows;
-    if (filteredRows.length > 1 && input.cardIdentifiers?.length) {
+    if (input.rowFingerprint) {
+      const identified: Locator[] = [];
+      for (const row of filteredRows) {
+        const snapshot = await this.page.locator(ROW_SELECTOR).evaluateAll(inspectCardListRows);
+        const index = await row.evaluate(element => Array.from((globalThis as unknown as { document: any }).document.querySelectorAll('tr, [role="row"]')).indexOf(element));
+        const identity = snapshot.find(candidate => candidate.index === index);
+        if (identity && cardRowFingerprint(identity) === input.rowFingerprint) identified.push(row);
+      }
+      filteredRows = identified;
+    }
+    if (input.cardIdentifiers?.length) {
       const identified: Locator[] = [];
       for (const row of filteredRows) {
         const identity = await this.readRowIdentity(row);
@@ -489,9 +501,21 @@ export class HapvidaCardPage {
     const candidates = this.page.locator(ROW_SELECTOR);
     const name = normalizeText(beneficiaryName);
     const expected = new RegExp(`(?:^|[^a-z0-9])${escapeRegExp(name)}(?:$|[^a-z0-9])`);
-    const snapshot = await candidates.evaluateAll(inspectCardListRows);
+    const snapshot = distinctCardRows(await candidates.evaluateAll(inspectCardListRows));
     return snapshot.filter(row => row.visible && (row.beneficiaryName
       ? normalizeText(row.beneficiaryName) === name : expected.test(row.text ?? ""))).map(row => candidates.nth(row.index));
+  }
+
+  async inspectBeneficiaryCandidates(input: BeneficiarySearchInput): Promise<CardListRow[]> {
+    const candidates = await this.collectCandidateRows(input.beneficiaryName);
+    const snapshot = distinctCardRows(await this.page.locator(ROW_SELECTOR).evaluateAll(inspectCardListRows));
+    const indices = await Promise.all(candidates.map(row => row.evaluate(element => Array.from((globalThis as unknown as { document: any }).document.querySelectorAll('tr, [role="row"]')).indexOf(element))));
+    let matches = snapshot.filter(row => indices.includes(row.index));
+    if (matches.some(row => row.selectable)) matches = matches.filter(row => row.selectable);
+    if (input.cardIdentifiers?.length) matches = matches.filter(row => row.cardIdentifiers?.some(value => input.cardIdentifiers!.includes(value)));
+    if (input.cpf) matches = matches.filter(row => row.cpf ? row.cpf === onlyDigits(input.cpf) : onlyDigits(row.text).includes(onlyDigits(input.cpf)));
+    if (input.birthDate) matches = matches.filter(row => onlyDigits(row.text).includes(onlyDigits(input.birthDate?.replace(/^(\d{4})-(\d{2})-(\d{2})$/, "$3/$2/$1"))));
+    return matches;
   }
 }
 

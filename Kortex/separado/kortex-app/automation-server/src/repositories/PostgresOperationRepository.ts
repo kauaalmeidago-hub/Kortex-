@@ -320,6 +320,24 @@ export class PostgresOperationRepository implements PersistentAutomationQueueRep
     return row ? this.toOperation(row, await this.getArtifacts(id)) : undefined;
   }
 
+  async confirmCardBeneficiary(id: string, confirmationId: string, optionId: string, approvedBy: string) {
+    const result = await this.pool.query<OperationRow>(`UPDATE public.automation_operations
+      SET status = 'queued'::public.automation_operation_status, current_step = 'card_beneficiary_confirmed',
+          result = jsonb_set(result, '{cardBeneficiaryConfirmation}', (result->'cardBeneficiaryConfirmation') ||
+            jsonb_build_object('selectedOptionId', $3::text, 'approvedBy', $4::text, 'approvedAt', now())),
+          error_code = NULL, error_message = NULL, finished_at = NULL, updated_at = now(),
+          worker_id = NULL, lease_expires_at = NULL, attempt = GREATEST(attempt - 1, 0)
+      WHERE id = $1 AND operation_type = 'CARD_ISSUE' AND status = 'awaiting_confirmation'
+        AND cancel_requested_at IS NULL
+        AND result->'cardBeneficiaryConfirmation'->>'id' = $2
+        AND result->'cardBeneficiaryConfirmation'->>'selectedOptionId' IS NULL
+        AND EXISTS (SELECT 1 FROM jsonb_array_elements(result->'cardBeneficiaryConfirmation'->'options') AS option
+          WHERE option->>'id' = $3)
+      RETURNING *`, [id, confirmationId, optionId, approvedBy]);
+    const row = result.rows[0];
+    return row ? this.toOperation(row, await this.getArtifacts(id)) : undefined;
+  }
+
   async claimNext(workerId: string, leaseSeconds: number) {
     const result = await this.pool.query<OperationRow>("SELECT * FROM public.claim_next_automation_operation($1, $2)", [
       workerId,

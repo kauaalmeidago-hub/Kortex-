@@ -428,6 +428,14 @@ export async function confirmOperationCardDependents(operationId: string, confir
   return parseResponse<AutomationOperationResponse>(response);
 }
 
+export async function confirmOperationCardBeneficiary(operationId: string, confirmationId: string, optionId: string) {
+  if (!useLocalApi || !automationBaseUrl) throw new Error("A escolha precisa ser enviada ao Koa Worker local.");
+  const response = await localFetch(`${automationBaseUrl}/api/operations/${encodeURIComponent(operationId)}/card-beneficiary`, {
+    method: "POST", headers: await headers(), body: JSON.stringify({ confirmationId, optionId }),
+  });
+  return parseResponse<AutomationOperationResponse>(response);
+}
+
 export function getArtifactUrl(operationId: string, fileName: string) {
   if (!useLocalApi) return "";
   const url = new URL(`${automationBaseUrl}/api/operations/${operationId}/artifacts/${encodeURIComponent(fileName)}`);

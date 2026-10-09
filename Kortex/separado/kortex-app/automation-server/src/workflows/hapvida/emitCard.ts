@@ -14,6 +14,7 @@ import { HapvidaActiveUsersPage } from "./pageObjects/HapvidaActiveUsersPage.js"
 import { validateCardPdfBytes } from "./downloadValidation.js";
 import { pendingCardDependents, type CardDependentConfirmation } from "./cardDependents.js";
 import { portalLoginCode } from "../../credentials/credentialIdentity.js";
+import { pendingCardBeneficiary, cardRowFingerprint, type CardBeneficiaryConfirmation } from "./cardBeneficiaryChoice.js";
 
 function readString(input: Record<string, unknown>, keys: string[]) {
   for (const key of keys) {
@@ -69,6 +70,7 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
   const periodEnd = toPortalDate(readString(operation.input, ["periodEnd", "endDate"]), "Data final");
   const cpf = readString(operation.input, ["cpf"]);
   const birthDate = readString(operation.input, ["birthDate"]);
+  const cardNumber = readString(operation.input, ["cardNumber"])?.replace(/\D/g, "");
   const requestedCompanyCode = portalLoginCode(operation.input);
   const allBeneficiaries = isAllBeneficiariesRequest(operation.input);
   if (allBeneficiaries && !requestedCompanyCode) {
@@ -260,7 +262,25 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
     let otherBeneficiaries: BeneficiarySearchInput[] = [];
     if (allBeneficiaries) selected = await cardPage.selectAllBeneficiaries();
     else {
-      const family = await cardPage.inspectBeneficiaryFamily({ beneficiaryName, cpf, birthDate });
+      let target: BeneficiarySearchInput = { beneficiaryName, cpf, birthDate, ...(cardNumber ? { cardIdentifiers: [cardNumber], requireIdentifier: true } : {}) };
+      const candidates = await cardPage.inspectBeneficiaryCandidates(target);
+      const previousChoice = operation.result?.cardBeneficiaryConfirmation as CardBeneficiaryConfirmation | undefined;
+      if (candidates.length > 1 || (previousChoice && candidates.length)) {
+        const confirmation = pendingCardBeneficiary(operation, candidates);
+        const chosen = candidates.find(row => cardRowFingerprint(row) === confirmation.selectedOptionId);
+        if (!chosen) {
+          const result = { ...operation.result, beneficiaryName, cardBeneficiaryConfirmation: confirmation, cardDependentConfirmation: undefined };
+          await context.repository.update(operation.id, { result });
+          Object.assign(operation, { result });
+          assertNotAborted(signal);
+          await context.updateStatus("awaiting_confirmation", "Escolha qual carteirinha corresponde ao beneficiario", result);
+          if (credential) context.retainCardConfirmationCredential?.(operation, credential);
+          return;
+        }
+        target = { ...target, cpf: chosen.cpf ?? cpf, cardIdentifiers: chosen.cardIdentifiers,
+          requireIdentifier: chosen.requireIdentifier, rowFingerprint: cardRowFingerprint(chosen) };
+      }
+      const family = await cardPage.inspectBeneficiaryFamily(target);
       otherBeneficiaries = family.otherBeneficiaries ?? family.dependents;
       assertNotAborted(signal);
       const previous = operation.result?.cardDependentConfirmation as CardDependentConfirmation | undefined;

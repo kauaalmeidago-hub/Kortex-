@@ -7,7 +7,7 @@ import type { OperationEvent, OperationRecord } from "../../types.js";
 const mocks = vi.hoisted(() => ({
   open: vi.fn(), ready: vi.fn(), login: vi.fn(), passwordVisible: vi.fn(), invalid: vi.fn(),
   periodForm: vi.fn(), fillPeriod: vi.fn(), submitPeriod: vi.fn(), selectBeneficiary: vi.fn(),
-  requestCards: vi.fn(), preview: vi.fn(), selectAll: vi.fn(), previews: vi.fn(), inspectFamily: vi.fn(), selectMany: vi.fn(), capture: vi.fn(), describeDelivery: vi.fn(), remember: vi.fn(), loginPages: [] as unknown[], cardPages: [] as unknown[], loginOptions: [] as unknown[],
+  requestCards: vi.fn(), preview: vi.fn(), selectAll: vi.fn(), previews: vi.fn(), inspectCandidates: vi.fn(), inspectFamily: vi.fn(), selectMany: vi.fn(), capture: vi.fn(), describeDelivery: vi.fn(), remember: vi.fn(), loginPages: [] as unknown[], cardPages: [] as unknown[], loginOptions: [] as unknown[],
 }));
 vi.mock("./pageObjects/HapvidaLoginPage.js", () => ({ HapvidaLoginPage: class {
   constructor(page: unknown, url: unknown, _timeout: unknown, label: unknown) { mocks.loginPages.push(page); mocks.loginOptions.push({ url, label }); }
@@ -20,6 +20,7 @@ vi.mock("./pageObjects/HapvidaCardPage.js", () => ({ HapvidaCardPage: class {
   selectBeneficiary = mocks.selectBeneficiary; requestSelectedCards = mocks.requestCards; waitForCardPreview = mocks.preview;
   selectAllBeneficiaries = mocks.selectAll; waitForCardPreviews = mocks.previews;
   inspectBeneficiaryFamily = mocks.inspectFamily; selectBeneficiaries = mocks.selectMany;
+  inspectBeneficiaryCandidates = mocks.inspectCandidates;
   describeSelectedBeneficiaries = mocks.describeDelivery;
 } }));
 vi.mock("../../authentication/RememberedCredentialService.js", () => ({ RememberedCredentialService: class {
@@ -70,6 +71,7 @@ describe("CARD_ISSUE authentication in the execution context", () => {
     mocks.remember.mockResolvedValue({ rememberedOnDevice: true, metadataRegistered: true });
     mocks.describeDelivery.mockImplementation(async members => members.map((member, index) => ({ ...member, id: `member-${index}`, role: "beneficiary" })));
     mocks.inspectFamily.mockImplementation(async beneficiary => ({ beneficiary, dependents: [] }));
+    mocks.inspectCandidates.mockResolvedValue([]);
     mocks.selectBeneficiary.mockImplementation(async beneficiary => beneficiary);
     mocks.selectMany.mockImplementation(async beneficiaries => beneficiaries);
     mocks.previews.mockResolvedValue([]);

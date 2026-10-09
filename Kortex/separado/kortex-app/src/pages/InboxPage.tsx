@@ -34,6 +34,7 @@ import { pipelines } from "@/data/mockData";
 import {
   cancelOperation,
   confirmOperationCardDependents,
+  confirmOperationCardBeneficiary,
   createOperation,
   getOperation,
   submitOperationAuthentication,
@@ -42,6 +43,7 @@ import {
   type AutomationOperationStatus,
 } from "@/services/automationApi";
 import { KoaCardDependentConfirmation, type CardDependentChoice } from "@/components/KoaCardDependentConfirmation";
+import { KoaCardBeneficiaryConfirmation, type CardBeneficiaryChoice } from "@/components/KoaCardBeneficiaryConfirmation";
 import type { OperationConnectionState } from "@/services/operationMonitoring";
 import { useAuth } from "@/contexts/AuthContext";
 import { validateKoaPeriod } from "@/utils/koaDate";
@@ -642,6 +644,7 @@ type KoaFormValues = {
   inclusionType: InclusionMode;
   exclusionType: ExclusionMode;
   contractCode: string;
+  cardNumber: string;
   companyAccess: string;
   password: string;
   beneficiaryName: string;
@@ -672,6 +675,7 @@ type KoaOperation = {
     beneficiaryScope?: "single" | "all";
     beneficiaryCount?: number;
     cardDependentConfirmation?: CardDependentChoice;
+    cardBeneficiaryConfirmation?: CardBeneficiaryChoice;
     beneficiaryCpfMasked?: string;
     contractCode?: string;
     cancellationReason?: string;
@@ -716,6 +720,7 @@ function createInitialKoaValues(): KoaFormValues {
     inclusionType: "holder",
     exclusionType: "holder",
     contractCode: "",
+    cardNumber: "",
     companyAccess: "",
     password: "",
     beneficiaryName: "",
@@ -883,6 +888,7 @@ function mapAutomationOperation(response: AutomationOperationResponse, type: Koa
           beneficiaryScope: response.result.beneficiaryScope === "all" ? "all" : "single",
           beneficiaryCount: typeof response.result.beneficiaryCount === "number" ? response.result.beneficiaryCount : undefined,
           cardDependentConfirmation: response.result.cardDependentConfirmation as CardDependentChoice | undefined,
+          cardBeneficiaryConfirmation: response.result.cardBeneficiaryConfirmation as CardBeneficiaryChoice | undefined,
           beneficiaryCpfMasked: typeof response.result.beneficiaryCpfMasked === "string" ? response.result.beneficiaryCpfMasked : undefined,
           contractCode: typeof response.result.contractCode === "string" ? response.result.contractCode : undefined,
           cancellationReason: typeof response.result.cancellationReason === "string" ? response.result.cancellationReason : undefined,
@@ -1166,6 +1172,8 @@ function KoaPanel({
               periodStart: cardPeriod.periodStart,
               periodEnd: cardPeriod.periodEnd,
               contractCode: values.contractCode.trim() || undefined,
+              cpf: values.cpf.replace(/\D/g, "") || undefined,
+              cardNumber: values.cardNumber.replace(/\D/g, "") || undefined,
             }
           : selectedFlow === "inclusao"
             ? {
@@ -1361,6 +1369,30 @@ function KoaPanel({
     }
   };
 
+  const handleConfirmCardBeneficiary = async (confirmationId: string, optionId: string) => {
+    if (!operation) return "Operação não encontrada.";
+    try {
+      const confirmed = await confirmOperationCardBeneficiary(operation.id, confirmationId, optionId);
+      const mapped = mapAutomationOperation(confirmed, operation.type);
+      setOperation(mapped); setPhase(phaseFromOperationStatus(mapped.status));
+      setHistory(current => [...current, { id: createKoaEntryId("beneficiary-choice"), kind: "user", text: "Quero emitir a carteirinha do registro que selecionei." }]);
+      operationUnsubscribeRef.current?.();
+      operationUnsubscribeRef.current = await subscribeToOperation(operation.id, {
+        onEvent: () => {
+          void getOperation(operation.id).then(updated => {
+            if (activeOperationIdRef.current !== operation.id) return;
+            const next = mapAutomationOperation(updated, operation.type);
+            setOperation(next); setPhase(phaseFromOperationStatus(next.status));
+          }).catch(() => undefined);
+        },
+        onConnectionState: setOperationConnectionState,
+      });
+      return undefined;
+    } catch (error) {
+      return error instanceof Error ? error.message : "Não consegui registrar sua escolha.";
+    }
+  };
+
   const renderEntry = (entry: KoaChatEntry) => {
     if (entry.kind === "user") return <KoaUserBubble key={entry.id}>{entry.text}</KoaUserBubble>;
     if (entry.kind === "assistant") return <KoaAssistantBubble key={entry.id}>{entry.text}</KoaAssistantBubble>;
@@ -1377,6 +1409,7 @@ function KoaPanel({
             onCancelOperation={handleCancelOperation}
             onSubmitAuthentication={handleSubmitAuthentication}
             onConfirmCardDependents={handleConfirmCardDependents}
+            onConfirmCardBeneficiary={handleConfirmCardBeneficiary}
           />
         );
       }
@@ -1727,6 +1760,7 @@ function KoaOperationResult({
   onCancelOperation,
   onSubmitAuthentication,
   onConfirmCardDependents,
+  onConfirmCardBeneficiary,
 }: {
   operation: KoaOperation;
   defaultCompanyCode?: string;
@@ -1734,6 +1768,7 @@ function KoaOperationResult({
   onCancelOperation: () => void;
   onSubmitAuthentication: (input: { password: string; rememberOnDevice: boolean; companyCode?: string }) => Promise<string | undefined>;
   onConfirmCardDependents: (confirmationId: string, includeDependents: boolean) => Promise<string | undefined>;
+  onConfirmCardBeneficiary: (confirmationId: string, optionId: string) => Promise<string | undefined>;
 }) {
   if (operation.status === "cancelled") {
     return (
@@ -1776,6 +1811,10 @@ function KoaOperationResult({
   }
 
   if (operation.status === "awaiting_confirmation") {
+    if (operation.type === "card" && operation.result?.cardBeneficiaryConfirmation && !operation.result.cardDependentConfirmation) {
+      return <KoaCardBeneficiaryConfirmation key={operation.result.cardBeneficiaryConfirmation.id}
+        confirmation={operation.result.cardBeneficiaryConfirmation} onConfirm={onConfirmCardBeneficiary} onCancel={onCancelOperation} />;
+    }
     if (operation.type === "card" && operation.result?.cardDependentConfirmation) {
       return <KoaCardDependentConfirmation key={operation.result.cardDependentConfirmation.id}
         confirmation={operation.result.cardDependentConfirmation} onConfirm={onConfirmCardDependents} onCancel={onCancelOperation} />;
@@ -1951,6 +1990,13 @@ function KoaMovementForm({
           </div>
           <KoaTextField icon={Users} label="Nome do beneficiário ou TODOS" value={values.beneficiaryName} error={errors.beneficiaryName} placeholder="Nome completo ou TODOS" onChange={(value) => onChange("beneficiaryName", value)} />
           <KoaInfoNote>Digite TODOS para emitir as carteirinhas disponíveis da empresa no período informado.</KoaInfoNote>
+          <details className="rounded-xl border border-border p-3 text-sm">
+            <summary className="cursor-pointer font-medium">Identificar por CPF ou número da carteirinha (opcional)</summary>
+            <div className="mt-3 space-y-3">
+              <KoaTextField icon={IdCard} label="CPF do beneficiário" value={values.cpf} error={errors.cpf} placeholder="000.000.000-00" onChange={value => onChange("cpf", value)} />
+              <KoaTextField icon={CreditCard} label="Número da carteirinha" value={values.cardNumber} error={errors.cardNumber} placeholder="Digite o número" onChange={value => onChange("cardNumber", value)} />
+            </div>
+          </details>
         </div>
         <KoaSubmitButton onClick={onSubmit}>Emitir carteirinha</KoaSubmitButton>
       </KoaFormCard>
@@ -2074,6 +2120,8 @@ function validateKoaValues(flow: KoaFlow, values: KoaFormValues) {
   };
 
   if (flow === "carteirinha") {
+    if (values.cpf.trim() && values.cpf.replace(/\D/g, "").length !== 11) nextErrors.cpf = "Informe um CPF com 11 dígitos.";
+    if (values.cardNumber.trim() && values.cardNumber.replace(/\D/g, "").length < 6) nextErrors.cardNumber = "Informe o número completo da carteirinha.";
     ["startDate", "endDate", "beneficiaryName"].forEach((key) => requireValue(key as keyof KoaFormValues));
     if (isAllCardBeneficiaries(values.beneficiaryName)) requireValue("contractCode", "Informe o código da empresa para emitir todas.");
     if (values.startDate.trim() && values.endDate.trim()) {
