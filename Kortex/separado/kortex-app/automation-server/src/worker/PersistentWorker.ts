@@ -209,7 +209,7 @@ export class PersistentWorker {
       repositoryMode: this.deps.config.repositoryMode,
       browserProvider: this.deps.config.browserProvider,
       cardIssueEnabled: this.deps.config.features.cardIssue,
-      cardIssueWorkflowVersion: 8,
+      cardIssueWorkflowVersion: 9,
       cardIssueBeneficiaryChoiceEnabled: this.deps.config.features.cardIssue,
       cardDeliveryTemplateVersion: 1,
       cardDeliveryBrandingEnabled: this.deps.config.features.cardIssue,

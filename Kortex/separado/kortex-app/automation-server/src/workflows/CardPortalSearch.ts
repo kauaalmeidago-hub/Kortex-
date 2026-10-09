@@ -18,7 +18,7 @@ export async function searchCardPortals(operation: OperationRecord, signal: Abor
   }
 
   const contractCode = portalLoginCode(operation.input);
-  const requestKey = JSON.stringify([contractCode, operation.input.beneficiaryName, operation.input.cpf,
+  const requestKey = JSON.stringify([operation.companyId, contractCode, operation.input.beneficiaryName, operation.input.cpf, operation.input.cardNumber,
     operation.input.birthDate, operation.input.periodStart ?? operation.input.startDate, operation.input.periodEnd ?? operation.input.endDate,
     ...(isAllBeneficiariesRequest(operation.input) ? ["all"] : [])]);
   const previous = operation.result?.cardPortalSearch as Partial<SearchProgress> | undefined;
@@ -62,18 +62,36 @@ export async function searchCardPortals(operation: OperationRecord, signal: Abor
       data: { operator: portal, portalsChecked: [...progress.visited] } });
 
     try {
-      await emitCard(operation, signal, {
+      let savedOtherCredential: PortalCredential | undefined;
+      const runAttempt = (useSubmitted = false) => emitCard(operation, signal, {
         ...context,
         secretProvider: { get: async ref => {
           // Only an explicitly submitted credential for this automatic search may cross portals in RAM.
           // Saved credentials remain scoped to their own operator, company and login code.
           submittedCredential ??= context.secretProvider.takeAutomaticSearchCredential?.(original.credentialRef);
-          if (submittedCredential) return submittedCredential;
+          if (submittedCredential) {
+            if (useSubmitted || portal === original.portal) return submittedCredential;
+            // The other operator may have a different, already validated password for this same code.
+            // Try that operator's own saved access before falling back to the submitted RAM credential.
+            const saved = await context.secretProvider.get(ref).catch(() => undefined);
+            if (saved && (!contractCode || saved.username.trim() === contractCode)) {
+              savedOtherCredential = saved;
+              return saved;
+            }
+            return submittedCredential;
+          }
           const credential = await context.secretProvider.get(ref);
           if (credential.metadata?.autoPortalCredential === true) submittedCredential = credential;
           return credential;
         } },
       });
+      try { await runAttempt(); }
+      catch (error) {
+        if (!(error instanceof AutomationError) || error.code !== "AUTHENTICATION_FAILED" || !savedOtherCredential || !submittedCredential ||
+          (savedOtherCredential.username === submittedCredential.username && savedOtherCredential.password === submittedCredential.password)) throw error;
+        assertNotAborted(signal);
+        await runAttempt(true);
+      }
       return;
     } catch (error) {
       assertNotAborted(signal);
@@ -99,7 +117,8 @@ export async function searchCardPortals(operation: OperationRecord, signal: Abor
   const authFailure = failures.find(item => item.error.code === "AUTHENTICATION_FAILED");
   if (authFailure) {
     await bind(authFailure.portal);
-    throw new AutomationError("AUTHENTICATION_FAILED", "O acesso informado nao foi aceito em um dos portais necessarios para concluir a busca.", {
+    const label = authFailure.portal === "ndi" ? "NDI" : "Hapvida";
+    throw new AutomationError("AUTHENTICATION_FAILED", `O acesso ${label} nao foi aceito. Informe a senha desse portal ou revise o nome e periodo da consulta.`, {
       safeDetails: failures.map(item => `${item.portal === "ndi" ? "NDI" : "Hapvida"}: ${item.error.code}`).join("; "), step: "authenticate", retryable: false,
     });
   }

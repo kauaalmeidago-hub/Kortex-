@@ -39,11 +39,11 @@ const config = {
   features: { cardIssue: true, cardIssueActiveUsersPreflight: false }, traceAuth: false,
 };
 
-async function check(name, outcomes, expectedOperator, expectedError, legacy = false) {
+async function check(name, outcomes, expectedOperator, expectedError, legacy = false, initialPortal = "hapvida", savedOtherPassword) {
   const repository = new OperationRepository(":memory:");
   const now = new Date().toISOString();
-  const operation = { id: `fixture-${name}`, type: "CARD_ISSUE", portal: "hapvida", status: "starting", companyId: "synthetic-company",
-    credentialRef: "hapvida:synthetic-company:login:0TEST",
+  const operation = { id: `fixture-${name}`, type: "CARD_ISSUE", portal: initialPortal, status: "starting", companyId: "synthetic-company",
+    credentialRef: `${initialPortal}:synthetic-company:login:0TEST`,
     input: { portalSearch: "auto", contractCode: "0TEST", beneficiaryName: "MARIA DE TESTE", periodStart: "2026-10-01", periodEnd: "2026-10-31" },
     artifacts: [], createdAt: now, updatedAt: now };
   if (legacy) delete operation.input.portalSearch;
@@ -63,7 +63,7 @@ async function check(name, outcomes, expectedOperator, expectedError, legacy = f
       let markup;
       if (url.pathname === "/auth") {
         const input = new URLSearchParams(request.postData());
-        assert.equal(input.get("p_cd_empresa"), "0TEST"); assert.equal(input.get("p_cd_senha"), "synthetic-password");
+        assert.equal(input.get("p_cd_empresa"), "0TEST"); assert.equal(input.get("p_cd_senha"), portal !== initialPortal && savedOtherPassword ? savedOtherPassword : "synthetic-password");
         credentialsUsed.push(portal);
         markup = outcomes[portal] === "rejected" ? html("<p>Identificacao invalida</p>") : period;
       } else if (url.pathname === "/beneficiaries") {
@@ -84,7 +84,7 @@ async function check(name, outcomes, expectedOperator, expectedError, legacy = f
   } };
   const workflow = {
     config, repository, browserManager: new BrowserManager(config, provider, profile), credentialResolver: new ExplicitCredentialResolver(),
-    secretProvider: new OperationScopedSecretProvider(operation.id, store, { get: async () => { throw new Error("Synthetic saved access missing"); } }),
+    secretProvider: new OperationScopedSecretProvider(operation.id, store, { get: async ref => { if (savedOtherPassword && !ref.startsWith(`${initialPortal}:`)) return { username: "0TEST", password: savedOtherPassword }; throw new Error("Synthetic saved access missing"); } }),
     artifactStorage: { save: async input => {
       pdfs.push(input); validateCardPdfBytes(input.bytes); assert(input.bytes.length > 100);
       return { storageProvider: "fixture", storagePath: input.fileName, fileName: input.fileName, mimeType: input.mimeType, sizeBytes: input.bytes.length, checksum: "fixture-checksum" };
@@ -105,10 +105,10 @@ async function check(name, outcomes, expectedOperator, expectedError, legacy = f
       assert.equal(pdfs[0].metadata.operator, expectedOperator);
       assert(savedSessions.includes(expectedOperator));
     }
-    assert.deepEqual(opened, expectedOperator === "hapvida" ? ["hapvida"] : ["hapvida", "ndi"]);
+    assert.deepEqual(opened, expectedOperator === initialPortal ? [initialPortal] : [initialPortal, initialPortal === "ndi" ? "hapvida" : "ndi"]);
     assert.deepEqual(credentialsUsed, opened);
     assert(!JSON.stringify({ operation: repository.get(operation.id), events: repository.getEvents(operation.id) }).includes("synthetic-password"));
-    assert.equal(store.get(operation.id, "hapvida:synthetic-company:login:0TEST"), undefined);
+    assert.equal(store.get(operation.id, `${initialPortal}:synthetic-company:login:0TEST`), undefined);
     console.log(JSON.stringify({ case: name, result: "PASS", portals: opened, operator: expectedOperator, pdfs: pdfs.length }));
   } finally { repository.close(); }
 }
@@ -120,5 +120,8 @@ try {
   await check("legacy-hapvida-rejected-ndi-pdf", { hapvida: "rejected", ndi: "found" }, "ndi", undefined, true);
   await check("legacy-hapvida-missing-control-ndi-pdf", { hapvida: "missing_control", ndi: "found" }, "ndi", undefined, true);
   await check("both-not-found", { hapvida: "not_found", ndi: "not_found" }, undefined, "BENEFICIARY_NOT_FOUND");
+  await check("hapvida-rejected-ndi-with-own-saved-password", { hapvida: "rejected", ndi: "found" }, "ndi", undefined, false, "hapvida", "ndi-synthetic-password");
+  await check("ndi-rejected-hapvida-with-own-saved-password", { hapvida: "found", ndi: "rejected" }, "hapvida", undefined, false, "ndi", "hapvida-synthetic-password");
+  await check("ndi-rejected-hapvida-authenticated-without-beneficiary", { hapvida: "not_found", ndi: "rejected" }, undefined, "AUTHENTICATION_FAILED", false, "ndi");
   await check("both-accesses-rejected", { hapvida: "rejected", ndi: "rejected" }, undefined, "AUTHENTICATION_FAILED");
 } finally { await browser.close(); await rm(root, { recursive: true, force: true }); }

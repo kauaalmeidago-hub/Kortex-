@@ -72,7 +72,7 @@ describe("automatic card portal search", () => {
     const f = fixture();
     const preferredCardPortal = vi.fn(async () => "ndi" as const);
     f.context.credentialResolver!.preferredCardPortal = preferredCardPortal;
-    f.operation.result = { cardPortalSearch: { requestKey: JSON.stringify(["0ABC", "BENEFICIARIO DE TESTE", null, null, "2026-10-01", "2026-10-31"]),
+    f.operation.result = { cardPortalSearch: { requestKey: JSON.stringify(["company-1", "0ABC", "BENEFICIARIO DE TESTE", null, null, null, "2026-10-01", "2026-10-31"]),
       visited: ["ndi", "hapvida"], notFound: ["ndi"] } };
     const calls: string[] = [];
     mocks.emit.mockImplementation(async (operation: OperationRecord) => { calls.push(operation.portal); });
@@ -92,7 +92,7 @@ describe("automatic card portal search", () => {
     });
     await searchCardPortals(f.operation, f.controller.signal, f.context);
     expect(store.get(f.operation.id, "hapvida:company-1:login:0ABC")).toBeUndefined();
-    expect(fallback.get).not.toHaveBeenCalled();
+    expect(fallback.get).toHaveBeenCalledWith("ndi:company-1:login:0ABC");
     expect(JSON.stringify(f.repository.get(f.operation.id))).not.toContain(submitted.password);
   });
 
@@ -207,7 +207,7 @@ describe("automatic card portal search", () => {
     expect(calls).toEqual(["hapvida", "ndi"]);
     expect(used).toEqual(Array(unavailable ? 1 : 2).fill("synthetic-submitted-password"));
     expect(store.get(f.operation.id, "hapvida:company-1:login:0ABC")).toBeUndefined();
-    expect(fallback.get).not.toHaveBeenCalled();
+    expect(fallback.get).toHaveBeenCalledWith("ndi:company-1:login:0ABC");
     expect(JSON.stringify({ operation: f.repository.get(f.operation.id), events: f.context.emitEvent })).not.toContain("synthetic-submitted-password");
   });
 
@@ -224,15 +224,60 @@ describe("automatic card portal search", () => {
     await searchCardPortals(resumed, f.controller.signal, f.context);
     expect(calls).toEqual(["hapvida", "ndi", "ndi"]);
   });
+  it("uses the other portal's saved password when the operators have different accesses", async () => {
+    const f = fixture("ndi"), store = new EphemeralCredentialStore(), used: string[] = [];
+    store.put(f.operation.id, f.operation.credentialRef, { username: "0ABC", password: "ndi-submitted", metadata: { autoPortalCredential: true } }, 60000);
+    const fallback = { get: vi.fn(async () => ({ username: "0ABC", password: "hapvida-saved" })) };
+    f.context.secretProvider = new OperationScopedSecretProvider(f.operation.id, store, fallback);
+    mocks.emit.mockImplementation(async (operation: OperationRecord, _signal, context: WorkflowContext) => {
+      used.push((await context.secretProvider.get(operation.credentialRef)).password);
+      if (operation.portal === "ndi") throw notFound();
+    });
+    await searchCardPortals(f.operation, f.controller.signal, f.context);
+    expect(used).toEqual(["ndi-submitted", "hapvida-saved"]);
+    expect(fallback.get).toHaveBeenCalledWith("hapvida:company-1:login:0ABC");
+  });
+  it("tries the explicitly submitted access once when the other portal's saved password is stale", async () => {
+    const f = fixture(), store = new EphemeralCredentialStore(), used: string[] = [];
+    store.put(f.operation.id, f.operation.credentialRef, { username: "0ABC", password: "new-submitted", metadata: { autoPortalCredential: true } }, 60000);
+    f.context.secretProvider = new OperationScopedSecretProvider(f.operation.id, store, { get: async () => ({ username: "0ABC", password: "old-ndi" }) });
+    mocks.emit.mockImplementation(async (operation: OperationRecord, _signal, context: WorkflowContext) => {
+      const password = (await context.secretProvider.get(operation.credentialRef)).password; used.push(password);
+      if (operation.portal === "hapvida") throw notFound();
+      if (password === "old-ndi") throw new AutomationError("AUTHENTICATION_FAILED", "Acesso antigo rejeitado.");
+    });
+    await searchCardPortals(f.operation, f.controller.signal, f.context);
+    expect(used).toEqual(["new-submitted", "old-ndi", "new-submitted"]);
+  });
+  it("never uses a saved password belonging to a different company code", async () => {
+    const f = fixture(), store = new EphemeralCredentialStore(), used: string[] = [];
+    store.put(f.operation.id, f.operation.credentialRef, { username: "0ABC", password: "new-submitted", metadata: { autoPortalCredential: true } }, 60000);
+    f.context.secretProvider = new OperationScopedSecretProvider(f.operation.id, store, { get: async () => ({ username: "0OTHER", password: "other-company" }) });
+    mocks.emit.mockImplementation(async (operation: OperationRecord, _signal, context: WorkflowContext) => {
+      used.push((await context.secretProvider.get(operation.credentialRef)).password);
+      if (operation.portal === "hapvida") throw notFound();
+    });
+    await searchCardPortals(f.operation, f.controller.signal, f.context); expect(used).toEqual(["new-submitted", "new-submitted"]);
+  });
+  it("preserves the authenticated portal's absence while identifying the separate portal that rejected access", async () => {
+    const f = fixture("ndi");
+    mocks.emit.mockImplementation(async (operation: OperationRecord) => {
+      if (operation.portal === "ndi") throw new AutomationError("AUTHENTICATION_FAILED", "NDI rejeitou o acesso.");
+      throw notFound();
+    });
+    await expect(searchCardPortals(f.operation, f.controller.signal, f.context)).rejects.toMatchObject({ code: "AUTHENTICATION_FAILED", message: expect.stringContaining("O acesso NDI nao foi aceito") });
+    expect(f.repository.get(f.operation.id)).toMatchObject({ portal: "ndi", result: { cardPortalSearch: { notFound: ["hapvida"] } } });
+  });
 
-  it.each(["contractCode", "beneficiaryName", "periodStart"])("rechecks the portals when %s changes during resume", async (field) => {
+  it.each(["companyId", "contractCode", "beneficiaryName", "periodStart", "cardNumber"])("rechecks the portals when %s changes during resume", async (field) => {
     const f = fixture();
     mocks.emit.mockImplementation(async (operation: OperationRecord) => {
       if (operation.portal === "hapvida") throw notFound();
       throw createReauthRequiredError("Informe acesso NDI.");
     });
     await expect(searchCardPortals(f.operation, f.controller.signal, f.context)).rejects.toMatchObject({ code: "REAUTH_REQUIRED" });
-    const resumed = f.repository.get(f.operation.id)!; resumed.input[field] = "changed-query";
+    const resumed = f.repository.get(f.operation.id)!;
+    if (field === "companyId") resumed.companyId = "changed-company"; else resumed.input[field] = "changed-query";
     const calls: string[] = [];
     mocks.emit.mockImplementation(async (operation: OperationRecord) => {
       calls.push(operation.portal);

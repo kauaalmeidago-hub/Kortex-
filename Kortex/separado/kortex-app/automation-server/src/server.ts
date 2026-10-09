@@ -110,6 +110,7 @@ function operationResponse(operation: OperationRecord) {
     type: operation.type,
     companyId: operation.companyId,
     portal: operation.portal,
+    companyCode: portalLoginCode(operation.input),
     input: operation.input,
     currentStep: operation.currentStep,
     result: operation.result,
@@ -323,6 +324,10 @@ export async function createServer({ config, repository, eventBus, queue, creden
     const companyCode = companyCodeFor(operation, parsed.data);
     if (!companyCode) {
       return reply.code(400).send({ ok: false, error: "COMPANY_CODE_REQUIRED", operation: operationResponse(operation) });
+    }
+
+    if (companyCode.toLocaleLowerCase("pt-BR") === readString(operation.input.beneficiaryName)?.toLocaleLowerCase("pt-BR")) {
+      return reply.code(400).send({ ok: false, error: "COMPANY_CODE_INVALID", message: "Informe o codigo da empresa, separado do nome do beneficiario." });
     }
 
     reauthInFlight.add(operation.id);

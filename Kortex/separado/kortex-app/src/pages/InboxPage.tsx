@@ -43,6 +43,7 @@ import {
   type AutomationOperationStatus,
 } from "@/services/automationApi";
 import { KoaCardDependentConfirmation, type CardDependentChoice } from "@/components/KoaCardDependentConfirmation";
+import { KoaAuthenticationCard } from "@/components/KoaAuthenticationCard";
 import { KoaCardBeneficiaryConfirmation, type CardBeneficiaryChoice } from "@/components/KoaCardBeneficiaryConfirmation";
 import type { OperationConnectionState } from "@/services/operationMonitoring";
 import { useAuth } from "@/contexts/AuthContext";
@@ -664,6 +665,7 @@ type KoaFormValues = {
 
 type KoaOperation = {
   id: string;
+  companyCode?: string;
   portal?: "hapvida" | "ndi";
   type: KoaOperationType;
   status: KoaOperationStatus;
@@ -676,6 +678,7 @@ type KoaOperation = {
     beneficiaryCount?: number;
     cardDependentConfirmation?: CardDependentChoice;
     cardBeneficiaryConfirmation?: CardBeneficiaryChoice;
+    cardPortalSearch?: { notFound?: Array<"hapvida" | "ndi"> };
     beneficiaryCpfMasked?: string;
     contractCode?: string;
     cancellationReason?: string;
@@ -877,6 +880,7 @@ function mapAutomationOperation(response: AutomationOperationResponse, type: Koa
   return {
     id: response.operationId,
     portal: response.portal,
+    companyCode: response.companyCode,
     type,
     status: response.status,
     createdAt: response.createdAt,
@@ -889,6 +893,7 @@ function mapAutomationOperation(response: AutomationOperationResponse, type: Koa
           beneficiaryCount: typeof response.result.beneficiaryCount === "number" ? response.result.beneficiaryCount : undefined,
           cardDependentConfirmation: response.result.cardDependentConfirmation as CardDependentChoice | undefined,
           cardBeneficiaryConfirmation: response.result.cardBeneficiaryConfirmation as CardBeneficiaryChoice | undefined,
+          cardPortalSearch: response.result.cardPortalSearch as { notFound?: Array<"hapvida" | "ndi"> } | undefined,
           beneficiaryCpfMasked: typeof response.result.beneficiaryCpfMasked === "string" ? response.result.beneficiaryCpfMasked : undefined,
           contractCode: typeof response.result.contractCode === "string" ? response.result.contractCode : undefined,
           cancellationReason: typeof response.result.cancellationReason === "string" ? response.result.cancellationReason : undefined,
@@ -1294,7 +1299,9 @@ function KoaPanel({
 
   const handleRetry = () => {
     if (!selectedFlow) return;
+    const previousValues = values;
     openFlow(selectedFlow);
+    setValues({ ...previousValues, password: "" });
   };
 
   const handleSubmitAuthentication = async (input: {
@@ -1318,6 +1325,7 @@ function KoaPanel({
           setOperation(mapped);
           setPhase(phaseFromOperationStatus(mapped.status));
         }
+        if (result.error === "COMPANY_CODE_INVALID") return "Informe o código da empresa, separado do nome do beneficiário.";
         if (result.error === "COMPANY_CODE_REQUIRED") return "Informe o código da empresa para continuar.";
         if (result.error === "AUTHENTICATION_ATTEMPTS_EXCEEDED") return "Limite de tentativas atingido. O Koa interrompeu o fluxo para revisão.";
         return "Não foi possível autenticar. Confira a senha e tente novamente.";
@@ -1642,117 +1650,6 @@ function KoaProcessingMessage({
   );
 }
 
-function KoaAuthenticationCard({
-  defaultCompanyCode,
-  portal,
-  onCancelOperation,
-  onSubmitAuthentication,
-}: {
-  defaultCompanyCode?: string;
-  portal?: "hapvida" | "ndi";
-  onCancelOperation: () => void;
-  onSubmitAuthentication: (input: { password: string; rememberOnDevice: boolean; companyCode?: string }) => Promise<string | undefined>;
-}) {
-  const [companyCode, setCompanyCode] = useState(defaultCompanyCode?.trim() ?? "");
-  const [password, setPassword] = useState("");
-  const [rememberOnDevice, setRememberOnDevice] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleSubmit = async () => {
-    if (submitting) return;
-    if (!companyCode.trim()) {
-      setError("Informe o código da empresa.");
-      return;
-    }
-    if (!password) {
-      setError("Informe a senha para continuar.");
-      return;
-    }
-
-    setSubmitting(true);
-    setError(null);
-    try {
-      const result = await onSubmitAuthentication({
-        companyCode: companyCode.trim() || undefined,
-        password,
-        rememberOnDevice,
-      });
-      setPassword("");
-      if (result) {
-        setError(result);
-      }
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <div className="flex items-start gap-2">
-      <KoaOperationAnimation className="mt-0.5 h-10 w-10 shrink-0" />
-      <div className="max-w-[84%] rounded-2xl rounded-bl-md bg-secondary/80 px-4 py-3 text-left shadow-sm">
-        <p className="text-sm font-semibold text-foreground">Preciso autenticar o acesso {portal === "ndi" ? "NDI" : "Hapvida"} para continuar.</p>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Informe o acesso deste código para buscar em Hapvida e NDI. Com "Salvar acesso" ativado, ele será guardado de forma protegida para as próximas emissões, em cada portal em que o login funcionar.
-        </p>
-
-        <div className="mt-4 space-y-3">
-          <KoaTextField
-            icon={Building2}
-            label="Código da empresa"
-            value={companyCode}
-            error={error?.includes("código") ? error : undefined}
-            placeholder="Digite o código"
-            onChange={(value) => {
-              setCompanyCode(value);
-              setError(null);
-            }}
-          />
-
-          <KoaPasswordField
-            label="Senha"
-            value={password}
-            error={error && !error.includes("código") ? error : undefined}
-            onChange={(value) => {
-              setPassword(value);
-              setError(null);
-            }}
-          />
-
-          <label className="flex items-center gap-2 text-sm text-muted-foreground">
-            <input
-              type="checkbox"
-              checked={rememberOnDevice}
-              onChange={(event) => setRememberOnDevice(event.target.checked)}
-              className="h-4 w-4 rounded border-border text-primary focus:ring-primary/20"
-            />
-            Salvar acesso para as próximas emissões
-          </label>
-        </div>
-
-        <div className="mt-4 grid grid-cols-2 gap-2">
-          <button
-            type="button"
-            onClick={onCancelOperation}
-            disabled={submitting}
-            className="h-10 rounded-xl border border-border px-3 text-xs font-semibold text-muted-foreground transition hover:bg-background disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            Cancelar
-          </button>
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={submitting}
-            className="h-10 rounded-xl bg-primary px-3 text-xs font-semibold text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-70"
-          >
-            {submitting ? "Autenticando..." : "Entrar e continuar"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function KoaOperationResult({
   operation,
   defaultCompanyCode,
@@ -1781,12 +1678,17 @@ function KoaOperationResult({
 
   if (operation.status === "awaiting_authentication") {
     return (
-      <KoaAuthenticationCard
-        defaultCompanyCode={defaultCompanyCode}
+      <div className="flex items-start gap-2">
+      <KoaOperationAnimation className="mt-0.5 h-10 w-10 shrink-0" />
+      <KoaAuthenticationCard key={operation.id}
+        defaultCompanyCode={operation.companyCode || defaultCompanyCode}
+        notFoundPortals={operation.result?.cardPortalSearch?.notFound}
+        onReviewRequest={onRetry}
         portal={operation.portal}
         onCancelOperation={onCancelOperation}
         onSubmitAuthentication={onSubmitAuthentication}
       />
+      </div>
     );
   }
 
@@ -1983,12 +1885,12 @@ function KoaMovementForm({
     return (
       <KoaFormCard icon={IdCard} title="Emissão de carteirinha">
         <div className="space-y-3">
-          <KoaTextField icon={FileText} label="Código do contrato" value={values.contractCode} error={errors.contractCode} placeholder="Digite o código" onChange={(value) => onChange("contractCode", value)} />
+          <KoaTextField icon={FileText} name="koa-card-company-code" label="Código da empresa" value={values.contractCode} error={errors.contractCode} placeholder="Digite o código" onChange={(value) => onChange("contractCode", value)} />
           <div className="grid gap-3">
             <KoaTextField icon={CalendarDays} label="Data inicial" value={values.startDate} error={errors.startDate} placeholder="DD/MM/AAAA" onChange={(value) => onChange("startDate", value)} />
             <KoaTextField icon={CalendarDays} label="Data final" value={values.endDate} error={errors.endDate} placeholder="DD/MM/AAAA" onChange={(value) => onChange("endDate", value)} />
           </div>
-          <KoaTextField icon={Users} label="Nome do beneficiário ou TODOS" value={values.beneficiaryName} error={errors.beneficiaryName} placeholder="Nome completo ou TODOS" onChange={(value) => onChange("beneficiaryName", value)} />
+          <KoaTextField icon={Users} name="koa-card-beneficiary-name" label="Nome do beneficiário ou TODOS" value={values.beneficiaryName} error={errors.beneficiaryName} placeholder="Nome completo ou TODOS" onChange={(value) => onChange("beneficiaryName", value)} />
           <KoaInfoNote>Digite TODOS para emitir as carteirinhas disponíveis da empresa no período informado.</KoaInfoNote>
           <details className="rounded-xl border border-border p-3 text-sm">
             <summary className="cursor-pointer font-medium">Identificar por CPF ou número da carteirinha (opcional)</summary>
@@ -2122,7 +2024,7 @@ function validateKoaValues(flow: KoaFlow, values: KoaFormValues) {
   if (flow === "carteirinha") {
     if (values.cpf.trim() && values.cpf.replace(/\D/g, "").length !== 11) nextErrors.cpf = "Informe um CPF com 11 dígitos.";
     if (values.cardNumber.trim() && values.cardNumber.replace(/\D/g, "").length < 6) nextErrors.cardNumber = "Informe o número completo da carteirinha.";
-    ["startDate", "endDate", "beneficiaryName"].forEach((key) => requireValue(key as keyof KoaFormValues));
+    ["contractCode", "startDate", "endDate", "beneficiaryName"].forEach((key) => requireValue(key as keyof KoaFormValues));
     if (isAllCardBeneficiaries(values.beneficiaryName)) requireValue("contractCode", "Informe o código da empresa para emitir todas.");
     if (values.startDate.trim() && values.endDate.trim()) {
       const period = validateKoaPeriod(values.startDate, values.endDate);
@@ -2185,7 +2087,9 @@ function KoaTextField({
   error,
   placeholder,
   onChange,
+  name,
 }: {
+  name?: string;
   icon: React.ElementType;
   label: string;
   value: string;
@@ -2200,6 +2104,8 @@ function KoaTextField({
         <Icon className="h-5 w-5 shrink-0 text-muted-foreground" strokeWidth={1.5} />
         <input
           type="text"
+          name={name}
+          autoComplete="off"
           value={value}
           onChange={(event) => onChange(event.target.value)}
           placeholder={placeholder}

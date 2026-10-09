@@ -19,6 +19,7 @@
     "automation:install": "node automation-server/scripts/install-permanent.mjs install",
     "automation:status": "node automation-server/scripts/install-permanent.mjs status",
     "automation:stop": "node automation-server/scripts/install-permanent.mjs stop",
+    "test:card-authentication": "npm --prefix automation-server run build && node scripts/check-card-authentication.mjs",
     "automation:remove": "node automation-server/scripts/install-permanent.mjs remove",
     "automation:check-runtime": "npm --prefix automation-server run permanent:check"
   },

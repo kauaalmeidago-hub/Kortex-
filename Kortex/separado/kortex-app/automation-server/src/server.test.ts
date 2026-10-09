@@ -84,6 +84,19 @@ describe("Koa reauthentication handoff", () => {
     expect(store.get(operation.id, operation.credentialRef)).toBeUndefined();
     expect(launch).not.toHaveBeenCalled();
   });
+  it("returns the request's company code independently of the beneficiary name", async () => {
+    operation.input.beneficiaryName = "BENEFICIARIO DE TESTE";
+    const response = await app.inject({ method: "GET", url: "/api/operations/operation-1", headers: { "x-koa-automation-token": "test-api" } });
+    expect(response.json()).toMatchObject({ companyCode: "0ABC", input: { beneficiaryName: "BENEFICIARIO DE TESTE" } });
+  });
+  it("rejects a beneficiary name accidentally filled into the company code before queueing", async () => {
+    operation.input.beneficiaryName = "BENEFICIARIO DE TESTE";
+    const response = await app.inject({ method: "POST", url: "/api/operations/operation-1/reauth", headers: { "x-koa-automation-token": "test-api" },
+      payload: { companyCode: "BENEFICIARIO DE TESTE", password: "synthetic-password", rememberOnDevice: true } });
+    expect(response.statusCode).toBe(400); expect(response.json().error).toBe("COMPANY_CODE_INVALID");
+    expect(operation.input.contractCode).toBe("0ABC"); expect(operation.status).toBe("awaiting_authentication");
+    expect(store.get(operation.id, operation.credentialRef)).toBeUndefined(); expect(events).toHaveLength(0);
+  });
 
   it("queues automatic NDI reauthentication with portal-scoped identity and RAM-only search metadata", async () => {
     operation.portal = "ndi"; operation.credentialRef = "ndi:company-1:login:0ABC";

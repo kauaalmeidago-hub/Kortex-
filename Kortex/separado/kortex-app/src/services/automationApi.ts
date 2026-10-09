@@ -44,6 +44,7 @@ export interface AutomationOperationResponse {
   type: AutomationOperationType;
   companyId: string;
   portal: "hapvida" | "ndi";
+  companyCode?: string;
   currentStep?: string;
   result?: Record<string, unknown>;
   error?: {
