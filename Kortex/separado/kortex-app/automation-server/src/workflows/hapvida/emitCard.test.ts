@@ -26,7 +26,7 @@ vi.mock("./pageObjects/HapvidaCardPage.js", () => ({ HapvidaCardPage: class {
 vi.mock("../../authentication/RememberedCredentialService.js", () => ({ RememberedCredentialService: class {
   saveValidatedCredential = mocks.remember;
 } }));
-vi.mock("./brandedCardDelivery.js", () => ({ createBrandedCardDelivery: mocks.capture }));
+vi.mock("./nativeCardDelivery.js", () => ({ createNativeCardDelivery: mocks.capture }));
 import { emitCard } from "./emitCard.js";
 import { AutomationError } from "../../errors.js";
 import { pendingCardDependents } from "./cardDependents.js";
@@ -44,7 +44,7 @@ function fixture(remember: boolean) {
   } as unknown as Page;
   const browserContext = { clearCookies: vi.fn(async () => undefined) } as unknown as BrowserContext;
   mocks.requestCards.mockResolvedValue(page);
-  mocks.capture.mockImplementation(async (_page, _frames, members) => ({ bytes: await page.pdf({ printBackground: true }), pageCount: Math.ceil(members.length / 2), deliveryVersion: 1, template: members.length === 1 ? "single" : "first" }));
+  mocks.capture.mockImplementation(async (_page, _frames, members) => ({ bytes: await page.pdf({ printBackground: true }), pageCount: members.length, deliveryVersion: 2, format: "native" }));
   const validate = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
   const saveSession = vi.fn(async () => undefined);
   const withContext = vi.fn(async (_op, _signal, callback) => callback(browserContext, page));
@@ -310,9 +310,9 @@ describe("CARD_ISSUE authentication in the execution context", () => {
     expect(f.operation.status).not.toBe("success");
   });
 
-  it("does not store or announce a raw card when the branded delivery fails", async () => {
+  it("does not store or announce a card when the native PDF delivery fails", async () => {
     const f = fixture(false);
-    mocks.capture.mockRejectedValue(new AutomationError("CARD_DELIVERY_FAILED", "Moldura indisponivel."));
+    mocks.capture.mockRejectedValue(new AutomationError("CARD_DELIVERY_FAILED", "PDF indisponivel."));
     await expect(emitCard(f.operation, new AbortController().signal, f.context)).rejects.toMatchObject({ code: "CARD_DELIVERY_FAILED" });
     expect(f.artifactSave).not.toHaveBeenCalled();
     expect(f.operation.artifacts).toEqual([]);

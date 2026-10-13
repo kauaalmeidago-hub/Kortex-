@@ -145,7 +145,7 @@ describe("automatic card portal search", () => {
     expect(f.context.emitEvent).toHaveBeenCalledWith(expect.objectContaining({ step: "card_portal_search_result",
       data: { operator: "hapvida", outcome: "CARD_PORTAL_UNAVAILABLE" } }));
     expect(f.context.emitEvent).toHaveBeenCalledWith(expect.objectContaining({ step: "card_portal_search", data: expect.objectContaining({
-      workflowVersion: 12, runtime: expect.objectContaining({ processId: process.pid, codeFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/) }),
+      workflowVersion: 13, runtime: expect.objectContaining({ processId: process.pid, codeFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/) }),
     }) }));
   });
 

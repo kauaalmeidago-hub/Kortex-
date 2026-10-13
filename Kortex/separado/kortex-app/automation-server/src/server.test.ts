@@ -57,7 +57,7 @@ describe("Koa reauthentication handoff", () => {
     const recovered = await app.inject("/ready");
     expect(recovered.statusCode).toBe(200);
     expect(recovered.json()).toMatchObject({ database: "ok", worker: "ok" });
-    expect(recovered.json()).toMatchObject({ cardWorkflow: { version: 12, processId: process.pid,
+    expect(recovered.json()).toMatchObject({ cardWorkflow: { version: 13, processId: process.pid,
       codeFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/) } });
   });
 

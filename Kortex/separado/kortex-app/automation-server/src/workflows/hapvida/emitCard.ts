@@ -6,7 +6,7 @@ import { RememberedCredentialService } from "../../authentication/RememberedCred
 import { HapvidaLoginPage } from "./pageObjects/HapvidaLoginPage.js";
 import { HapvidaCardPage, type BeneficiarySearchInput } from "./pageObjects/HapvidaCardPage.js";
 import { isAllBeneficiariesRequest } from "./cardIssueScope.js";
-import { createBrandedCardDelivery } from "./brandedCardDelivery.js";
+import { createNativeCardDelivery } from "./nativeCardDelivery.js";
 import { validateCardPdfBytes } from "./downloadValidation.js";
 import { pendingCardDependents, type CardDependentConfirmation } from "./cardDependents.js";
 import { credentialRefForLogin, normalizePortalLoginCode, portalLoginCode } from "../../credentials/credentialIdentity.js";
@@ -67,7 +67,7 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
   const periodEnd = toPortalDate(readString(operation.input, ["periodEnd", "endDate"]), "Data final");
   const cpf = readString(operation.input, ["cpf"]);
   const birthDate = readString(operation.input, ["birthDate"]);
-  const cardNumber = readString(operation.input, ["cardNumber"])?.replace(/\D/g, "");
+  const cardNumber = readString(operation.input, ["cardNumber"])?.replace(/[\s.\/-]/g, "").toLowerCase();
   const requestedCompanyCode = portalLoginCode(operation.input);
   const allBeneficiaries = isAllBeneficiariesRequest(operation.input);
   if (allBeneficiaries && !requestedCompanyCode) {
@@ -265,8 +265,6 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
     if (!selected.length) throw new AutomationError("BENEFICIARY_NOT_FOUND", "Nao ha beneficiarios disponiveis para emitir.", { step: "find_beneficiary" });
     assertNotAborted(signal);
 
-    const deliveryMembers = await cardPage.describeSelectedBeneficiaries(selected);
-    assertNotAborted(signal);
     await context.updateStatus("processing", "Emitindo carteirinha");
     context.setCardIssuePhase?.("printing");
     const resultPage = await cardPage.requestSelectedCards(selected, allBeneficiaries, async command => {
@@ -286,9 +284,9 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
     const fileName = allBeneficiaries ? `carteirinhas-empresa-${safeFileNamePart(requestedCompanyCode!)}.pdf`
       : `${safeFileNamePart(beneficiaryName)}.pdf`;
     const pdfTitle = allBeneficiaries ? `carteirinhas da empresa ${requestedCompanyCode!.toLowerCase()}` : beneficiaryName.trim().toLocaleLowerCase("pt-BR");
-    await context.updateStatus("verifying", "Organizando carteirinhas na moldura Alaive");
+    await context.updateStatus("verifying", "Gerando PDF das carteirinhas originais");
     context.setCardIssuePhase?.("delivery");
-    const delivery = await createBrandedCardDelivery(resultPage, documents, deliveryMembers, otherBeneficiaries, pdfTitle, signal);
+    const delivery = await createNativeCardDelivery(resultPage, documents, selected, otherBeneficiaries, pdfTitle, signal);
     assertNotAborted(signal);
     const pdfBytes = validateCardPdfBytes(delivery.bytes, fileName);
     const savedArtifact = await context.artifactStorage.save({
@@ -303,6 +301,7 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
         beneficiaryScope: allBeneficiaries ? "all" : "single",
         beneficiaryCount: selected.length,
         cardDeliveryVersion: delivery.deliveryVersion,
+        cardDeliveryFormat: delivery.format,
         pageCount: delivery.pageCount,
         companyId: operation.companyId,
         operator: operation.portal,
@@ -331,6 +330,7 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
       beneficiaryCount: selected.length,
       beneficiaryNames: selected.map(input => input.beneficiaryName),
       cardDeliveryVersion: delivery.deliveryVersion,
+      cardDeliveryFormat: delivery.format,
       pageCount: delivery.pageCount,
       companyId: operation.companyId,
       operator: operation.portal,

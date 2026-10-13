@@ -20,6 +20,7 @@ export function inspectCardListRows(input: unknown | unknown[]): CardListRow[] {
     .replace(/\s+/g, " ").trim().toLowerCase();
   const nameHeading = /^(?:nome(?:\s+(?:completo|do|da|beneficiario|usuario|segurado))*|beneficiario|usuario|segurado)$/;
   const controls = 'input[type="checkbox"], input[type="radio"], [role="checkbox"], [role="radio"]';
+  const nativeCode = (value: string) => /^[a-z0-9]{3,12}\.\d{6,}\/\d{1,3}-\d$/i.test(value.trim());
   const visible = (element: any) => {
     const rect = element.getBoundingClientRect(), style = element.ownerDocument.defaultView.getComputedStyle(element);
     return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
@@ -66,15 +67,23 @@ export function inspectCardListRows(input: unknown | unknown[]): CardListRow[] {
       if (/titular/.test(label) && /codigo|cd\b|cod\b|matricula|carteira/.test(label) && normalized) holderReferences.push(normalized.replace(/[\s.\/-]/g, ""));
       else if (/^(?:nome\s+(?:do\s+)?titular|titular)$/.test(label) && normalized.split(" ").length > 1) holderName = value;
       if (/\bcpf\b/.test(label) && !/\btitular\b/.test(label) && digits.length === 11) cpf = digits;
-      if (!/\btitular\b/.test(label) && /\b(carteira|carteirinha|matricula)\b|(codigo|cd\.?|cod\.?).*(beneficiario|usuario|segurado)/.test(label) && digits.length >= 6 && !/^0+$/.test(digits)) {
-        cardIdentifiers.push(digits);
-        if (/\b(carteira|carteirinha)\b/.test(label)) requireIdentifier = true;
+      if (!/\btitular\b/.test(label) && (/\b(carteira|carteirinha|matricula)\b|(codigo|cd\.?|cod\.?).*(beneficiario|usuario|segurado)/.test(label) ||
+        (/^(?:codigo|cd\.?|cod\.?)$/.test(label) && nativeCode(value))) && digits.length >= 6 && !/^0+$/.test(digits)) {
+        cardIdentifiers.push(normalize(value).replace(/[\s.\/-]/g, ""));
+        if (/\b(carteira|carteirinha)\b/.test(label) || nativeCode(value)) requireIdentifier = true;
       }
     });
     for (const control of node.querySelectorAll('input[name*="cd_beneficiario"], input[name*="cd_usuario"], input[name*="carteira"], input[name*="matricula"]')) {
       if (/titular/i.test(control.name ?? "")) continue;
       const digits = (control.value ?? "").replace(/\D/g, "");
-      if (digits.length >= 6 && !/^0+$/.test(digits)) cardIdentifiers.push(digits);
+      if (digits.length >= 6 && !/^0+$/.test(digits)) cardIdentifiers.push(normalize(control.value ?? "").replace(/[\s.\/-]/g, ""));
+    }
+    // Legacy NDI lists may put the full printed card code only in the selector value.
+    for (const control of node.querySelectorAll('input[type="checkbox"], input[type="radio"]')) {
+      if (nativeCode(control.value ?? "")) {
+        cardIdentifiers.push(normalize(control.value).replace(/[\s.\/-]/g, ""));
+        requireIdentifier = true;
+      }
     }
     for (const control of node.querySelectorAll('input[name*="cd_titular"], input[name*="codigo_titular"], input[name*="matricula_titular"]')) {
       const value = normalize(control.value ?? "").replace(/[\s.\/-]/g, ""); if (value) holderReferences.push(value);

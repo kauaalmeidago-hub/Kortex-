@@ -27,7 +27,8 @@
     "permanent:remove": "node scripts/install-permanent.mjs remove",
     "permanent:check": "npm run build && node scripts/check-permanent-runtime.mjs",
     "test:single-card-capture": "npm run build && node scripts/check-single-card-capture.mjs",
-    "test:branded-card-delivery": "npm run build && node scripts/check-branded-card-delivery.mjs"
+    "test:branded-card-delivery": "npm run test:native-card-delivery",
+    "test:native-card-delivery": "npm run build && node scripts/check-native-card-delivery.mjs"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.2",

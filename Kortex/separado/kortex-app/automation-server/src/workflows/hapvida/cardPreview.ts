@@ -1,6 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { Frame, Page } from "playwright";
 import { AutomationError } from "../../errors.js";
+import { cardTextMatchPatterns } from "./cardIdentity.js";
 
 export interface CardBeneficiary {
   beneficiaryName: string;
@@ -16,6 +17,7 @@ export async function waitForRenderedCards(page: Page, beneficiaries: CardBenefi
     throw new AutomationError("MISSING_REQUIRED_DATA", "Faltam beneficiarios para validar as carteirinhas.", { step: "validate_card_preview" });
   }
   const expectedOrigin = portalUrl ? new URL(portalUrl).origin : undefined;
+  const patterns = beneficiaries.map(cardTextMatchPatterns), excludedPatterns = excluded.map(cardTextMatchPatterns);
   const deadline = Date.now() + timeoutMs;
   let lastStates: Array<{ document: boolean; matches: boolean[]; unexpected?: boolean; frame: Frame;
     observations?: Array<{ fullName: boolean; namePrefix: boolean; identity: boolean; matched: boolean }> }> = [];
@@ -31,12 +33,11 @@ export async function waitForRenderedCards(page: Page, beneficiaries: CardBenefi
           const element = await frame.frameElement();
           try { if (!await element.isVisible()) return undefined; } finally { await element.dispose(); }
         }
-        const state = await frame.evaluate(({ beneficiaries, parentTitle, excluded }) => {
+        const state = await frame.evaluate(({ beneficiaries, parentTitle, patterns, excludedPatterns }) => {
           const scope = globalThis as unknown as { document: any; getComputedStyle(element: unknown): any };
           const doc = scope.document, body = doc.body;
           const normalize = (text: string) => text.normalize("NFD").replace(/[\u0300-\u036f\u00ad\u200b-\u200d\ufeff]/g, "")
             .replace(/\s+/g, " ").trim().toLowerCase();
-          const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
           const visible = (element: any) => {
             const bounds = element.getBoundingClientRect(), style = scope.getComputedStyle(element);
             return bounds.width > 0 && bounds.height > 0 && style.display !== "none" && style.visibility !== "hidden";
@@ -51,27 +52,21 @@ export async function waitForRenderedCards(page: Page, beneficiaries: CardBenefi
             .some(control => visible(control) || Array.from(control.labels ?? []).some(visible) || (control.closest("label") && visible(control.closest("label"))));
           const operationForm = doc.querySelector('input[type="password"]') || selectionForm;
           const portalError = /identificacao\s+invalida|sessao\s+expirada|acesso\s+negado|nao\s+foi\s+possivel\s+(?:emitir|gerar)/.test(text);
-          const inspectBeneficiary = (input: CardBeneficiary) => {
-            const name = normalize(input.beneficiaryName);
-            const fullName = new RegExp(`(?:^|[^a-z0-9])${escape(name)}(?:$|[^a-z0-9])`).test(text);
-            const prefix = name.split(" ").slice(0, 2).join(" ");
-            const namePrefix = prefix.includes(" ") && new RegExp(`(?:^|[^a-z0-9])${escape(prefix)}(?:$|[^a-z0-9])`).test(text);
-            const identifiers = [...(input.cardIdentifiers ?? []), ...(input.cpf ? [input.cpf] : [])];
-            const identity = identifiers.some(value => {
-              const digits = value.replace(/\D/g, "");
-              return digits.length >= 6 && new RegExp(`(?:^|[^0-9])${digits.split("").join("[\\s.\\/-]*")}(?:$|[^0-9])`).test(text);
-            });
+          const inspectBeneficiary = (input: typeof patterns[number]) => {
+            const fullName = new RegExp(input.fullName).test(text);
+            const namePrefix = Boolean(input.shortenedName && new RegExp(input.shortenedName).test(text));
+            const identity = input.identifiers.some(pattern => new RegExp(pattern).test(text));
             // A shortened printed name needs an identifier from the selected row. Homonyms always need it.
             const matched = input.requireIdentifier ? (fullName || namePrefix) && identity : fullName || (namePrefix && identity);
             return { fullName, namePrefix, identity, matched };
           };
-          const observations = beneficiaries.map(inspectBeneficiary);
+          const observations = patterns.map(inspectBeneficiary);
           const matches = observations.map(observation => observation.matched);
           const document = cardMarker && !operationForm && !portalError && Boolean(text) &&
             (matches.some(Boolean) || /\bnome\b|\bplano\b|\bvalidade\b|\bcodigo\b/.test(text));
           return { document, matches: document ? matches : beneficiaries.map(() => false), observations: document ? observations : undefined,
-            unexpected: document && excluded.some(input => inspectBeneficiary(input).matched) };
-        }, { beneficiaries, parentTitle, excluded });
+            unexpected: document && excludedPatterns.some(input => inspectBeneficiary(input).matched) };
+        }, { beneficiaries, parentTitle, patterns, excludedPatterns });
         return { ...state, frame };
       } catch { return undefined; }
     }));
