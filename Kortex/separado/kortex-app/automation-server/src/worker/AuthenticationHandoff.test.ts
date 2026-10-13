@@ -81,10 +81,13 @@ describe("worker authentication recovery", () => {
     expect(f.store.get("operation-1", "hapvida:company-1")?.username).toBe("new");
   });
 
-  it.each(["postgres", "sqlite"])("stops an unavailable portal in %s without another password challenge", async (mode) => {
-    const f = fixture();
-    mocks.workflow.mockRejectedValue(new AutomationError("PORTAL_AUTH_UNAVAILABLE", "Verificacao indisponivel.", {
-      safeDetails: "O formulario de login nao foi enviado.", step: "authenticate",
+  it.each([
+    ["postgres", "PORTAL_AUTH_UNAVAILABLE", 0], ["sqlite", "PORTAL_AUTH_UNAVAILABLE", 0],
+    ["postgres", "CARD_PORTAL_SEARCH_INCOMPLETE", 2], ["sqlite", "CARD_PORTAL_SEARCH_INCOMPLETE", 2],
+  ] as const)("stops %s %s without another password challenge or consuming an attempt", async (mode, code, previousFailures) => {
+    const f = fixture(previousFailures);
+    mocks.workflow.mockRejectedValue(new AutomationError(code, "Verificacao indisponivel.", {
+      safeDetails: "Hapvida: CARD_PORTAL_UNAVAILABLE; NDI: AUTHENTICATION_FAILED", step: "card_portal_search", retryable: true,
     }));
     if (mode === "postgres") {
       const worker = new PersistentWorker(f.deps);
@@ -95,8 +98,9 @@ describe("worker authentication recovery", () => {
       await vi.waitFor(() => expect(f.getOperation().status).toBe("error"));
     }
     expect(f.getOperation().status).toBe("error");
-    expect(f.getOperation().error?.code).toBe("PORTAL_AUTH_UNAVAILABLE");
-    expect(f.events.some((event) => event.type === "authentication.failed" || event.type === "authentication.required")).toBe(false);
+    expect(f.getOperation().error?.code).toBe(code);
+    expect(f.events.filter(event => event.type === "authentication.failed")).toHaveLength(previousFailures);
+    expect(f.events.some(event => event.type === "authentication.required")).toBe(false);
   });
 
   it("resumes the same SQLite operation even when reauth arrives before the old execution finishes", async () => {

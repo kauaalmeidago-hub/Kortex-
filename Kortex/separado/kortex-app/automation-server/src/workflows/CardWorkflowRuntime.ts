@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const CARD_ISSUE_WORKFLOW_VERSION = 13;
+export const CARD_ISSUE_WORKFLOW_VERSION = 14;
 
 // Capture the files and process at module load, so a git pull cannot relabel a running worker.
 const runtimeDirectory = fileURLToPath(new URL("../../", import.meta.url));

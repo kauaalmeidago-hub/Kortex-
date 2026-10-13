@@ -8,7 +8,7 @@ import { KoaBrowserProfileManager } from "../dist/browser/KoaBrowserProfileManag
 import { OperationRepository } from "../dist/db/OperationRepository.js";
 import { ExplicitCredentialResolver } from "../dist/credentials/CredentialResolver.js";
 import { EphemeralCredentialStore, OperationScopedSecretProvider } from "../dist/secrets/EphemeralCredentialStore.js";
-import { searchCardPortals } from "../dist/workflows/CardPortalSearch.js";
+import { WorkflowRegistry } from "../dist/workflows/WorkflowRegistry.js";
 import { validateCardPdfBytes } from "../dist/workflows/hapvida/downloadValidation.js";
 
 // All requests are intercepted with synthetic HTML. No real portal, passwords or beneficiary data.
@@ -35,6 +35,7 @@ const config = {
   downloadsDir: path.join(root, "downloads"), artifactsDir: path.join(root, "artifacts"),
   allowedAutomationHosts: ["webhap.hapvida.com.br", "sigo.sh.srv.br"],
   hapvidaCardPortalUrl: urls.hapvida, ndiCardPortalUrl: urls.ndi,
+  hapvidaMovementPortalUrl: "https://webhap.hapvida.com.br/movement-must-not-open",
   actionTimeoutMs: 3000, navigationTimeoutMs: 3000, authTimeoutMs: 3000,
   features: { cardIssue: true, cardIssueActiveUsersPreflight: false }, traceAuth: false,
 };
@@ -60,6 +61,7 @@ async function check(name, outcomes, expectedOperator, expectedError, legacy = f
     const context = await browser.newContext();
     context.setDefaultTimeout(3000); context.setDefaultNavigationTimeout(3000);
     await context.route("**/*", async route => {
+      if (options.unavailablePortal === portal) { await route.abort("connectionrefused"); return; }
       const request = route.request(), url = new URL(request.url());
       assert.equal(url.hostname, new URL(urls[portal]).hostname);
       let markup;
@@ -78,7 +80,7 @@ async function check(name, outcomes, expectedOperator, expectedError, legacy = f
               document.getElementById('print').onclick = () => { const target = window.open('about:blank');
                 target.document.write(${JSON.stringify(card)}); target.document.close(); };
             </script>`);
-      } else markup = login;
+      } else { assert.equal(url.href, urls[portal]); markup = login; }
       await route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: markup });
     });
     const page = await context.newPage();
@@ -98,21 +100,33 @@ async function check(name, outcomes, expectedOperator, expectedError, legacy = f
     updateStatus: async (status, currentStep) => repository.update(operation.id, { status, currentStep }),
     emitEvent: async event => repository.appendEvent({ ...event, createdAt: new Date().toISOString() }),
   };
+  const registry = new WorkflowRegistry();
   try {
     if (expectedError) {
-      await assert.rejects(searchCardPortals(operation, new AbortController().signal, workflow), error => error.code === expectedError);
+      await assert.rejects(registry.run(operation, new AbortController().signal, workflow), error => error.code === expectedError);
       assert.equal(pdfs.length, 0);
     } else {
-      await searchCardPortals(operation, new AbortController().signal, workflow);
+      await registry.run(operation, new AbortController().signal, workflow);
       const result = repository.get(operation.id);
       assert.equal(result.status, "success"); assert.equal(result.portal, expectedOperator);
       assert.equal(result.result.operator, expectedOperator); assert.equal(pdfs.length, 1);
       assert.equal(result.input.portalSearch, "auto");
       assert.equal(pdfs[0].metadata.operator, expectedOperator);
+      assert.equal(pdfs[0].metadata.cardDeliveryFormat, "native");
       assert(savedSessions.includes(expectedOperator));
     }
-    assert.deepEqual(opened, expectedOperator === initialPortal ? [initialPortal] : [initialPortal, initialPortal === "ndi" ? "hapvida" : "ndi"]);
-    assert.deepEqual(credentialsUsed, options.initialBrowserTimeout ? opened.filter(portal => portal !== initialPortal) : opened);
+    const expectedOpened = (expectedOperator === initialPortal ? [initialPortal] : [initialPortal, initialPortal === "ndi" ? "hapvida" : "ndi"])
+      .flatMap(portal => options.unavailablePortal === portal ? [portal, portal] : [portal]);
+    assert.deepEqual(opened, expectedOpened);
+    assert.deepEqual(credentialsUsed, opened.filter(portal =>
+      !(options.initialBrowserTimeout && portal === initialPortal) && options.unavailablePortal !== portal));
+    const portalResults = repository.getEvents(operation.id).filter(event => event.step === "card_portal_search_result");
+    if (expectedError === "CARD_PORTAL_SEARCH_INCOMPLETE") {
+      assert.equal(portalResults.length, 2);
+      assert(portalResults.some(event => ["CARD_PORTAL_UNAVAILABLE", "PORTAL_AUTH_UNAVAILABLE"].includes(event.data.outcome) && /page.goto|Acesso rapido|nao abriu a tela/.test(event.data.safeDetails)));
+      assert(portalResults.some(event => event.data.outcome === "AUTHENTICATION_FAILED"));
+      assert(!repository.getEvents(operation.id).some(event => event.type === "authentication.failed"));
+    }
     assert(!JSON.stringify({ operation: repository.get(operation.id), events: repository.getEvents(operation.id) }).includes("synthetic-password"));
     assert.equal(store.get(operation.id, `${initialPortal}:synthetic-company:login:${code}`), undefined);
     console.log(JSON.stringify({ case: name, result: "PASS", portals: opened, operator: expectedOperator, pdfs: pdfs.length }));
@@ -120,8 +134,14 @@ async function check(name, outcomes, expectedOperator, expectedError, legacy = f
 }
 
 try {
-  await check("0gp26-hapvida-menu-timeout-ndi-branded-pdf", { hapvida: "not_found", ndi: "found" }, "ndi", undefined, false, "hapvida", undefined,
+  await check("0gp26-hapvida-menu-timeout-ndi-native-pdf", { hapvida: "not_found", ndi: "found" }, "ndi", undefined, false, "hapvida", undefined,
     { companyCode: "0GP26", searchMode: "selected", preflight: true, initialBrowserTimeout: true });
+  await check("0bjqn-hapvida-menu-timeout-ndi-rejected", { hapvida: "not_found", ndi: "rejected" }, undefined, "CARD_PORTAL_SEARCH_INCOMPLETE",
+    false, "hapvida", undefined, { companyCode: "0BJQN", preflight: true, initialBrowserTimeout: true });
+  for (const initialPortal of ["hapvida", "ndi"]) for (const unavailablePortal of ["hapvida", "ndi"]) {
+    await check(`0bjqn-${initialPortal}-first-${unavailablePortal}-unavailable`, { hapvida: "rejected", ndi: "rejected" }, undefined,
+      "CARD_PORTAL_SEARCH_INCOMPLETE", false, initialPortal, undefined, { companyCode: "0BJQN", preflight: true, unavailablePortal });
+  }
   await check("old-selected-hapvida-rejected-still-tries-ndi", { hapvida: "rejected", ndi: "found" }, "ndi", undefined, false, "hapvida", undefined, { searchMode: "selected" });
   await check("old-selected-ndi-rejected-still-tries-hapvida", { hapvida: "found", ndi: "rejected" }, "hapvida", undefined, false, "ndi", undefined, { searchMode: "selected" });
   await check("hapvida-success", { hapvida: "found", ndi: "found" }, "hapvida");

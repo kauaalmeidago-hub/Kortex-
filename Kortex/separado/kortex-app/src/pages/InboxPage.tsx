@@ -821,14 +821,14 @@ function phaseFromOperationStatus(status: KoaOperationStatus): KoaPanelPhase {
 
 function safeKoaErrorMessage(code?: string) {
   if (code === "REAUTH_REQUIRED") return "É necessário renovar o acesso ao portal da operadora.";
-  if (code === "CARD_PORTAL_SEARCH_INCOMPLETE") return "Não consegui concluir a busca em Hapvida e NDI. Verifique o acesso ao portal indicado.";
+  if (code === "CARD_PORTAL_SEARCH_INCOMPLETE") return "Um dos portais não concluiu a consulta. Não foi possível confirmar a emissão em Hapvida e NDI. Tente novamente quando o portal estiver disponível.";
   if (code === "CREDENTIAL_NOT_FOUND") return "Credencial segura não encontrada.";
   if (code === "CREDENTIAL_STORE_UNAVAILABLE") return "Não consegui consultar os acessos salvos. Tente novamente quando a conexão voltar.";
   if (code === "CREDENTIAL_SAVE_FAILED") return "O acesso foi validado, mas não consegui salvá-lo para as próximas emissões.";
   if (code === "CARD_BATCH_INCOMPLETE") return "Não consegui confirmar a lista completa para emitir todas as carteirinhas.";
   if (code === "BENEFICIARY_NOT_FOUND") return "Beneficiário não encontrado.";
   if (code === "BENEFICIARY_SELECTION_FAILED") return "O portal não confirmou a seleção do beneficiário. A emissão foi interrompida antes de imprimir.";
-  if (code === "CARD_DELIVERY_FAILED") return "Não consegui concluir a entrega na moldura Alaive. Tente novamente.";
+  if (code === "CARD_DELIVERY_FAILED") return "Não consegui concluir o PDF das carteirinhas originais. Tente novamente.";
   if (code === "CARD_FAMILY_MAPPING_FAILED") return "Não consegui confirmar a organização dos titulares e dependentes neste pedido. Confira os dados e tente novamente.";
   if (code === "CARD_CAPTURE_FAILED") return "Não consegui separar a carteirinha escolhida com segurança. Nenhum PDF da família foi entregue. Tente novamente.";
   if (code === "CARD_DEPENDENTS_CHANGED") return "A lista de dependentes mudou. Faça um novo pedido para conferir os nomes antes da emissão.";

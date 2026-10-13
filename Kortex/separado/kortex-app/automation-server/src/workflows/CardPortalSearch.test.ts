@@ -143,9 +143,10 @@ describe("automatic card portal search", () => {
     expect(calls).toEqual(["hapvida", "ndi"]);
     expect(f.operation.portal).toBe("ndi");
     expect(f.context.emitEvent).toHaveBeenCalledWith(expect.objectContaining({ step: "card_portal_search_result",
-      data: { operator: "hapvida", outcome: "CARD_PORTAL_UNAVAILABLE" } }));
+      data: expect.objectContaining({ operator: "hapvida", outcome: "CARD_PORTAL_UNAVAILABLE",
+        failedStep: "access_card_portal", safeDetails: expect.stringContaining("Acesso rapido") }) }));
     expect(f.context.emitEvent).toHaveBeenCalledWith(expect.objectContaining({ step: "card_portal_search", data: expect.objectContaining({
-      workflowVersion: 13, runtime: expect.objectContaining({ processId: process.pid, codeFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/) }),
+      workflowVersion: 14, runtime: expect.objectContaining({ processId: process.pid, codeFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/) }),
     }) }));
   });
 
@@ -330,6 +331,61 @@ describe("automatic card portal search", () => {
     });
     await expect(searchCardPortals(f.operation, f.controller.signal, f.context)).rejects.toMatchObject({ code: "AUTHENTICATION_FAILED", message: expect.stringContaining("O acesso NDI nao foi aceito") });
     expect(f.repository.get(f.operation.id)).toMatchObject({ portal: "ndi", result: { cardPortalSearch: { notFound: ["hapvida"] } } });
+  });
+
+  it.each(["hapvida", "ndi"] as const)("does not ask for another password when %s is unavailable and the other portal rejects access", async unavailablePortal => {
+    const f = fixture(unavailablePortal), calls: string[] = [];
+    f.operation.input.contractCode = "0BJQN";
+    mocks.emit.mockImplementation(async (operation: OperationRecord) => {
+      calls.push(operation.portal);
+      expect(operation.credentialRef).toBe(`${operation.portal}:company-1:login:0BJQN`);
+      if (operation.portal === unavailablePortal) throw new Error("locator.waitFor: Timeout 30000ms exceeded waiting for Acesso rapido");
+      throw new AutomationError("AUTHENTICATION_FAILED", "Identificacao invalida.", { step: "authenticate" });
+    });
+    await expect(searchCardPortals(f.operation, f.controller.signal, f.context)).rejects.toMatchObject({
+      code: "CARD_PORTAL_SEARCH_INCOMPLETE", step: "card_portal_search", retryable: true,
+      safeDetails: expect.stringContaining("AUTHENTICATION_FAILED"),
+    });
+    expect(calls).toEqual([unavailablePortal, unavailablePortal === "hapvida" ? "ndi" : "hapvida"]);
+    expect(f.repository.get(f.operation.id)?.result?.cardPortalSearch).toMatchObject({ notFound: [], visited: calls });
+  });
+
+  it.each(["PORTAL_AUTH_UNAVAILABLE", "PORTAL_URL_NOT_CONFIGURED", "ACTIVE_USERS_LIST_UNAVAILABLE", "PORTAL_RESULTS_NOT_READY", "PORTAL_CHANGED"])("does not count %s on the other portal as a password rejection", async code => {
+    const f = fixture("ndi");
+    mocks.emit.mockImplementation(async (operation: OperationRecord) => {
+      if (operation.portal === "ndi") throw new AutomationError("AUTHENTICATION_FAILED", "NDI rejeitou o acesso.");
+      throw new AutomationError(code, "Consulta indisponivel.", { step: "select_beneficiary" });
+    });
+    await expect(searchCardPortals(f.operation, f.controller.signal, f.context)).rejects.toMatchObject({
+      code: "CARD_PORTAL_SEARCH_INCOMPLETE", safeDetails: `NDI: AUTHENTICATION_FAILED; Hapvida: ${code}`,
+    });
+  });
+
+  it("still asks for missing access when the other portal is unavailable", async () => {
+    const f = fixture();
+    mocks.emit.mockImplementation(async (operation: OperationRecord) => {
+      if (operation.portal === "hapvida") throw new AutomationError("CARD_PORTAL_UNAVAILABLE", "Consulta indisponivel.");
+      throw createReauthRequiredError("Informe o acesso NDI.");
+    });
+    await expect(searchCardPortals(f.operation, f.controller.signal, f.context)).rejects.toMatchObject({ code: "REAUTH_REQUIRED" });
+    expect(f.repository.get(f.operation.id)?.portal).toBe("ndi");
+  });
+
+  it("keeps a sanitized root diagnostic for each portal without recording a submitted password", async () => {
+    const f = fixture();
+    mocks.emit.mockImplementation(async (operation: OperationRecord) => {
+      if (operation.portal === "hapvida") throw new Error('locator.fill("synthetic-private-password"): Timeout 30000ms exceeded');
+      throw new AutomationError("AUTHENTICATION_FAILED", "Identificacao invalida.", {
+        safeDetails: "password=synthetic-private-password", step: "authenticate",
+      });
+    });
+    await expect(searchCardPortals(f.operation, f.controller.signal, f.context)).rejects.toMatchObject({ code: "CARD_PORTAL_SEARCH_INCOMPLETE" });
+    const results = vi.mocked(f.context.emitEvent).mock.calls.map(([event]) => event).filter(event => event.step === "card_portal_search_result");
+    expect(results).toMatchObject([
+      { data: { operator: "hapvida", outcome: "CARD_PORTAL_UNAVAILABLE", failedStep: "access_card_portal", safeDetails: 'locator.fill("[REDACTED]"): Timeout 30000ms exceeded' } },
+      { data: { operator: "ndi", outcome: "AUTHENTICATION_FAILED", failedStep: "authenticate", safeDetails: "password=[REDACTED]" } },
+    ]);
+    expect(JSON.stringify(results)).not.toContain("synthetic-private-password");
   });
 
   it.each(["companyId", "contractCode", "beneficiaryName", "periodStart", "cardNumber"])("rechecks the portals when %s changes during resume", async (field) => {

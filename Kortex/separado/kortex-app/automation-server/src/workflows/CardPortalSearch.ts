@@ -12,6 +12,7 @@ const SEARCH_VERSION = 3;
 const portals: PortalName[] = ["hapvida", "ndi"];
 const canSearchAnotherPortal = new Set(["AUTHENTICATION_FAILED", "REAUTH_REQUIRED", "BENEFICIARY_NOT_FOUND",
   "BENEFICIARY_NOT_ACTIVE", "ACTIVE_USERS_LIST_UNAVAILABLE", "PORTAL_URL_NOT_CONFIGURED", "PORTAL_AUTH_UNAVAILABLE", "CARD_PORTAL_UNAVAILABLE"]);
+const conclusiveAccessOutcomes = new Set(["AUTHENTICATION_FAILED", "BENEFICIARY_NOT_FOUND", "BENEFICIARY_NOT_ACTIVE"]);
 
 export async function searchCardPortals(operation: OperationRecord, signal: AbortSignal, context: WorkflowContext) {
   // Every card request may search both operators, including old single-portal requests.
@@ -133,7 +134,8 @@ export async function searchCardPortals(operation: OperationRecord, signal: Abor
       operation.result = { ...operation.result, cardPortalSearch: { ...progress, visited: [...progress.visited], notFound: [...progress.notFound] } };
       await context.repository.update(operation.id, { result: operation.result });
       await context.emitEvent({ operationId: operation.id, type: "operation.step", step: "card_portal_search_result",
-        data: { operator: portal, outcome: error.code } });
+        data: { operator: portal, outcome: error.code, failedStep: error.step,
+          safeDetails: sanitizeDiagnosticText(error.safeDetails ?? error.message)?.slice(0, 2000) } });
     }
   }
 
@@ -143,10 +145,13 @@ export async function searchCardPortals(operation: OperationRecord, signal: Abor
     throw needsAuth.error;
   }
   const authFailure = failures.find(item => item.error.code === "AUTHENTICATION_FAILED");
-  if (authFailure) {
+  // A rejection on the wrong operator cannot prove the submitted access is wrong while
+  // the other portal is unavailable. Do not consume a password attempt or bind the next
+  // password challenge to that rejected operator until both access outcomes are known.
+  if (authFailure && failures.every(item => conclusiveAccessOutcomes.has(item.error.code))) {
     await bind(authFailure.portal);
     const label = authFailure.portal === "ndi" ? "NDI" : "Hapvida";
-    throw new AutomationError("AUTHENTICATION_FAILED", `O acesso ${label} nao foi aceito. Informe a senha desse portal ou revise o nome e periodo da consulta.`, {
+    throw new AutomationError("AUTHENTICATION_FAILED", `O acesso ${label} nao foi aceito. Confira o codigo da empresa e a senha desse portal.`, {
       safeDetails: failures.map(item => `${item.portal === "ndi" ? "NDI" : "Hapvida"}: ${item.error.code}`).join("; "), step: "authenticate", retryable: false,
     });
   }
@@ -162,7 +167,9 @@ export async function searchCardPortals(operation: OperationRecord, signal: Abor
       step: "find_beneficiary", retryable: false,
     });
   }
-  throw new AutomationError("CARD_PORTAL_SEARCH_INCOMPLETE", "Nao foi possivel concluir a busca nos dois portais.", {
+  const unavailable = failures.filter(item => !conclusiveAccessOutcomes.has(item.error.code));
+  const unavailableLabels = unavailable.map(item => item.portal === "ndi" ? "NDI" : "Hapvida").join(" e ");
+  throw new AutomationError("CARD_PORTAL_SEARCH_INCOMPLETE", `A consulta em ${unavailableLabels} nao foi concluida. Tente novamente quando o portal estiver disponivel.`, {
     safeDetails: failures.map(item => `${item.portal === "ndi" ? "NDI" : "Hapvida"}: ${item.error.code}`).join("; "),
     step: "card_portal_search", retryable: true,
   });
