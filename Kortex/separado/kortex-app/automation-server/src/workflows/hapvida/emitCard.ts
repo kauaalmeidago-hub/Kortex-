@@ -59,6 +59,7 @@ function isRetryablePortalAuthenticationFailure(error: unknown) {
 }
 
 export async function emitCard(operation: OperationRecord, signal: AbortSignal, context: WorkflowContext) {
+  context.setCardIssuePhase?.("access");
   requireInput(operation.input, ["beneficiaryName"]);
 
   const beneficiaryName = readString(operation.input, ["beneficiaryName"]);
@@ -92,7 +93,8 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
     try {
       await context.browserManager.withContext(operation, signal, async (browserContext, page) => {
     const loginPage = new HapvidaLoginPage(page, portalUrl, context.config.authTimeoutMs, portalLabel);
-    const cardPage = new HapvidaCardPage(page, context.config.actionTimeoutMs ?? 30_000, portalUrl);
+    const cardPage = new HapvidaCardPage(page, context.config.actionTimeoutMs ?? 30_000, portalUrl,
+      () => context.setCardIssuePhase?.("selection"));
 
     if (portalUrl) {
       context.browserManager.validateAllowedUrl(portalUrl, operation);
@@ -266,6 +268,7 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
     const deliveryMembers = await cardPage.describeSelectedBeneficiaries(selected);
     assertNotAborted(signal);
     await context.updateStatus("processing", "Emitindo carteirinha");
+    context.setCardIssuePhase?.("printing");
     const resultPage = await cardPage.requestSelectedCards(selected, allBeneficiaries, async command => {
       await context.emitEvent({ operationId: operation.id, type: "operation.step", step: "card_print_requested",
         data: { operator: portal, command, beneficiaryScope: allBeneficiaries ? "all" : "single", beneficiaryCount: selected.length } });
@@ -284,6 +287,7 @@ export async function emitCard(operation: OperationRecord, signal: AbortSignal, 
       : `${safeFileNamePart(beneficiaryName)}.pdf`;
     const pdfTitle = allBeneficiaries ? `carteirinhas da empresa ${requestedCompanyCode!.toLowerCase()}` : beneficiaryName.trim().toLocaleLowerCase("pt-BR");
     await context.updateStatus("verifying", "Organizando carteirinhas na moldura Alaive");
+    context.setCardIssuePhase?.("delivery");
     const delivery = await createBrandedCardDelivery(resultPage, documents, deliveryMembers, otherBeneficiaries, pdfTitle, signal);
     assertNotAborted(signal);
     const pdfBytes = validateCardPdfBytes(delivery.bytes, fileName);

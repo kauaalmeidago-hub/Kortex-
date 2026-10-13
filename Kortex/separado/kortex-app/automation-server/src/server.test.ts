@@ -57,6 +57,8 @@ describe("Koa reauthentication handoff", () => {
     const recovered = await app.inject("/ready");
     expect(recovered.statusCode).toBe(200);
     expect(recovered.json()).toMatchObject({ database: "ok", worker: "ok" });
+    expect(recovered.json()).toMatchObject({ cardWorkflow: { version: 11, processId: process.pid,
+      codeFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/) } });
   });
 
   it.each([false, true])("preserves remember=%s only in RAM and resumes the same operation without logging in", async (remember) => {
@@ -110,10 +112,11 @@ describe("Koa reauthentication handoff", () => {
     expect(launch).not.toHaveBeenCalled();
   });
 
-  it("keeps a selected portal credential restricted to that portal", async () => {
+  it("upgrades a selected request so its submitted RAM access can search both portals", async () => {
     operation.input.portalSearch = "selected";
     expect((await submit()).statusCode).toBe(200);
-    expect(store.get(operation.id, operation.credentialRef)?.metadata?.autoPortalCredential).toBe(false);
+    expect(store.get(operation.id, operation.credentialRef)?.metadata?.autoPortalCredential).toBe(true);
+    expect(operation.input.portalSearch).toBe("auto");
   });
 
   it("rebinds a corrected company code to the queued operation and its ephemeral password", async () => {

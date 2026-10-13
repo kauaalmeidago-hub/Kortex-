@@ -4,16 +4,18 @@ import type { OperationRecord, PortalCredential, PortalName } from "../types.js"
 import type { WorkflowContext } from "./WorkflowContext.js";
 import { emitCard } from "./hapvida/emitCard.js";
 import { isAllBeneficiariesRequest } from "./hapvida/cardIssueScope.js";
+import { sanitizeDiagnosticText } from "../security/redaction.js";
+import { CARD_ISSUE_WORKFLOW_VERSION, cardWorkflowRuntime } from "./CardWorkflowRuntime.js";
 
 type SearchProgress = { version: number; contractCode?: string; requestKey: string; notFound: PortalName[]; visited: PortalName[] };
-const SEARCH_VERSION = 2;
+const SEARCH_VERSION = 3;
 const portals: PortalName[] = ["hapvida", "ndi"];
 const canSearchAnotherPortal = new Set(["AUTHENTICATION_FAILED", "REAUTH_REQUIRED", "BENEFICIARY_NOT_FOUND",
-  "BENEFICIARY_NOT_ACTIVE", "ACTIVE_USERS_LIST_UNAVAILABLE", "PORTAL_URL_NOT_CONFIGURED", "PORTAL_AUTH_UNAVAILABLE"]);
+  "BENEFICIARY_NOT_ACTIVE", "ACTIVE_USERS_LIST_UNAVAILABLE", "PORTAL_URL_NOT_CONFIGURED", "PORTAL_AUTH_UNAVAILABLE", "CARD_PORTAL_UNAVAILABLE"]);
 
 export async function searchCardPortals(operation: OperationRecord, signal: AbortSignal, context: WorkflowContext) {
-  const selectedPortal = operation.input.portalSearch === "selected";
-  if (!selectedPortal && operation.input.portalSearch !== "auto") {
+  // Every card request may search both operators, including old single-portal requests.
+  if (operation.input.portalSearch !== "auto") {
     operation.input = { ...operation.input, portalSearch: "auto" };
     await context.repository.update(operation.id, { input: operation.input });
   }
@@ -31,18 +33,18 @@ export async function searchCardPortals(operation: OperationRecord, signal: Abor
     version: SEARCH_VERSION,
     contractCode,
     requestKey,
-    notFound: !selectedPortal && previous && previous.version === SEARCH_VERSION && previous.requestKey === requestKey && Array.isArray(previous.notFound)
-      ? previous.notFound.filter((portal): portal is PortalName => portals.includes(portal as PortalName)) : [],
+    // Portal data can change while a request waits for access. Recheck rather than replay an old absence.
+    notFound: [],
     visited: [],
   };
   const original = { portal: operation.portal, credentialRef: operation.credentialRef, credentialId: operation.credentialId };
   // A verified access for this exact company/code avoids probing the wrong portal on every new request.
   // A resumed authentication request keeps its current portal and its operation-scoped RAM credential.
-  const preferred = !selectedPortal && contractCode && previous?.requestKey !== requestKey
+  const preferred = contractCode && previous?.requestKey !== requestKey
     ? await context.credentialResolver?.preferredCardPortal?.({ companyId: operation.companyId, portalLoginCode: contractCode })
     : undefined;
   const first = preferred ?? original.portal;
-  const order = selectedPortal ? [original.portal] : [first, ...portals.filter(portal => portal !== first)];
+  const order = [first, ...portals.filter(portal => portal !== first)];
   const failures: Array<{ portal: PortalName; error: AutomationError }> = [];
   let submittedCredential: PortalCredential | undefined;
 
@@ -63,21 +65,24 @@ export async function searchCardPortals(operation: OperationRecord, signal: Abor
 
   for (const portal of order) {
     assertNotAborted(signal);
-    if (progress.notFound.includes(portal)) continue;
     progress.visited.push(portal);
     await bind(portal);
     await context.updateStatus("authenticating", `Buscando carteirinha no portal ${portal === "ndi" ? "NDI" : "Hapvida"}`);
     await context.emitEvent({ operationId: operation.id, type: "operation.step", step: "card_portal_search",
-      data: { operator: portal, portalsChecked: [...progress.visited] } });
+      data: { operator: portal, portalsChecked: [...progress.visited], workflowVersion: CARD_ISSUE_WORKFLOW_VERSION,
+        runtime: cardWorkflowRuntime() } });
 
+    let phase: "access" | "selection" | "printing" | "delivery" = "access";
     try {
       let savedOtherCredential: PortalCredential | undefined;
       const runAttempt = (useSubmitted = false) => emitCard(operation, signal, {
         ...context,
+        config: { ...context.config, features: { ...context.config.features, cardIssueActiveUsersPreflight: false } },
+        setCardIssuePhase: next => { phase = next; context.setCardIssuePhase?.(next); },
         secretProvider: { get: async ref => {
           // Only an explicitly submitted credential for this automatic search may cross portals in RAM.
           // Saved credentials remain scoped to their own operator, company and login code.
-          if (!selectedPortal) submittedCredential ??= context.secretProvider.takeAutomaticSearchCredential?.(original.credentialRef);
+          submittedCredential ??= context.secretProvider.takeAutomaticSearchCredential?.(original.credentialRef);
           if (submittedCredential) {
             if (useSubmitted || portal === original.portal) return submittedCredential;
             // The other operator may have a different, already validated password for this same code.
@@ -105,13 +110,23 @@ export async function searchCardPortals(operation: OperationRecord, signal: Abor
         await runAttempt(true);
       }
       return;
-    } catch (error) {
+    } catch (caught) {
       assertNotAborted(signal);
+      let error = caught;
+      const browserDetails = caught instanceof AutomationError ? caught.safeDetails ?? caught.message
+        : caught instanceof Error ? caught.message : "";
+      if (phase === "access" && caught instanceof Error &&
+          (!(caught instanceof AutomationError) || caught.code === "WORKER_ERROR") &&
+          (caught.name === "TimeoutError" || /\b(?:locator|page|frame|browserContext|browserType|chromium)\.|navigation|(?:browser|target).*(?:closed|crash)|frame.*detached/i.test(browserDetails))) {
+        error = new AutomationError("CARD_PORTAL_UNAVAILABLE", `O portal ${portal === "ndi" ? "NDI" : "Hapvida"} nao concluiu a consulta.`, {
+          safeDetails: sanitizeDiagnosticText(browserDetails), step: "access_card_portal", retryable: true,
+        });
+      }
       if (!(error instanceof AutomationError)) throw error;
-      if (selectedPortal) throw error;
       const listFailureBeforeSelection = error.code === "PORTAL_RESULTS_NOT_READY" ||
         (error.code === "PORTAL_CHANGED" && error.step === "select_beneficiary");
       if (!canSearchAnotherPortal.has(error.code) && !listFailureBeforeSelection) throw error;
+      if (phase !== "access") throw error;
       // Never switch after selecting/printing a card, an ambiguous match, or an invalid PDF.
       failures.push({ portal, error });
       if (error.code === "BENEFICIARY_NOT_FOUND") progress.notFound.push(portal);

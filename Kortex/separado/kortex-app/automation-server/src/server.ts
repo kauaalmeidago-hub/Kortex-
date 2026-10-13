@@ -19,6 +19,7 @@ import type { EphemeralCredentialStore } from "./secrets/EphemeralCredentialStor
 import type { ArtifactStorage } from "./storage/ArtifactStorage.js";
 import { normalizePortalLoginCode, portalLoginCode } from "./credentials/credentialIdentity.js";
 import { authenticationAttemptLimitError, countAuthenticationFailures } from "./authentication/AuthenticationAttemptPolicy.js";
+import { CARD_ISSUE_WORKFLOW_VERSION, cardWorkflowRuntime } from "./workflows/CardWorkflowRuntime.js";
 
 interface ServerDeps {
   config: AutomationConfig;
@@ -192,6 +193,7 @@ export async function createServer({ config, repository, eventBus, queue, creden
       storage: config.supabaseUrl && config.supabaseSecretKey ? "ok" : "local",
       secrets: config.secretProviderMode === "remote" ? "remote" : "configured",
       worker: ready ? "ok" : "reconnecting",
+      cardWorkflow: { version: CARD_ISSUE_WORKFLOW_VERSION, ...cardWorkflowRuntime() },
     });
   });
 
@@ -364,7 +366,7 @@ export async function createServer({ config, repository, eventBus, queue, creden
         {
           username: companyCode,
           password: parsed.data.password,
-          metadata: { rememberOnDevice: parsed.data.rememberOnDevice, autoPortalCredential: operation.input.portalSearch !== "selected", submittedAt: new Date().toISOString() },
+          metadata: { rememberOnDevice: parsed.data.rememberOnDevice, autoPortalCredential: true, submittedAt: new Date().toISOString() },
         },
         config.authChallengeTtlMinutes * 60 * 1000,
       );
@@ -383,7 +385,7 @@ export async function createServer({ config, repository, eventBus, queue, creden
         status: "queued",
         credentialRef: resolvedCredential.credentialRef,
         credentialId: resolvedCredential.credentialId,
-        input: { ...operation.input, contractCode: companyCode },
+        input: { ...operation.input, portalSearch: "auto", contractCode: companyCode },
         currentStep: "authentication_submitted",
         updatedAt: new Date().toISOString(),
       });

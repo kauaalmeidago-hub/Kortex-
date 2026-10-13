@@ -70,7 +70,7 @@ describe("worker queue connectivity recovery", () => {
     expect(mocks.workflow).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["auto", undefined])("locks and renews both portals for automatic or legacy search (mode=%s)", async (mode) => {
+  it.each(["auto", "selected", undefined])("locks and renews both portals for every card request (mode=%s)", async (mode) => {
     vi.useFakeTimers(); const { worker, repository, operation } = fixture();
     if (mode) operation.input.portalSearch = mode;
     repository.claimNext.mockResolvedValueOnce(operation as never);
@@ -85,17 +85,17 @@ describe("worker queue connectivity recovery", () => {
     expect(repository.releaseLock.mock.calls.map(([key]) => key)).toEqual(["hapvida:company:synthetic-company", "ndi:company:synthetic-company"]);
     expect(mocks.workflow).toHaveBeenCalledOnce();
     expect(repository.upsertWorkerHeartbeat).toHaveBeenCalledWith("recovery-test", "online", expect.objectContaining({
-      cardIssueWorkflowVersion: 10, cardIssueBeneficiaryChoiceEnabled: true, cardDeliveryTemplateVersion: 1, cardDeliveryBrandingEnabled: true, cardIssueSingleCaptureEnabled: true, cardIssueDependentConfirmationEnabled: true, cardPreviewVersion: 2, cardIssueBatchEnabled: true, cardIssuePrintAllEnabled: false, cardIssuePrintSelectedEnabled: true, cardIssueDirectPortalEnabled: true, cardCredentialScopeVersion: 2, cardPortalPreferenceVersion: 2, cardPortalSearchDefault: "auto", portalAccessStorageVersion: 1, portalAccessStorage: "local_dpapi",
+      cardIssueWorkflowVersion: 11, cardIssueBothPortalsEnabled: true, cardWorkflowRuntime: expect.objectContaining({ codeFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/), processId: process.pid }), cardIssueBeneficiaryChoiceEnabled: true, cardDeliveryTemplateVersion: 1, cardDeliveryBrandingEnabled: true, cardIssueSingleCaptureEnabled: true, cardIssueDependentConfirmationEnabled: true, cardPreviewVersion: 2, cardIssueBatchEnabled: true, cardIssuePrintAllEnabled: false, cardIssuePrintSelectedEnabled: true, cardIssueDirectPortalEnabled: true, cardCredentialScopeVersion: 2, cardPortalPreferenceVersion: 2, cardPortalSearchDefault: "auto", portalAccessStorageVersion: 1, portalAccessStorage: "local_dpapi",
     }));
   });
 
-  it("locks only the explicitly selected portal", async () => {
+  it("locks both portals for an old selected request", async () => {
     const { worker, repository, operation } = fixture(); operation.input.portalSearch = "selected";
     repository.claimNext.mockResolvedValueOnce(operation as never);
     mocks.workflow.mockImplementation(async () => { worker.stop(); });
     await worker.run();
-    expect(repository.acquireLock.mock.calls.map(([key]) => key)).toEqual(["hapvida:company:synthetic-company"]);
-    expect(repository.releaseLock).toHaveBeenCalledOnce();
+    expect(repository.acquireLock.mock.calls.map(([key]) => key)).toEqual(["hapvida:company:synthetic-company", "ndi:company:synthetic-company"]);
+    expect(repository.releaseLock).toHaveBeenCalledTimes(2);
   });
 
   it("does not start a search if the second portal is locked by another operation", async () => {

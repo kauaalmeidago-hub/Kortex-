@@ -13,6 +13,7 @@ export interface WorkflowContext {
   secretProvider: SecretProvider;
   credentialResolver?: CredentialResolver;
   retainCardConfirmationCredential?: (operation: OperationRecord, credential: PortalCredential) => void;
+  setCardIssuePhase?: (phase: "access" | "selection" | "printing" | "delivery") => void;
   artifactStorage: ArtifactStorage;
   updateStatus: (status: OperationStatus, step: string, data?: Record<string, unknown>) => Promise<OperationRecord | undefined>;
   emitEvent: (event: Omit<OperationEvent, "createdAt"> & { createdAt?: string }) => Promise<OperationEvent | undefined>;

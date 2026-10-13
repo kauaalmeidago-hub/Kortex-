@@ -30,7 +30,8 @@ const ROW_SELECTOR = 'tr, [role="row"]';
 const CONTROL_SELECTOR = 'input[type="checkbox"], input[type="radio"], [role="checkbox"], [role="radio"]';
 
 export class HapvidaCardPage {
-  constructor(private readonly page: Page, private readonly previewTimeoutMs = 30_000, private readonly portalUrl?: string) {}
+  constructor(private readonly page: Page, private readonly previewTimeoutMs = 30_000, private readonly portalUrl?: string,
+    private readonly onSelectionStarted?: () => void) {}
 
   periodHeading() {
     return this.page.getByText(/datas?\s+de\s+ades[aã]o/i).first();
@@ -302,6 +303,7 @@ export class HapvidaCardPage {
   }
 
   private async clearSelections(except?: Locator | Locator[], skipBulk = false) {
+    this.onSelectionStarted?.();
     const controls = this.page.locator(`${ROW_SELECTOR.split(", ").map(row => `${row} ${CONTROL_SELECTOR.split(", ").join(`, ${row} `)}`).join(", ")}`);
     const exceptHandles = await Promise.all((Array.isArray(except) ? except : except ? [except] : []).map(control => control.elementHandle()));
     try {

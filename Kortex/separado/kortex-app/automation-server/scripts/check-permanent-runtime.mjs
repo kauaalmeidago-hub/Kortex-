@@ -4,7 +4,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const serverDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "Kortex runtime test com espaços "));
@@ -61,6 +61,15 @@ try {
     assert.equal((await (await fetch(`${current.appUrl}/health`)).json()).service, "kortex-desktop");
   });
   console.log("BACKGROUND_WORKER_AND_APP = OK");
+  const ready = (await (await fetch(`${state().workerUrl}/ready`)).json()).cardWorkflow;
+  assert.equal(ready.version, 11);
+  assert.equal(ready.processId, state().services.find(service => service.name === "worker").pid);
+  assert.equal(path.resolve(ready.runtimeDirectory), fixtureServer);
+  assert.match(ready.codeFingerprint, /^[a-f0-9]{64}$/);
+  const identity = await import(pathToFileURL(path.join(fixtureServer, "dist", "workflows", "CardWorkflowRuntime.js")).href);
+  assert(identity.isCurrentCardWorkflowRuntime(ready));
+  assert(!identity.isCurrentCardWorkflowRuntime({ ...ready, runtimeDirectory: serverDir }));
+  console.log("RUNTIME_CODE_AND_FOLDER_IDENTITY = OK");
   const first = state();
   const duplicate = launch();
   const duplicateExit = await new Promise((resolve) => duplicate.once("exit", resolve));

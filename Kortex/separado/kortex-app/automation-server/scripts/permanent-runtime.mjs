@@ -42,7 +42,7 @@ const supervisor = new ProcessSupervisor([
   { name: "worker", entry: path.join(serverDir, "dist", "index.js"), cwd: serverDir, env: workerEnv },
   { name: "app", entry: path.join(serverDir, "dist", "runtime", "startDesktop.js"), cwd: serverDir, env: desktopEnv },
 ], { onChange: (services) => {
-  const state = { supervisorPid: process.pid, startedAt, updatedAt: new Date().toISOString(),
+  const state = { supervisorPid: process.pid, runtimeDirectory: serverDir, startedAt, updatedAt: new Date().toISOString(),
     appUrl: `http://localhost:${desktopPort}`, workerUrl: `http://127.0.0.1:${config.port}`, services };
   try {
     fs.writeFileSync(`${stateFile}.tmp`, JSON.stringify(state, null, 2));

@@ -21,7 +21,7 @@ function fixture(portal: PortalName = "hapvida") {
   const repository = new OperationRepository(":memory:");
   repositories.push(repository); repository.create(operation);
   const resolve = vi.spyOn(new ExplicitCredentialResolver(), "resolve");
-  const context = { repository, credentialResolver: { resolve }, secretProvider: { get: vi.fn() },
+  const context = { config: { features: { cardIssueActiveUsersPreflight: true } }, repository, credentialResolver: { resolve }, secretProvider: { get: vi.fn() },
     updateStatus: vi.fn(async () => undefined), emitEvent: vi.fn(async event => event),
   } as unknown as WorkflowContext;
   const controller = new AbortController();
@@ -96,14 +96,15 @@ describe("automatic card portal search", () => {
     expect(JSON.stringify(f.repository.get(f.operation.id))).not.toContain(submitted.password);
   });
 
-  it("preserves an explicit selected portal even if another operator has a verified access", async () => {
+  it("upgrades an old selected request and still uses the verified portal first", async () => {
     const f = fixture(); f.operation.input.portalSearch = "selected";
     const preferredCardPortal = vi.fn(async () => "ndi" as const);
     f.context.credentialResolver!.preferredCardPortal = preferredCardPortal;
     const calls: string[] = [];
     mocks.emit.mockImplementation(async (operation: OperationRecord) => { calls.push(operation.portal); });
     await searchCardPortals(f.operation, f.controller.signal, f.context);
-    expect(calls).toEqual(["hapvida"]); expect(preferredCardPortal).not.toHaveBeenCalled();
+    expect(calls).toEqual(["ndi"]); expect(preferredCardPortal).toHaveBeenCalled();
+    expect(f.operation.input.portalSearch).toBe("auto");
   });
 
   it("upgrades a legacy request to automatic search before continuing to NDI", async () => {
@@ -118,6 +119,68 @@ describe("automatic card portal search", () => {
     await searchCardPortals(f.operation, f.controller.signal, f.context);
     expect(calls).toEqual(["hapvida", "ndi"]);
     expect(f.repository.get(f.operation.id)).toMatchObject({ id: "card-search", input: { portalSearch: "auto" }, portal: "ndi" });
+  });
+
+  it("does not let an old selected request stop at the wrong portal", async () => {
+    const f = fixture(), calls: string[] = [];
+    f.operation.input.portalSearch = "selected";
+    mocks.emit.mockImplementation(async operation => { calls.push(operation.portal); if (operation.portal === "hapvida") throw notFound(); });
+    await searchCardPortals(f.operation, f.controller.signal, f.context);
+    expect(calls).toEqual(["hapvida", "ndi"]);
+    expect(f.operation.input.portalSearch).toBe("auto");
+  });
+
+  it("continues the 0GP26 request to NDI after the observed untyped Hapvida menu timeout", async () => {
+    const f = fixture(), calls: string[] = [];
+    f.operation.input.contractCode = "0GP26";
+    mocks.emit.mockImplementation(async (operation, _signal, context: WorkflowContext) => {
+      calls.push(operation.portal);
+      expect(context.config.features.cardIssueActiveUsersPreflight).toBe(false);
+      expect(operation.credentialRef).toBe(`${operation.portal}:company-1:login:0GP26`);
+      if (operation.portal === "hapvida") throw new Error("locator.waitFor: Timeout 30000ms exceeded waiting for Acesso rapido");
+    });
+    await searchCardPortals(f.operation, f.controller.signal, f.context);
+    expect(calls).toEqual(["hapvida", "ndi"]);
+    expect(f.operation.portal).toBe("ndi");
+    expect(f.context.emitEvent).toHaveBeenCalledWith(expect.objectContaining({ step: "card_portal_search_result",
+      data: { operator: "hapvida", outcome: "CARD_PORTAL_UNAVAILABLE" } }));
+    expect(f.context.emitEvent).toHaveBeenCalledWith(expect.objectContaining({ step: "card_portal_search", data: expect.objectContaining({
+      workflowVersion: 11, runtime: expect.objectContaining({ processId: process.pid, codeFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/) }),
+    }) }));
+  });
+
+  it.each(["selection", "printing", "delivery"] as const)("does not switch on an untyped timeout after %s starts", async phase => {
+    const f = fixture(), error = new Error("locator.waitFor: Timeout 30000ms exceeded");
+    mocks.emit.mockImplementation(async (_operation, _signal, context: WorkflowContext) => {
+      context.setCardIssuePhase?.(phase); throw error;
+    });
+    await expect(searchCardPortals(f.operation, f.controller.signal, f.context)).rejects.toBe(error);
+    expect(mocks.emit).toHaveBeenCalledOnce();
+  });
+
+  it("reports both browser failures as an incomplete search rather than beneficiary absence", async () => {
+    const f = fixture(); mocks.emit.mockRejectedValue(new Error("page.goto: net::ERR_CONNECTION_RESET"));
+    await expect(searchCardPortals(f.operation, f.controller.signal, f.context)).rejects.toMatchObject({
+      code: "CARD_PORTAL_SEARCH_INCOMPLETE", safeDetails: "Hapvida: CARD_PORTAL_UNAVAILABLE; NDI: CARD_PORTAL_UNAVAILABLE",
+    });
+    expect(mocks.emit).toHaveBeenCalledTimes(2);
+    expect(f.operation.result?.cardPortalSearch).toMatchObject({ visited: ["hapvida", "ndi"], notFound: [] });
+  });
+
+  it.each(["database connection refused", "canceling statement due to statement timeout"])("does not treat a database failure as a portal timeout (%s)", async message => {
+    const f = fixture(), error = new Error(message); mocks.emit.mockRejectedValue(error);
+    await expect(searchCardPortals(f.operation, f.controller.signal, f.context)).rejects.toBe(error);
+    expect(mocks.emit).toHaveBeenCalledOnce();
+  });
+
+  it("rechecks both operators even when the same request cached absence on both", async () => {
+    const f = fixture(); mocks.emit.mockRejectedValue(notFound());
+    await expect(searchCardPortals(f.operation, f.controller.signal, f.context)).rejects.toMatchObject({ code: "BENEFICIARY_NOT_FOUND" });
+    const resumed = f.repository.get(f.operation.id)!;
+    const calls: string[] = [];
+    mocks.emit.mockReset().mockImplementation(async operation => { calls.push(operation.portal); if (operation.portal === "ndi") throw notFound(); });
+    await searchCardPortals(resumed, f.controller.signal, f.context);
+    expect(calls).toEqual(["ndi", "hapvida"]);
   });
 
   it.each(["PORTAL_RESULTS_NOT_READY", "PORTAL_CHANGED"])("continues to NDI when %s occurs before beneficiary selection", async (code) => {
@@ -325,14 +388,17 @@ describe("automatic card portal search", () => {
     await searchCardPortals(f.operation, f.controller.signal, f.context);
     expect(checked).toEqual(["ndi", "hapvida"]);
   });
-  it("honors an explicitly selected portal even if an automatic search previously cached an absence", async () => {
+  it("rechecks both portals for a resumed selected request despite cached absence", async () => {
     const f = fixture("ndi");
     mocks.emit.mockRejectedValue(notFound());
     await expect(searchCardPortals(f.operation, f.controller.signal, f.context)).rejects.toMatchObject({ code: "BENEFICIARY_NOT_FOUND" });
+    f.operation.portal = "ndi";
     f.operation.input.portalSearch = "selected";
-    mocks.emit.mockReset().mockResolvedValue(undefined);
+    const calls: string[] = [];
+    mocks.emit.mockReset().mockImplementation(async operation => { calls.push(operation.portal); if (operation.portal === "ndi") throw notFound(); });
     await searchCardPortals(f.operation, f.controller.signal, f.context);
-    expect(mocks.emit).toHaveBeenCalledOnce();
+    expect(calls).toEqual(["ndi", "hapvida"]);
+    expect(f.operation.input.portalSearch).toBe("auto");
   });
 
   it.each(["BENEFICIARY_NOT_ACTIVE", "ACTIVE_USERS_LIST_UNAVAILABLE"])("continues to NDI after the optional Hapvida preflight returns %s", async code => {

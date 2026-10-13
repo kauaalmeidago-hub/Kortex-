@@ -14,6 +14,7 @@ import { sanitizeDiagnosticText } from "../security/redaction.js";
 import { type EphemeralCredentialStore, OperationScopedSecretProvider } from "../secrets/EphemeralCredentialStore.js";
 
 import type { CredentialResolver } from "../credentials/CredentialResolver.js";
+import { CARD_ISSUE_WORKFLOW_VERSION, cardWorkflowRuntime } from "../workflows/CardWorkflowRuntime.js";
 
 interface PersistentWorkerDeps {
   config: AutomationConfig;
@@ -92,7 +93,7 @@ export class PersistentWorker {
     const controller = new AbortController();
     const credentialGeneration = this.deps.ephemeralCredentialStore?.snapshotGeneration();
     this.currentController = controller;
-    const lockKeys = operation.type === "CARD_ISSUE" && operation.input.portalSearch !== "selected"
+    const lockKeys = operation.type === "CARD_ISSUE"
       ? [`hapvida:company:${operation.companyId}`, `ndi:company:${operation.companyId}`]
       : [`${operation.portal}:company:${operation.companyId}`];
     const acquiredLocks: string[] = [];
@@ -209,7 +210,9 @@ export class PersistentWorker {
       repositoryMode: this.deps.config.repositoryMode,
       browserProvider: this.deps.config.browserProvider,
       cardIssueEnabled: this.deps.config.features.cardIssue,
-      cardIssueWorkflowVersion: 10,
+      cardIssueWorkflowVersion: CARD_ISSUE_WORKFLOW_VERSION,
+      cardWorkflowRuntime: cardWorkflowRuntime(),
+      cardIssueBothPortalsEnabled: this.deps.config.features.cardIssue,
       cardIssueBeneficiaryChoiceEnabled: this.deps.config.features.cardIssue,
       cardDeliveryTemplateVersion: 1,
       cardDeliveryBrandingEnabled: this.deps.config.features.cardIssue,

@@ -49,7 +49,7 @@ export const CardIssuePayloadSchema = z
     documentIds: z.array(z.string().uuid()).optional(),
   })
   .passthrough()
-  .transform(input => ({ ...input, ...(portalLoginCode(input) ? { contractCode: portalLoginCode(input) } : {}),
+  .transform(input => ({ ...input, portalSearch: "auto" as const, ...(portalLoginCode(input) ? { contractCode: portalLoginCode(input) } : {}),
     beneficiaryScope: isAllBeneficiariesRequest(input) ? "all" as const : "single" as const }))
   .superRefine((input, context) => {
     if (input.beneficiaryScope === "all" && !portalLoginCode(input)) {

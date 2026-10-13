@@ -329,7 +329,7 @@ export async function createOperation(input: {
   operator?: "hapvida" | "ndi";
   data: Record<string, unknown>;
 }) {
-  const payload = input.type === "CARD_ISSUE" ? { portalSearch: "auto", ...input.data } : input.data;
+  const payload = input.type === "CARD_ISSUE" ? { ...input.data, portalSearch: "auto" } : input.data;
   assertSafePayload(payload);
 
   if (useLocalApi) return createLocalOperation({ ...input, data: payload });

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { chromium } from "playwright";
@@ -39,22 +39,24 @@ const config = {
   features: { cardIssue: true, cardIssueActiveUsersPreflight: false }, traceAuth: false,
 };
 
-async function check(name, outcomes, expectedOperator, expectedError, legacy = false, initialPortal = "hapvida", savedOtherPassword) {
+async function check(name, outcomes, expectedOperator, expectedError, legacy = false, initialPortal = "hapvida", savedOtherPassword, options = {}) {
   const repository = new OperationRepository(":memory:");
+  const code = options.companyCode ?? "0TEST";
   const now = new Date().toISOString();
   const operation = { id: `fixture-${name}`, type: "CARD_ISSUE", portal: initialPortal, status: "starting", companyId: "synthetic-company",
-    credentialRef: `${initialPortal}:synthetic-company:login:0TEST`,
-    input: { portalSearch: "auto", contractCode: "0TEST", beneficiaryName: "MARIA DE TESTE", periodStart: "2026-10-01", periodEnd: "2026-10-31" },
+    credentialRef: `${initialPortal}:synthetic-company:login:${code}`,
+    input: { portalSearch: options.searchMode ?? "auto", contractCode: code, beneficiaryName: "MARIA DE TESTE", periodStart: "2026-10-01", periodEnd: "2026-10-31" },
     artifacts: [], createdAt: now, updatedAt: now };
   if (legacy) delete operation.input.portalSearch;
   repository.create(operation);
   const store = new EphemeralCredentialStore();
-  store.put(operation.id, operation.credentialRef, { username: "0TEST", password: "synthetic-password", metadata: { autoPortalCredential: true } }, 60000);
+  store.put(operation.id, operation.credentialRef, { username: code, password: "synthetic-password", metadata: { autoPortalCredential: true } }, 60000);
   const opened = [], savedSessions = [], pdfs = [], credentialsUsed = [];
   const profile = new KoaBrowserProfileManager(config);
   profile.saveSession = async (_context, portal) => { savedSessions.push(portal); };
   const provider = { createContext: async operation => {
     const portal = operation.portal; opened.push(portal);
+    if (options.initialBrowserTimeout && portal === initialPortal) throw new Error("locator.waitFor: Timeout 30000ms exceeded waiting for Acesso rapido");
     const context = await browser.newContext();
     context.setDefaultTimeout(3000); context.setDefaultNavigationTimeout(3000);
     await context.route("**/*", async route => {
@@ -63,7 +65,7 @@ async function check(name, outcomes, expectedOperator, expectedError, legacy = f
       let markup;
       if (url.pathname === "/auth") {
         const input = new URLSearchParams(request.postData());
-        assert.equal(input.get("p_cd_empresa"), "0TEST"); assert.equal(input.get("p_cd_senha"), portal !== initialPortal && savedOtherPassword ? savedOtherPassword : "synthetic-password");
+        assert.equal(input.get("p_cd_empresa"), code); assert.equal(input.get("p_cd_senha"), portal !== initialPortal && savedOtherPassword ? savedOtherPassword : "synthetic-password");
         credentialsUsed.push(portal);
         markup = outcomes[portal] === "rejected" ? html("<p>Identificacao invalida</p>") : period;
       } else if (url.pathname === "/beneficiaries") {
@@ -83,10 +85,14 @@ async function check(name, outcomes, expectedOperator, expectedError, legacy = f
     return { context, page, close: () => context.close() };
   } };
   const workflow = {
-    config, repository, browserManager: new BrowserManager(config, provider, profile), credentialResolver: new ExplicitCredentialResolver(),
-    secretProvider: new OperationScopedSecretProvider(operation.id, store, { get: async ref => { if (savedOtherPassword && !ref.startsWith(`${initialPortal}:`)) return { username: "0TEST", password: savedOtherPassword }; throw new Error("Synthetic saved access missing"); } }),
+    config: { ...config, features: { ...config.features, cardIssueActiveUsersPreflight: options.preflight === true } }, repository, browserManager: new BrowserManager(config, provider, profile), credentialResolver: new ExplicitCredentialResolver(),
+    secretProvider: new OperationScopedSecretProvider(operation.id, store, { get: async ref => { if (savedOtherPassword && !ref.startsWith(`${initialPortal}:`)) return { username: code, password: savedOtherPassword }; throw new Error("Synthetic saved access missing"); } }),
     artifactStorage: { save: async input => {
       pdfs.push(input); validateCardPdfBytes(input.bytes); assert(input.bytes.length > 100);
+      if (process.env.KOA_TEST_PDF_OUTPUT_DIR) {
+        await mkdir(process.env.KOA_TEST_PDF_OUTPUT_DIR, { recursive: true });
+        await writeFile(path.join(process.env.KOA_TEST_PDF_OUTPUT_DIR, `${name}.pdf`), input.bytes);
+      }
       return { storageProvider: "fixture", storagePath: input.fileName, fileName: input.fileName, mimeType: input.mimeType, sizeBytes: input.bytes.length, checksum: "fixture-checksum" };
     } },
     updateStatus: async (status, currentStep) => repository.update(operation.id, { status, currentStep }),
@@ -106,14 +112,18 @@ async function check(name, outcomes, expectedOperator, expectedError, legacy = f
       assert(savedSessions.includes(expectedOperator));
     }
     assert.deepEqual(opened, expectedOperator === initialPortal ? [initialPortal] : [initialPortal, initialPortal === "ndi" ? "hapvida" : "ndi"]);
-    assert.deepEqual(credentialsUsed, opened);
+    assert.deepEqual(credentialsUsed, options.initialBrowserTimeout ? opened.filter(portal => portal !== initialPortal) : opened);
     assert(!JSON.stringify({ operation: repository.get(operation.id), events: repository.getEvents(operation.id) }).includes("synthetic-password"));
-    assert.equal(store.get(operation.id, `${initialPortal}:synthetic-company:login:0TEST`), undefined);
+    assert.equal(store.get(operation.id, `${initialPortal}:synthetic-company:login:${code}`), undefined);
     console.log(JSON.stringify({ case: name, result: "PASS", portals: opened, operator: expectedOperator, pdfs: pdfs.length }));
   } finally { repository.close(); }
 }
 
 try {
+  await check("0gp26-hapvida-menu-timeout-ndi-branded-pdf", { hapvida: "not_found", ndi: "found" }, "ndi", undefined, false, "hapvida", undefined,
+    { companyCode: "0GP26", searchMode: "selected", preflight: true, initialBrowserTimeout: true });
+  await check("old-selected-hapvida-rejected-still-tries-ndi", { hapvida: "rejected", ndi: "found" }, "ndi", undefined, false, "hapvida", undefined, { searchMode: "selected" });
+  await check("old-selected-ndi-rejected-still-tries-hapvida", { hapvida: "found", ndi: "rejected" }, "hapvida", undefined, false, "ndi", undefined, { searchMode: "selected" });
   await check("hapvida-success", { hapvida: "found", ndi: "found" }, "hapvida");
   await check("hapvida-not-found-ndi-pdf", { hapvida: "not_found", ndi: "found" }, "ndi");
   await check("hapvida-rejected-ndi-pdf", { hapvida: "rejected", ndi: "found" }, "ndi");

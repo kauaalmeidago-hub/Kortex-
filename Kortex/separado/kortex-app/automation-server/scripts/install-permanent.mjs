@@ -47,14 +47,19 @@ async function healthy(state) {
       fetch(`${state.appUrl}/health`, { signal: AbortSignal.timeout(2000) }),
       fetch(`${state.workerUrl}/ready`, { signal: AbortSignal.timeout(2000) }),
     ]);
-    return app.ok && (await app.json()).service === "kortex-desktop" && worker.ok;
+    const running = (await worker.json()).cardWorkflow;
+    const expected = await import("../dist/workflows/CardWorkflowRuntime.js");
+    return app.ok && (await app.json()).service === "kortex-desktop" && worker.ok &&
+      expected.isCurrentCardWorkflowRuntime(running);
   } catch { return false; }
 }
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 if (action === "status") {
   const state = readState();
-  console.log(JSON.stringify({ ...(state ?? {}), healthy: await healthy(state) }, null, 2));
+  let workerRuntime;
+  try { workerRuntime = (await (await fetch(`${state.workerUrl}/ready`, { signal: AbortSignal.timeout(2000) })).json()).cardWorkflow; } catch { /* offline or older worker */ }
+  console.log(JSON.stringify({ ...(state ?? {}), requestedRuntimeDirectory: serverDir, workerRuntime, healthy: await healthy(state) }, null, 2));
 } else if (action === "stop" || action === "remove") {
   fs.mkdirSync(runtimeDir, { recursive: true });
   fs.writeFileSync(stopFile, "stop\n");
@@ -72,7 +77,7 @@ if (action === "status") {
       console.log(`O Kortex já está funcionando em segundo plano: ${readState().appUrl}`);
       process.exit(0);
     }
-    throw new Error("Já existe um supervisor ativo. Consulte automation:status antes de instalar novamente.");
+    throw new Error("Já existe um supervisor ativo com código antigo, outra pasta ou serviços indisponíveis. Use automation:status, depois automation:stop e automation:install para ativar o código desta pasta.");
   }
   if (!fs.existsSync(npmCli)) throw new Error("Instale Node.js LTS com npm no computador do worker.");
   console.log("Preparando a instalação permanente, preservando a configuração e as credenciais existentes...");

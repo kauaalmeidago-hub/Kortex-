@@ -36,6 +36,7 @@ export function KoaAuthenticationCard({ defaultCompanyCode, portal, notFoundPort
   return <form autoComplete="off" onSubmit={event => { event.preventDefault(); void submit(); }} className="max-w-[84%] rounded-2xl rounded-bl-md bg-secondary/80 px-4 py-3 text-left shadow-sm">
     <p className="text-sm font-semibold text-foreground">Preciso autenticar o acesso {portalLabel} para continuar.</p>
     <p className="mt-1 text-sm text-muted-foreground">Informe a senha desse código na {portalLabel}. Com “Salvar acesso” ativado, o acesso validado será guardado de forma protegida para as próximas emissões.</p>
+    <p className="mt-2 text-xs text-muted-foreground">O Koa busca em Hapvida e NDI. Se um portal não localizar a carteirinha ou não aceitar o acesso, tentará o outro antes de encerrar a busca.</p>
     {notFoundPortals.length > 0 && <div className="mt-3 rounded-xl border border-border p-3 text-sm">
       <p>O acesso funcionou em {notFoundPortals.map(value => value === "ndi" ? "NDI" : "Hapvida").join(" e ")}, mas o beneficiário não foi encontrado com o nome e período informados. Ainda falta validar o acesso {portalLabel} para concluir a busca.</p>
       {onReviewRequest && <button type="button" disabled={submitting} onClick={onReviewRequest} className="mt-2 text-sm font-semibold text-primary">Revisar nome e período</button>}
