@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const CARD_ISSUE_WORKFLOW_VERSION = 11;
+export const CARD_ISSUE_WORKFLOW_VERSION = 12;
 
 // Capture the files and process at module load, so a git pull cannot relabel a running worker.
 const runtimeDirectory = fileURLToPath(new URL("../../", import.meta.url));
@@ -13,7 +13,8 @@ const extension = codeKind === "source" ? "ts" : "js";
 const codeFingerprint = (() => {
   try {
     const hash = createHash("sha256");
-    for (const file of [`./CardPortalSearch.${extension}`, `./hapvida/emitCard.${extension}`]) {
+    for (const file of [`./CardPortalSearch.${extension}`, `./hapvida/emitCard.${extension}`,
+      `./hapvida/pageObjects/HapvidaCardPage.${extension}`, `./hapvida/cardPreview.${extension}`]) {
       hash.update(file).update("\0").update(readFileSync(new URL(file, import.meta.url), "utf8").replace(/\r\n/g, "\n"));
     }
     return hash.digest("hex");

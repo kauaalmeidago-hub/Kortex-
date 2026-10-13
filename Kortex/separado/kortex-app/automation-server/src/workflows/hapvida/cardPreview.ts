@@ -17,7 +17,8 @@ export async function waitForRenderedCards(page: Page, beneficiaries: CardBenefi
   }
   const expectedOrigin = portalUrl ? new URL(portalUrl).origin : undefined;
   const deadline = Date.now() + timeoutMs;
-  let lastStates: Array<{ document: boolean; matches: boolean[]; unexpected?: boolean; frame: Frame }> = [];
+  let lastStates: Array<{ document: boolean; matches: boolean[]; unexpected?: boolean; frame: Frame;
+    observations?: Array<{ fullName: boolean; namePrefix: boolean; identity: boolean; matched: boolean }> }> = [];
   while (!page.isClosed() && Date.now() < deadline) {
     signal?.throwIfAborted();
     const parentTitle = await page.title().catch(() => "");
@@ -50,7 +51,7 @@ export async function waitForRenderedCards(page: Page, beneficiaries: CardBenefi
             .some(control => visible(control) || Array.from(control.labels ?? []).some(visible) || (control.closest("label") && visible(control.closest("label"))));
           const operationForm = doc.querySelector('input[type="password"]') || selectionForm;
           const portalError = /identificacao\s+invalida|sessao\s+expirada|acesso\s+negado|nao\s+foi\s+possivel\s+(?:emitir|gerar)/.test(text);
-          const matchesBeneficiary = (input: CardBeneficiary) => {
+          const inspectBeneficiary = (input: CardBeneficiary) => {
             const name = normalize(input.beneficiaryName);
             const fullName = new RegExp(`(?:^|[^a-z0-9])${escape(name)}(?:$|[^a-z0-9])`).test(text);
             const prefix = name.split(" ").slice(0, 2).join(" ");
@@ -61,12 +62,15 @@ export async function waitForRenderedCards(page: Page, beneficiaries: CardBenefi
               return digits.length >= 6 && new RegExp(`(?:^|[^0-9])${digits.split("").join("[\\s.\\/-]*")}(?:$|[^0-9])`).test(text);
             });
             // A shortened printed name needs an identifier from the selected row. Homonyms always need it.
-            return input.requireIdentifier ? (fullName || namePrefix) && identity : fullName || (namePrefix && identity);
+            const matched = input.requireIdentifier ? (fullName || namePrefix) && identity : fullName || (namePrefix && identity);
+            return { fullName, namePrefix, identity, matched };
           };
-          const matches = beneficiaries.map(matchesBeneficiary);
+          const observations = beneficiaries.map(inspectBeneficiary);
+          const matches = observations.map(observation => observation.matched);
           const document = cardMarker && !operationForm && !portalError && Boolean(text) &&
             (matches.some(Boolean) || /\bnome\b|\bplano\b|\bvalidade\b|\bcodigo\b/.test(text));
-          return { document, matches: document ? matches : beneficiaries.map(() => false), unexpected: document && excluded.some(matchesBeneficiary) };
+          return { document, matches: document ? matches : beneficiaries.map(() => false), observations: document ? observations : undefined,
+            unexpected: document && excluded.some(input => inspectBeneficiary(input).matched) };
         }, { beneficiaries, parentTitle, excluded });
         return { ...state, frame };
       } catch { return undefined; }
@@ -91,8 +95,21 @@ export async function waitForRenderedCards(page: Page, beneficiaries: CardBenefi
   const matched = beneficiaries.filter((_, index) => lastStates.some(state => state.matches[index])).length;
   const safeDetails = `Documentos legiveis: ${lastStates.filter(state => state.document).length}; beneficiarios confirmados: ${matched}/${beneficiaries.length}; frames examinados: ${lastStates.length}.`;
   if (lastStates.some(state => state.document)) {
-    throw new AutomationError("CARD_VALIDATION_FAILED", "A carteirinha gerada nao corresponde aos dados da selecao.", {
-      safeDetails, step: "validate_card_preview", retryable: false,
+    const missing = beneficiaries.flatMap((beneficiary, index) => {
+      if (lastStates.some(state => state.matches[index])) return [];
+      const observations = lastStates.filter(state => state.document).flatMap(state => state.observations?.[index] ? [state.observations[index]!] : []);
+      const hasName = observations.some(observation => observation.fullName || observation.namePrefix);
+      const hasIdentity = observations.some(observation => observation.identity);
+      const hasIdentifiers = Boolean(beneficiary.cpf || beneficiary.cardIdentifiers?.length);
+      const reason = !hasName ? "nome nao localizado no documento"
+        : !hasIdentity ? hasIdentifiers ? "identificador da selecao nao localizado no documento" : "nome impresso incompleto e selecao sem identificador"
+        : "nome e identificador nao confirmados juntos";
+      const name = beneficiary.beneficiaryName.replace(/[\s\u0000-\u001f\u007f]+/g, " ").trim().slice(0, 160);
+      return [`${name} (${reason})`];
+    });
+    const missingDetails = missing.slice(0, 10).join("; ") + (missing.length > 10 ? `; e mais ${missing.length - 10} beneficiarios` : "");
+    throw new AutomationError("CARD_VALIDATION_FAILED", "O portal nao confirmou todas as carteirinhas selecionadas.", {
+      safeDetails: `${safeDetails} Nao confirmados: ${missingDetails}.`, step: "validate_card_preview", retryable: false,
     });
   }
   throw new AutomationError("CARD_PREVIEW_NOT_FOUND", "O portal nao apresentou uma carteirinha legivel para conferência.", {

@@ -56,6 +56,22 @@ try {
     await page.close();
   }
 
+  for (const test of [
+    { name: "family-dependent-unchecks-holder", holder: '<input id="holder" type="checkbox">', dependent: '<input id="dependent" type="checkbox" onchange="document.getElementById(\'holder\').checked=false">' },
+    { name: "family-radio-keeps-only-dependent", holder: '<input id="holder" type="radio" name="family">', dependent: '<input id="dependent" type="radio" name="family">' },
+    { name: "family-aria-dependent-never-confirms", holder: '<input id="holder" type="checkbox">', dependent: '<span id="dependent" role="checkbox" aria-checked="false" tabindex="0">Selecionar</span>' },
+  ]) {
+    const page = await context.newPage();
+    page.setDefaultTimeout(1500);
+    await page.setContent(`<table><tr><th>Nome</th><th>Selecionar</th></tr>
+      ${row("TITULAR DE TESTE", test.holder)}${row("DEPENDENTE DE TESTE", test.dependent)}</table>${print}`);
+    await assert.rejects(() => new HapvidaCardPage(page, 1500).selectBeneficiaries([
+      { beneficiaryName: "TITULAR DE TESTE" }, { beneficiaryName: "DEPENDENTE DE TESTE" },
+    ], true), error => error.code === "BENEFICIARY_SELECTION_FAILED", test.name);
+    console.log(JSON.stringify({ case: test.name, result: "PASS" }));
+    await page.close();
+  }
+
   const resultRows = table(row(name, box("chosen"))) + print;
   for (const test of [
     { name: "delayed-list", result: resultRows, delay: 100 },

@@ -8,6 +8,7 @@ import { emitCard } from "../dist/workflows/hapvida/emitCard.js";
 const expected = { beneficiaryName: "MARIA DE TESTE" };
 const html = (body) => `<!doctype html><html><head><meta charset="utf-8"><title>Emissao de Carteira Provisória</title></head><body>${body}</body></html>`;
 const card = html("<section><p>Hapvida</p><p>Nome: MARIA DE TESTE</p><p>Codigo: 000000</p><p>Plano: TESTE</p></section>");
+const batch = Array.from({ length: 65 }, (_, index) => ({ beneficiaryName: `BENEFICIARIO DE TESTE ${index + 1}` }));
 const executablePath = process.env.KOA_TEST_BROWSER_EXECUTABLE;
 const browser = await chromium.launch({ headless: true, ...(executablePath
   ? { executablePath } : { channel: process.env.KOA_BROWSER_CHANNEL || "chrome" }) });
@@ -19,7 +20,15 @@ try {
     { name: "real-card-with-print-button", markup: card.replace("</body>", "<button>Imprimir todos</button></body>") },
     { name: "hidden-title-and-visible-heading", markup: html("<h1>Carteira Provisória</h1><p>MARIA DE TESTE</p>") },
     { name: "delayed-card-content", markup: html(`<p id="name"></p><script>setTimeout(() => document.getElementById('name').textContent = 'MARIA DE TESTE', 100);</script>`) },
-    { name: "wrong-beneficiary", markup: html("<p>Nome: JOAO DE TESTE</p>"), error: "CARD_VALIDATION_FAILED" },
+    { name: "wrong-beneficiary", markup: html("<p>Nome: JOAO DE TESTE</p>"), error: "CARD_VALIDATION_FAILED", diagnostic: "MARIA DE TESTE (nome nao localizado no documento)" },
+    { name: "selected-card-number-missing", markup: card, input: { ...expected, cardIdentifiers: ["900000000123"], requireIdentifier: true },
+      error: "CARD_VALIDATION_FAILED", diagnostic: "MARIA DE TESTE (identificador da selecao nao localizado no documento)" },
+    { name: "shortened-name-without-selected-identifier", markup: html("<p>Nome: MARIA DE T</p><p>Plano: TESTE</p>"), error: "CARD_VALIDATION_FAILED",
+      diagnostic: "MARIA DE TESTE (nome impresso incompleto e selecao sem identificador)" },
+    { name: "family-preview-reports-missing-dependent", markup: card, beneficiaries: [expected, { beneficiaryName: "DEPENDENTE DE TESTE" }],
+      error: "CARD_VALIDATION_FAILED", diagnostic: "beneficiarios confirmados: 1/2", missing: "Nao confirmados: DEPENDENTE DE TESTE (nome nao localizado no documento)" },
+    { name: "partial-batch-diagnostic-is-bounded", markup: html(batch.slice(0, 53).map(person => `<section>Nome: ${person.beneficiaryName}<p>Plano: TESTE</p></section>`).join("")),
+      beneficiaries: batch, error: "CARD_VALIDATION_FAILED", diagnostic: "beneficiarios confirmados: 53/65", missing: "e mais 2 beneficiarios", omitted: batch[64].beneficiaryName },
     { name: "title-only", markup: html(""), error: "CARD_PREVIEW_NOT_FOUND" },
     { name: "hidden-beneficiary", markup: html('<p hidden>MARIA DE TESTE</p>'), error: "CARD_PREVIEW_NOT_FOUND" },
     { name: "selection-list", markup: html('<table><tr><td>MARIA DE TESTE</td><td><input type="checkbox"></td></tr></table>'), error: "CARD_PREVIEW_NOT_FOUND" },
@@ -41,7 +50,15 @@ try {
     }
     const preview = new HapvidaCardPage(page, test.error ? 250 : 1500);
     if (test.error) {
-      await assert.rejects(preview.waitForCardPreview(expected), (error) => error.code === test.error);
+      const action = test.beneficiaries ? preview.waitForCardPreviews(test.beneficiaries) : preview.waitForCardPreview(test.input ?? expected);
+      await assert.rejects(action, error => {
+        assert.equal(error.code, test.error);
+        if (test.diagnostic) assert(error.safeDetails?.includes(test.diagnostic), error.safeDetails);
+        if (test.missing) assert(error.safeDetails?.includes(test.missing), error.safeDetails);
+        if (test.omitted) assert(!error.safeDetails?.includes(test.omitted), error.safeDetails);
+        for (const number of test.input?.cardIdentifiers ?? []) assert(!error.safeDetails?.includes(number));
+        return true;
+      });
     } else {
       await preview.waitForCardPreview(expected);
       const pdf = validateCardPdfBytes(await page.pdf({ format: "A4", printBackground: true }));

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { CARD_ISSUE_WORKFLOW_VERSION } from "../dist/workflows/CardWorkflowRuntime.js";
 
 const serverDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "Kortex runtime test com espaços "));
@@ -62,7 +63,7 @@ try {
   });
   console.log("BACKGROUND_WORKER_AND_APP = OK");
   const ready = (await (await fetch(`${state().workerUrl}/ready`)).json()).cardWorkflow;
-  assert.equal(ready.version, 11);
+  assert.equal(ready.version, CARD_ISSUE_WORKFLOW_VERSION);
   assert.equal(ready.processId, state().services.find(service => service.name === "worker").pid);
   assert.equal(path.resolve(ready.runtimeDirectory), fixtureServer);
   assert.match(ready.codeFingerprint, /^[a-f0-9]{64}$/);

@@ -183,8 +183,22 @@ export class HapvidaCardPage {
         else await selection.target.click();
       }
       const permitted: Locator[] = [];
-      for (const input of inputs) permitted.push(...await (await this.findSingleBeneficiaryRow(input)).locator(CONTROL_SELECTOR).all());
-      await this.assertSelectedControls([], permitted);
+      const expected: Locator[] = [];
+      for (const input of inputs) {
+        const controls = await (await this.findSingleBeneficiaryRow(input)).locator(CONTROL_SELECTOR).all();
+        permitted.push(...controls);
+        const selected = [];
+        for (const control of controls) if (await this.isSelected(control)) selected.push(control);
+        // Recheck every row after the last click: a portal handler or radio group can undo an earlier selection.
+        if (controls.length && !selected.length) {
+          throw new AutomationError("BENEFICIARY_SELECTION_FAILED", "O portal nao manteve todos os beneficiarios autorizados selecionados.", {
+            safeDetails: `Selecao nao confirmada: ${input.beneficiaryName}. A impressao foi interrompida antes de gerar as carteirinhas.`,
+            step: "confirm_beneficiary_selection", retryable: true,
+          });
+        }
+        expected.push(...selected);
+      }
+      await this.assertSelectedControls(expected, permitted);
       return inputs;
     }
     const selections = [];

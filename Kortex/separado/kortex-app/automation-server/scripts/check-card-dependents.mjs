@@ -19,7 +19,7 @@ const html = body => `<!doctype html><html><head><meta charset="utf-8"><title>Ca
 const primary = "TITULAR DE TESTE", dependent = "DEPENDENTE DE TESTE", unrelated = "OUTRO TITULAR DE TESTE";
 const cardId = index => String(900000000001 + index);
 
-async function check(label, { portal = "ndi", include = false, change = false, unexpected = false, missing = false, disabled = false, locked = false, noDependentControl = false, requestedDependent = false } = {}) {
+async function check(label, { portal = "ndi", include = false, change = false, unexpected = false, missing = false, disabled = false, locked = false, noDependentControl = false, requestedDependent = false, deselectHolder = false } = {}) {
   const repository = new OperationRepository(":memory:"), store = new EphemeralCredentialStore();
   const portalUrl = `https://${portal === "ndi" ? "sigo.sh.srv.br" : "webhap.hapvida.com.br"}/card`;
   const now = new Date().toISOString();
@@ -42,7 +42,8 @@ async function check(label, { portal = "ndi", include = false, change = false, u
         const list = html(`<table><tr><th>Nome do beneficiário</th><th>Carteirinha</th><th>Tipo</th><th>Matrícula do titular</th><th>Selecionar</th></tr>
           ${people.map((name, index) => `<tr><td>${name}</td><td>${cardId(index)}</td><td>${index === 1 ? "Dependente" : "Titular"}</td><td>${index === 1 ? cardId(0) : ""}</td>
             <td>${noDependentControl && index === 1 ? "" : `<input id="member-${index}" type="checkbox" ${index === 2 ? "checked" : ""} ${(disabled || locked) && index === 1 ? "disabled" : ""}
-              ${index === 0 ? 'onchange="const child=document.getElementById(\'member-1\');if(child)child.checked = this.checked"' : ""}>`}</td></tr>`).join("")}</table>
+              ${index === 0 && !deselectHolder ? 'onchange="const child=document.getElementById(\'member-1\');if(child)child.checked = this.checked"'
+                : index === 1 && deselectHolder ? 'onchange="document.getElementById(\'member-0\').checked=false"' : ""}>`}</td></tr>`).join("")}</table>
           <button id="print">Imprimir selecionados</button><button id="print-all">Imprimir tudo</button><script>
             document.getElementById('print-all').onclick = () => { throw new Error('A family request must never print the whole company'); };
             document.getElementById('print').onclick = async () => {
@@ -100,7 +101,11 @@ async function check(label, { portal = "ndi", include = false, change = false, u
       payload: { confirmationId: before, includeDependents: include } });
     assert.equal(accepted.statusCode, 202, accepted.body); assert.deepEqual(queued, [operation.id]);
     operation = repository.get(operation.id); changed = change;
-    if (missing) {
+    if (deselectHolder) {
+      await assert.rejects(run, error => error.code === "BENEFICIARY_SELECTION_FAILED");
+      assert.equal(actions.length, 0); assert.equal(pdfs.length, 0);
+      assert.equal(repository.getEvents(operation.id).filter(event => event.step === "card_print_requested").length, 0);
+    } else if (missing) {
       await assert.rejects(run, error => error.code === "CARD_VALIDATION_FAILED");
       assert.equal(pdfs.length, 0); assert.notEqual(repository.get(operation.id).status, "success");
     } else {
@@ -126,6 +131,7 @@ async function check(label, { portal = "ndi", include = false, change = false, u
 try {
   for (const portal of ["ndi", "hapvida"]) {
     await check(`${portal}-family-with-authorized-dependent`, { portal, include: true });
+    await check(`${portal}-dependent-unchecks-holder-before-print-blocked`, { portal, include: true, deselectHolder: true });
     await check(`${portal}-family-without-auto-selected-dependent`, { portal, include: false });
     await check(`${portal}-forced-family-delivers-only-primary`, { portal, unexpected: true, locked: true });
     await check(`${portal}-forced-family-delivers-authorized-dependents`, { portal, include: true, locked: true });
