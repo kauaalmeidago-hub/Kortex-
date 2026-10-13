@@ -7,7 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "prestart": "npm run build",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/card-runtime-build.mjs write",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run src",
     "test:card-preview": "npm run build && node scripts/check-card-preview.mjs",
@@ -26,6 +26,7 @@
     "permanent:stop": "node scripts/install-permanent.mjs stop",
     "permanent:remove": "node scripts/install-permanent.mjs remove",
     "permanent:check": "npm run build && node scripts/check-permanent-runtime.mjs",
+    "test:card-runtime-build": "node scripts/check-card-runtime-build.mjs",
     "test:single-card-capture": "npm run build && node scripts/check-single-card-capture.mjs",
     "test:branded-card-delivery": "npm run test:native-card-delivery",
     "test:native-card-delivery": "npm run build && node scripts/check-native-card-delivery.mjs"

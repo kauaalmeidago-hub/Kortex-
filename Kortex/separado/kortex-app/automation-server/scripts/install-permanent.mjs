@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { readCardBuildIdentity } from "./card-runtime-build.mjs";
 
 if (process.platform !== "win32") {
   console.error("A instalação permanente deve ser executada no computador Windows do worker, com o usuário que usa o Kortex.");
@@ -40,6 +41,7 @@ function alive(pid) {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 async function healthy(state) {
+  if (!readCardBuildIdentity(serverDir).current) return false;
   if (!state || !alive(state.supervisorPid) || state.services?.length !== 2 ||
       state.services.some((service) => service.state !== "running" || !alive(service.pid))) return false;
   try {
@@ -59,7 +61,7 @@ if (action === "status") {
   const state = readState();
   let workerRuntime;
   try { workerRuntime = (await (await fetch(`${state.workerUrl}/ready`, { signal: AbortSignal.timeout(2000) })).json()).cardWorkflow; } catch { /* offline or older worker */ }
-  console.log(JSON.stringify({ ...(state ?? {}), requestedRuntimeDirectory: serverDir, workerRuntime, healthy: await healthy(state) }, null, 2));
+  console.log(JSON.stringify({ ...(state ?? {}), requestedRuntimeDirectory: serverDir, cardBuild: readCardBuildIdentity(serverDir), workerRuntime, healthy: await healthy(state) }, null, 2));
 } else if (action === "stop" || action === "remove") {
   fs.mkdirSync(runtimeDir, { recursive: true });
   fs.writeFileSync(stopFile, "stop\n");
@@ -77,7 +79,7 @@ if (action === "status") {
       console.log(`O Kortex já está funcionando em segundo plano: ${readState().appUrl}`);
       process.exit(0);
     }
-    throw new Error("Já existe um supervisor ativo com código antigo, outra pasta ou serviços indisponíveis. Use automation:status, depois automation:stop e automation:install para ativar o código desta pasta.");
+    throw new Error("Já existe um supervisor ativo com código ou compilação antiga, outra pasta ou serviços indisponíveis. Use automation:status, depois automation:stop e automation:install para recompilar e ativar o código desta pasta.");
   }
   if (!fs.existsSync(npmCli)) throw new Error("Instale Node.js LTS com npm no computador do worker.");
   console.log("Preparando a instalação permanente, preservando a configuração e as credenciais existentes...");

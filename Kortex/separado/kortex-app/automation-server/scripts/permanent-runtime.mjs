@@ -5,8 +5,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "../dist/config.js";
 import { ProcessSupervisor } from "../dist/runtime/ProcessSupervisor.js";
+import { readCardBuildIdentity } from "./card-runtime-build.mjs";
 
 const serverDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const cardBuild = readCardBuildIdentity(serverDir);
+if (!cardBuild.current) {
+  throw new Error(`Compilacao do worker desatualizada (${cardBuild.reason}). Execute automation:stop e automation:install na pasta kortex-app antes de emitir carteirinhas.`);
+}
 process.chdir(serverDir);
 const config = loadConfig();
 const runtimeDir = path.join(process.env.LOCALAPPDATA ?? path.join(os.homedir(), ".local", "share"), "Kortex", "Runtime");

@@ -198,6 +198,8 @@ npm run automation:remove
 
 Para instalar uma futura alteracao de codigo ou configuracao, aguarde a operacao atual terminar, execute `automation:stop`, atualize com `git pull` e rode `automation:install` novamente. A instalacao ativa nao e substituida durante uma emissao.
 
+O build registra em `dist/card-workflow-build.json` as assinaturas dos fontes e dos arquivos compilados do backend. O instalador e a inicializacao permanente verificam esse registro antes de aceitar ou iniciar uma compilacao. Um `git pull` sem recompilar, arquivos compilados alterados ou uma instalacao antiga sem esse registro deixam `healthy: false`; a inicializacao permanente pede `automation:stop` e `automation:install`. `automation:status` mostra `cardBuild.current`, `sourceVersion` e `compiledVersion`. A versao 14 precisa apresentar `cardBuild.current: true`, fontes/compilacao/worker na versao 14 e `healthy: true`. O commit do Git, sozinho, nao confirma a versao em execucao.
+
 ```bash
 npm run automation:check-runtime
 ```

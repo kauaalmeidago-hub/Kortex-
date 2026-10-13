@@ -6,13 +6,16 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { CARD_ISSUE_WORKFLOW_VERSION } from "../dist/workflows/CardWorkflowRuntime.js";
+import { readCardBuildIdentity } from "./card-runtime-build.mjs";
 
 const serverDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "Kortex runtime test com espaços "));
 const fixtureServer = path.join(dir, "app", "automation-server");
 fs.mkdirSync(path.join(fixtureServer, "scripts"), { recursive: true });
 fs.cpSync(path.join(serverDir, "dist"), path.join(fixtureServer, "dist"), { recursive: true });
+fs.cpSync(path.join(serverDir, "src"), path.join(fixtureServer, "src"), { recursive: true });
 fs.copyFileSync(path.join(serverDir, "scripts", "permanent-runtime.mjs"), path.join(fixtureServer, "scripts", "permanent-runtime.mjs"));
+fs.copyFileSync(path.join(serverDir, "scripts", "card-runtime-build.mjs"), path.join(fixtureServer, "scripts", "card-runtime-build.mjs"));
 fs.symlinkSync(path.join(serverDir, "node_modules"), path.join(fixtureServer, "node_modules"), "junction");
 fs.writeFileSync(path.join(fixtureServer, "package.json"), '{"type":"module"}');
 fs.mkdirSync(path.join(dir, "app", "dist"));
@@ -71,6 +74,20 @@ try {
   assert(identity.isCurrentCardWorkflowRuntime(ready));
   assert(!identity.isCurrentCardWorkflowRuntime({ ...ready, runtimeDirectory: serverDir }));
   console.log("RUNTIME_CODE_AND_FOLDER_IDENTITY = OK");
+  assert(readCardBuildIdentity(fixtureServer).current);
+  const source = path.join(fixtureServer, "src", "workflows", "CardPortalSearch.ts");
+  const originalSource = fs.readFileSync(source, "utf8");
+  fs.appendFileSync(source, "\n// Simula git pull mantendo dist e processo antigos.\n");
+  // The old compiled-only comparison still passes, which reproduced the installer bug.
+  assert(identity.isCurrentCardWorkflowRuntime(ready));
+  assert.equal(readCardBuildIdentity(fixtureServer).reason, "SOURCE_CHANGED_SINCE_BUILD");
+  console.log("OLD_COMPILED_ONLY_HEALTH_FALSE_POSITIVE_REPRODUCED = OK");
+  const before = state();
+  const obsolete = launch();
+  assert.equal(await new Promise(resolve => obsolete.once("exit", resolve)), 1);
+  assert.deepEqual(state().services.map(service => service.pid), before.services.map(service => service.pid));
+  fs.writeFileSync(source, originalSource);
+  console.log("STALE_BUILD_START_BLOCKED_WITHOUT_TOUCHING_RUNNING_SERVICES = OK");
   const first = state();
   const duplicate = launch();
   const duplicateExit = await new Promise((resolve) => duplicate.once("exit", resolve));

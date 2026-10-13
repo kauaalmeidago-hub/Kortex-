@@ -25,6 +25,24 @@ const login = html(`<form id="cd_form_login_emp" action="/auth" method="post">
   <label for="p_cd_empresa">Empresa</label><input id="p_cd_empresa" name="p_cd_empresa">
   <label for="p_cd_senha">Senha</label><input type="password" id="p_cd_senha" name="p_cd_senha">
   <button type="submit" id="btn_entrar">OK</button></form>`);
+// Public Hapvida login structure observed on 2026-10-13. The verification API
+// below is entirely synthetic; every request stays intercepted by this fixture.
+const hapvidaLegacyLogin = html(`<form id="cd_form_login_emp" action="pk_carteira_provisoria.login_empresa_proc" method="post">
+  <table><tr><td>Empresa</td><td><input id="p_cd_empresa" name="p_cd_empresa" type="text"></td></tr>
+  <tr><td>Senha</td><td><input id="p_cd_senha" name="p_cd_senha" type="password"></td></tr></table>
+  <input id="pTokenCaptcha" name="pTokenCaptcha" type="hidden">
+  <input id="btn_entrar" type="button" value="OK"></form>
+  <script>
+    window.grecaptcha = {ready: callback => setTimeout(callback, 25),
+      execute: () => new Promise(resolve => setTimeout(() => resolve('synthetic-verification-token'), 25))};
+    document.getElementById('btn_entrar').addEventListener('click', event => {
+      event.preventDefault();
+      grecaptcha.ready(() => grecaptcha.execute('synthetic-site-key', {action:'pk_carteira_provisoria2'}).then(token => {
+        document.getElementById('pTokenCaptcha').value = token;
+        document.forms['cd_form_login_emp'].submit();
+      }));
+    });
+  </script>`);
 const period = html(`<h1>Datas de adesão</h1><form action="/beneficiaries" method="get">
   <label for="start">Data inicial</label><input id="start" name="start">
   <label for="end">Data final</label><input id="end" name="end">
@@ -65,9 +83,11 @@ async function check(name, outcomes, expectedOperator, expectedError, legacy = f
       const request = route.request(), url = new URL(request.url());
       assert.equal(url.hostname, new URL(urls[portal]).hostname);
       let markup;
-      if (url.pathname === "/auth") {
+      if (url.pathname === "/auth" || url.pathname === "/pls/webhap/pk_carteira_provisoria.login_empresa_proc") {
+        assert.equal(request.method(), "POST");
         const input = new URLSearchParams(request.postData());
         assert.equal(input.get("p_cd_empresa"), code); assert.equal(input.get("p_cd_senha"), portal !== initialPortal && savedOtherPassword ? savedOtherPassword : "synthetic-password");
+        if (options.hapvidaLegacyForm && portal === "hapvida") assert.equal(input.get("pTokenCaptcha"), "synthetic-verification-token");
         credentialsUsed.push(portal);
         markup = outcomes[portal] === "rejected" ? html("<p>Identificacao invalida</p>") : period;
       } else if (url.pathname === "/beneficiaries") {
@@ -80,7 +100,7 @@ async function check(name, outcomes, expectedOperator, expectedError, legacy = f
               document.getElementById('print').onclick = () => { const target = window.open('about:blank');
                 target.document.write(${JSON.stringify(card)}); target.document.close(); };
             </script>`);
-      } else { assert.equal(url.href, urls[portal]); markup = login; }
+      } else { assert.equal(url.href, urls[portal]); markup = options.hapvidaLegacyForm && portal === "hapvida" ? hapvidaLegacyLogin : login; }
       await route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: markup });
     });
     const page = await context.newPage();
@@ -134,6 +154,12 @@ async function check(name, outcomes, expectedOperator, expectedError, legacy = f
 }
 
 try {
+  await check("hapvida-current-login-async-button-native-pdf", { hapvida: "found", ndi: "found" }, "hapvida", undefined, false, "hapvida", undefined,
+    { companyCode: "0BLTL", preflight: true, hapvidaLegacyForm: true });
+  await check("hapvida-current-login-rejected-falls-back-to-ndi", { hapvida: "rejected", ndi: "found" }, "ndi", undefined, false, "hapvida", undefined,
+    { hapvidaLegacyForm: true });
+  await check("ndi-rejected-hapvida-current-login-native-pdf", { hapvida: "found", ndi: "rejected" }, "hapvida", undefined, false, "ndi", undefined,
+    { hapvidaLegacyForm: true });
   await check("0gp26-hapvida-menu-timeout-ndi-native-pdf", { hapvida: "not_found", ndi: "found" }, "ndi", undefined, false, "hapvida", undefined,
     { companyCode: "0GP26", searchMode: "selected", preflight: true, initialBrowserTimeout: true });
   await check("0bjqn-hapvida-menu-timeout-ndi-rejected", { hapvida: "not_found", ndi: "rejected" }, undefined, "CARD_PORTAL_SEARCH_INCOMPLETE",
