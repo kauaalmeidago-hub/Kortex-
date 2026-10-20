@@ -72,7 +72,7 @@ export async function signup(req, res, admin, auth) {
 }
 export async function resolveConnection(req, admin, auth, who, create = false) {
   if (who.temporary) {
-    if (!['status', 'prepare', 'renew'].includes(req.query.action)) throw new HttpError(403, 'ONBOARDING_ONLY', 'Conclua a confirmação do e-mail para acessar o Chat.');
+    if (!['status', 'prepare', 'renew', 'complete'].includes(req.query.action)) throw new HttpError(403, 'ONBOARDING_ONLY', 'Conecte seu WhatsApp para acessar o Chat.');
     const c = await checked(admin.from('wa_connections').select('*').eq('owner_id', who.user.id).is('activated_at', null).maybeSingle());
     if (!c) throw new HttpError(401, 'ONBOARDING_EXPIRED', 'Entre na sua conta para recuperar a conexão.');
     await rateLimit(admin, 'onboarding:' + who.user.id, 120, 300);
@@ -112,6 +112,43 @@ async function saveConnection(admin, c, patch) {
 }
 async function providerState(c) {
   return evolution('/instance/connectionState/' + encodeURIComponent(c.instance_name));
+}
+export async function completeOnboarding(req, res, admin, auth, c, readProvider = providerState) {
+  if (!c) throw new HttpError(401, 'ONBOARDING_EXPIRED', 'Retome o cadastro desta conta.');
+  const result = await locked(admin, c, async () => {
+    // Recheck the single-use creation grant inside the connection lease. No
+    // browser-supplied user ID, email, sector or connected flag is authority.
+    const who = await identity(req, admin, auth);
+    if (!who.temporary || c.owner_id !== who.user.id || c.activated_at)
+      throw new HttpError(403, 'ONBOARDING_ONLY', 'Retome o cadastro desta conta.');
+    if (c.state !== 'connected' || !c.phone_jid || (await readProvider(c)).instance?.state !== 'open')
+      throw new HttpError(409, 'PAIRING_REQUIRED', 'Conecte seu WhatsApp antes de abrir a plataforma.');
+    const account = await admin.auth.admin.getUserById(who.user.id);
+    const user = account.data?.user;
+    if (account.error || !user?.email || user.id !== who.user.id)
+      throw new HttpError(401, 'ONBOARDING_EXPIRED', 'Entre na sua conta para continuar.');
+    // WhatsApp pairing replaces the email step only for this proven new
+    // account; the project's other authentication flows remain unchanged.
+    const confirmed = await admin.auth.admin.updateUserById(user.id, {
+      email_confirm: true, app_metadata: { ...user.app_metadata, kortex_onboarding: 'whatsapp' },
+    });
+    if (confirmed.error) throw new HttpError(503, 'ONBOARDING_RETRY', 'Não foi possível liberar sua conta. Tente novamente.');
+    const link = await admin.auth.admin.generateLink({ type: 'magiclink', email: user.email });
+    if (link.error || link.data?.user?.id !== user.id || !link.data?.properties?.hashed_token)
+      throw new HttpError(503, 'ONBOARDING_RETRY', 'Não foi possível iniciar sua sessão. Tente novamente.');
+    // Exchange the server-generated one-time token here, without emailing it
+    // or placing credentials in URLs, browser history or navigation state.
+    const verified = await auth.auth.verifyOtp({ type: 'email', token_hash: link.data.properties.hashed_token });
+    const session = verified.data?.session;
+    if (verified.error || session?.user?.id !== user.id || !session.access_token || !session.refresh_token)
+      throw new HttpError(503, 'ONBOARDING_RETRY', 'Não foi possível iniciar sua sessão. Tente novamente.');
+    await checked(admin.from('wa_onboarding').update({ revoked_at: new Date().toISOString() })
+      .eq('user_id', user.id).eq('token_hash', hash(onboardingCookie(req))).is('revoked_at', null));
+    return { session: { access_token: session.access_token, refresh_token: session.refresh_token } };
+  });
+  if (!result.session) throw new HttpError(409, 'CONNECTION_BUSY', 'A conexão está sendo atualizada. Tente novamente em instantes.');
+  setOnboardingCookie(res, null);
+  return result;
 }
 export async function connectionState(admin, c, prepare = false, renew = false) {
   if (!c) return { state: 'disconnected', id: null, emailPending: false };

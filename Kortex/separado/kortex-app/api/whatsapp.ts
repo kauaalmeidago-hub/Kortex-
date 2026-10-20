@@ -1,5 +1,5 @@
 import { HttpError } from '../server/whatsapp/core.mjs';
-import { clients, checked, signup, identity, resolveConnection, connectionState, publicConnection, setOnboardingCookie, rateLimit } from '../server/whatsapp/service.mjs';
+import { clients, checked, signup, identity, resolveConnection, connectionState, completeOnboarding, publicConnection, setOnboardingCookie, rateLimit } from '../server/whatsapp/service.mjs';
 import { conversation, send, markRead, media } from '../server/whatsapp/chat.mjs';
 import { evolution } from '../server/whatsapp/evolution.mjs';
 
@@ -22,15 +22,16 @@ export default async function handler(req, res) {
     if (action === 'signup') return res.status(200).json(await signup(req, res, admin, auth));
     const who = await identity(req, admin, auth);
     await rateLimit(admin, 'connection:' + who.user.id, 300, 300);
-    if (['prepare', 'renew', 'activate'].includes(action)) await rateLimit(admin, 'pairing:' + who.user.id, 12, 60);
+    if (['prepare', 'renew', 'activate', 'complete'].includes(action)) await rateLimit(admin, 'pairing:' + who.user.id, 12, 60);
     const c = await resolveConnection(req, admin, auth, who, ['prepare', 'renew', 'activate'].includes(action));
+    if (action === 'complete') return res.status(200).json(await completeOnboarding(req, res, admin, auth, c));
     if (['status', 'prepare', 'renew', 'activate'].includes(action)) {
       const updated = c ? await connectionState(admin, c, action !== 'status', action === 'renew') : null;
       if (!who.temporary && updated?.state === 'connected') await checked(admin.from('wa_connections').update({ onboarding_required: false }).eq('id', updated.id));
       if (!who.temporary && c) setOnboardingCookie(res, null);
       return res.status(200).json(updated ? publicConnection(updated, who.temporary) : { id: null, state: 'disconnected' });
     }
-    if (who.temporary || !c?.activated_at) throw new HttpError(403, 'AUTH_REQUIRED', 'Confirme o e-mail e entre para acessar o Chat.');
+    if (who.temporary || !c?.activated_at) throw new HttpError(403, 'AUTH_REQUIRED', 'Conecte seu WhatsApp e entre para acessar o Chat.');
     await rateLimit(admin, 'chat:' + who.user.id, 240, 60);
     const b = req.body ?? {};
     if (action === 'conversations') return res.status(200).json(await checked(admin.from('wa_conversations').select('*').eq('connection_id', c.id).order('last_message_at', { ascending: false, nullsFirst: false }).limit(250)));

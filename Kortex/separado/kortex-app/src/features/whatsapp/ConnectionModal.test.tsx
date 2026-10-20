@@ -15,11 +15,12 @@ describe('WhatsApp pairing modal with mocked transport', () => {
     expect(screen.getAllByRole('img')).toHaveLength(1);
     expect(waRequest).toHaveBeenCalledWith('prepare', expect.objectContaining({ temporary: true, body: {} }));
   });
-  it('removes QR and explains pending email confirmation after provider connection', async () => {
+  it('removes QR after confirmed pairing without asking for email verification', async () => {
     vi.mocked(waRequest).mockResolvedValue({ id: 'test', state: 'connected', emailPending: true });
     const proceed = vi.fn();
     render(<ConnectionModal open onOpenChange={vi.fn()} onContinue={proceed} temporary />);
-    expect(await screen.findByText('WhatsApp conectado. Confirme seu e-mail para continuar.')).toBeInTheDocument();
+    expect((await screen.findAllByText('WhatsApp conectado')).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Confirme seu e-mail/)).not.toBeInTheDocument();
     expect(screen.queryByRole('img')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Prosseguir/ })); expect(proceed).toHaveBeenCalledOnce();
   });

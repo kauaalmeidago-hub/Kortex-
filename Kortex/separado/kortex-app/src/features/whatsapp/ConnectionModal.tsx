@@ -15,9 +15,9 @@ export const connectionLabels: Record<WaConnection['state'], string> = {
   preparing: 'Preparando conexão', qr: 'Aguardando leitura do QR Code', connecting: 'Conectando ao WhatsApp', connected: 'WhatsApp conectado',
   expired: 'QR Code expirado', disconnected: 'WhatsApp desconectado', error: 'Não foi possível conectar',
 };
-export default function ConnectionModal({ open, onOpenChange, scope, temporary = false, onContinue, onConnected }: {
+export default function ConnectionModal({ open, onOpenChange, scope, temporary = false, onContinue, onConnected, continuing = false, continueError = '' }: {
   open: boolean; onOpenChange: (open: boolean) => void; scope?: WaScope; temporary?: boolean;
-  onContinue: () => void; onConnected?: (c: WaConnection) => void;
+  onContinue: () => void; onConnected?: (c: WaConnection) => void; continuing?: boolean; continueError?: string;
 }) {
   const [connection, setConnection] = useState<WaConnection>({ id: null, state: 'preparing' });
   const [error, setError] = useState('');
@@ -68,16 +68,17 @@ export default function ConnectionModal({ open, onOpenChange, scope, temporary =
                   <div className="wa-qr-state">{connected ? <CheckCircle2 size={52} /> : busy || connection.state === 'connecting' ? <Loader2 className="wa-spinner" size={40} /> : <QrCode size={48} />}
                     <span>{connectionLabels[connection.state]}</span></div>}
               </div>
-              <div className="wa-status" role="status" aria-live="polite">{connected && connection.emailPending ? 'WhatsApp conectado. Confirme seu e-mail para continuar.' : connectionLabels[connection.state]}</div>
+              <div className="wa-status" role="status" aria-live="polite">{continuing ? 'Abrindo sua área de trabalho...' : connectionLabels[connection.state]}</div>
               <p className="wa-hint">{connected ? 'Seu pareamento será preservado ao sair desta tela.' : 'Abra o WhatsApp no seu celular e faça a leitura do QR Code para conectar.'}</p>
               {error && <p className="wa-error" role="alert">{error}</p>}
+              {continueError && <p className="wa-error" role="alert">{continueError}</p>}
               {['error', 'expired', 'disconnected'].includes(connection.state) && <button type="button" className="wa-secondary" disabled={busy} onClick={() => { requestAction.current = 'renew'; setAttempt(n => n + 1); }}><RefreshCw size={15} />{connection.state === 'expired' ? 'Gerar novo QR Code' : 'Tentar novamente'}</button>}
             </div>
           </section>
           <section className="wa-instructions" aria-labelledby="wa-how">
             <h2 id="wa-how">Como conectar?</h2>
             <ol>{steps.map(([title, description], i) => <li key={title}><span className="wa-step">{i + 1}</span><div><h3>{title}</h3><p>{description}</p></div></li>)}</ol>
-            <button type="button" className="wa-primary" disabled={!connected} onClick={onContinue}>Prosseguir para a plataforma <ArrowRight size={17} /></button>
+            <button type="button" className="wa-primary" disabled={!connected || continuing} onClick={onContinue}>{continuing ? 'Abrindo plataforma...' : 'Prosseguir para a plataforma'} <ArrowRight size={17} /></button>
           </section>
         </div>
       </Dialog.Content>
