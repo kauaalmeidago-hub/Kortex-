@@ -1,0 +1,12 @@
+**
+!server/
+!server/whatsapp/
+!server/whatsapp/*.mjs
+server/whatsapp/*.test.mjs
+!scripts/
+!scripts/whatsapp/
+!scripts/whatsapp/worker-health.mjs
+!deploy/
+!deploy/whatsapp-chat/
+!deploy/whatsapp-chat/relay-worker/
+!deploy/whatsapp-chat/relay-worker/package*.json

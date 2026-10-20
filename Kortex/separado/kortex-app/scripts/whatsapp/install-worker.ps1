@@ -29,12 +29,12 @@ Set-Location -LiteralPath $appRoot
 if ($LASTEXITCODE -ne 0) { throw 'A verificacao do worker falhou. Confira a Evolution, as variaveis privadas e a migracao deste ambiente.' }
 New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
 $runnerPath = Join-Path $PSScriptRoot 'run-worker.ps1'
-$taskArguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $runnerPath + '" -NodePath "' + $nodePath + '" -AppRoot "' + $appRoot + '" -EnvFile "' + $workerEnvPath + '" -LogFile "' + $logFile + '"'
+$taskArguments = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $runnerPath + '" -NodePath "' + $nodePath + '" -AppRoot "' + $appRoot + '" -EnvFile "' + $workerEnvPath + '" -LogFile "' + $logFile + '"'
 $taskAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $taskArguments -WorkingDirectory $appRoot
 $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
 $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
 $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 if ($existing) { Stop-ScheduledTask -TaskName $taskName }
 Register-ScheduledTask -TaskName $taskName -Action $taskAction -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
