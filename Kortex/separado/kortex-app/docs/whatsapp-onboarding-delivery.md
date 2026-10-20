@@ -22,7 +22,7 @@ Implementação preparada sobre a fonte atual de `Kortex/separado/kortex-app`, p
 
 `api/whatsapp.ts` e `api/whatsapp-webhook.ts` são funções do projeto Vercel. As sessões de dispositivo permanecem na infraestrutura da Evolution, nunca no disco temporário dessas funções.
 
-O adaptador foi conferido contra o código oficial da Evolution **2.3.7**, versão fixada na infraestrutura Docker encontrada. Essa versão ainda precisa ser confirmada no servidor real: o adaptador recusa criar instâncias se a versão não corresponder.
+O adaptador foi conferido contra o código oficial da Evolution **2.3.7**, versão fixada na infraestrutura Docker encontrada e confirmada na resposta real do servidor local após iniciar o Docker. O adaptador recusa criar instâncias se a versão não corresponder.
 
 Cada conexão possui proprietário, organização e setor. A API valida o usuário no Supabase e consulta os vínculos de `business_contexts`; o setor editável do perfil não concede acesso. Não existe instância global. O banco impede vincular silenciosamente o mesmo número conectado a outra conta. Compartilhamento adicional entre operadores não foi introduzido.
 
@@ -47,6 +47,7 @@ Configurar separadamente em preview e produção:
 | `SUPABASE_PUBLISHABLE_KEY` | Cliente público usado pelo backend para validar o usuário |
 | `EVOLUTION_API_URL` ou `EVOLUTION_API_BASE_URL` | Endereço HTTPS do servidor persistente |
 | `EVOLUTION_API_KEY` | Credencial privada da Evolution |
+| `EVOLUTION_REQUEST_ORIGIN` | Origem explicitamente aceita pelo CORS do servidor, se ele recusar requisições sem `Origin`; configurada no backend, nunca recebida livremente do navegador |
 | `EVOLUTION_WEBHOOK_SECRET` | Header secreto configurado nas novas instâncias |
 | `WHATSAPP_WEBHOOK_URL` | URL HTTPS de `/api/whatsapp-webhook` no ambiente correto |
 | `APP_ORIGIN` | Origem do portal em produção; previews também aceitam seu `VERCEL_URL` |
@@ -83,15 +84,15 @@ Migrações novas, aplicadas somente ao projeto staging `ukahtcymdcjphvptjamz`:
 - Verificação HTTP do preview com uma conta não confirmada criada no Supabase staging real: acesso sem autenticação recusado; token temporário impedido de acessar conversas, arquivos, envio e desconexão; tokens alterados/expirados recusados; novo cadastro do mesmo e-mail não assume a conexão existente. A tentativa de preparar o QR retorna `503 PROVIDER_NOT_CONFIGURED`, sem QR ou sucesso fictício. As contas de teste foram removidas. Evidências em `outputs/whatsapp/preview-smoke.json`.
 - TypeScript sem erros. Lint dos arquivos novos e das mudanças de autenticação sem erros; `InboxPage.tsx` mantém um aviso anterior de dependência de efeito no painel operacional KOA.
 
-O endereço encontrado na configuração legada foi `http://localhost:8081`, com conexão recusada. O worker administrativo existente usa `http://evolution-api:8080`, um nome interno de rede Docker. O Docker estava sem daemon disponível na inspeção. Iniciar o aplicativo Docker não comprova acesso HTTPS, persistência e disponibilidade externa. Não foi encontrado um servidor Evolution público configurado para o portal, nem acesso verificado a uma VPS onde instalar o novo worker.
+O endereço encontrado na configuração legada foi `http://localhost:8081`, inicialmente com conexão recusada. O worker administrativo existente usa `http://evolution-api:8080`, um nome interno de rede Docker. Após iniciar o Docker existente, os containers da Evolution 2.3.7, PostgreSQL e Redis ficaram disponíveis localmente. O servidor recusava chamadas sem uma origem aceita pelo CORS; utilizando sua configuração autorizada, o endpoint real respondeu `200` com versão `2.3.7`. O adaptador suporta essa origem como configuração privada. Essa verificação não comprova pareamento pelo portal nem acesso externo: não foi encontrado um servidor Evolution público configurado com HTTPS para a Vercel, nem acesso verificado a uma VPS onde instalar o novo worker.
 
 Para concluir a homologação, faltam: servidor Evolution operacional/persistente com HTTPS, credenciais privadas correspondentes, webhook atingível pelo provedor, worker ativo e leitura física do QR com conta/número de teste autorizado. Depois disso devem ser homologados pareamento, retorno do e-mail, histórico, recebimento, envio, anexos, áudio, queda/reconexão e troca de setor na integração real. Somente então aplicar as migrações em produção e publicar o build verificado no domínio `kortex-usuarios.vercel.app`.
 
 ## Publicação e fonte
 
 - Branch da entrega: `codex/whatsapp-onboarding`. A sincronização inclui a fonte atual da interface e as migrações locais anteriores necessárias a ela; os arquivos de automação locais fora desse escopo foram preservados.
-- Preview: [modal e onboarding](https://kortex-usuarios-rh5yytg9h-kauaalmeidago-hubs-projects.vercel.app/auth/whatsapp).
-- Deployment: `dpl_HuCm3XKMyCdM2SDuUBkbVVqyrNV2`, estado final `READY`, projeto `kortex-usuarios`, ambiente preview, Supabase `ukahtcymdcjphvptjamz`.
+- Preview: [modal e onboarding](https://kortex-usuarios-5fzza6xum-kauaalmeidago-hubs-projects.vercel.app/auth/whatsapp).
+- Deployment: `dpl_CHyrY6mJH8qYtWW1aUeBpbatxoSY`, estado final `READY`, projeto `kortex-usuarios`, ambiente preview, Supabase `ukahtcymdcjphvptjamz`.
 - O preview mantém a autenticação de proteção da Vercel e requer acesso ao projeto para ser aberto. O smoke usa o acesso autenticado da CLI.
 - Produção continua no deployment existente `dpl_Co5quHhHJLm1W8WuwPtC2RTkxCRR`, estado `READY`, associado ao domínio informado pelo usuário. As migrações e o novo Chat desta entrega não foram publicados nesse ambiente, pois a integração real ainda depende dos itens acima.
 

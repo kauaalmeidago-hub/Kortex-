@@ -8,12 +8,14 @@ export function evolutionConfig(env = process.env) {
   const base = new URL(url), webhook = new URL(env.WHATSAPP_WEBHOOK_URL);
   if (base.protocol !== 'https:' || webhook.protocol !== 'https:')
     throw new HttpError(503, 'PROVIDER_HTTPS_REQUIRED', 'O serviço de pareamento precisa de um endereço HTTPS.');
-  return { base: base.toString().replace(/\/$/, ''), key: env.EVOLUTION_API_KEY, secret: env.EVOLUTION_WEBHOOK_SECRET, webhook: webhook.toString() };
+  const origin = env.EVOLUTION_REQUEST_ORIGIN;
+  if (origin && new URL(origin).origin !== origin) throw new HttpError(503, 'PROVIDER_ORIGIN', 'Confira a origem autorizada no servidor de pareamento.');
+  return { base: base.toString().replace(/\/$/, ''), key: env.EVOLUTION_API_KEY, secret: env.EVOLUTION_WEBHOOK_SECRET, webhook: webhook.toString(), origin };
 }
 export async function evolution(path, body, method = body === undefined ? 'GET' : 'POST', env = process.env) {
   const c = evolutionConfig(env);
   let response;
-  try { response = await fetch(c.base + path, { method, headers: { apikey: c.key, 'Content-Type': 'application/json' },
+  try { response = await fetch(c.base + path, { method, headers: { apikey: c.key, 'Content-Type': 'application/json', ...(c.origin ? { Origin: c.origin } : {}) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }), redirect: 'error', signal: AbortSignal.timeout(20000) }); }
   catch { throw new HttpError(503, 'PROVIDER_UNAVAILABLE', 'O servidor do WhatsApp não respondeu. Tente novamente em instantes.'); }
   if (!response.ok) throw new HttpError(response.status === 404 ? 404 : 502, 'PROVIDER_REJECTED', 'Não foi possível concluir a operação com o WhatsApp.');
