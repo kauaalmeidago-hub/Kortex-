@@ -1,0 +1,28 @@
+import fs from 'node:fs/promises';
+import {createRequire} from 'node:module';
+import {randomUUID} from 'node:crypto';
+import assert from 'node:assert/strict';
+import {stagingConfiguration,stagingReference} from './staging-preflight.mjs';
+const require=createRequire(new URL('../../package.json',import.meta.url));const {createClient}=require('@supabase/supabase-js');
+const {env}=await stagingConfiguration({requireDatabase:false});const f=JSON.parse(await fs.readFile('tmp/staging-fixtures.json','utf8'));assert.equal(f.project,stagingReference);
+const proof=JSON.parse(await fs.readFile('outputs/isolation/task-batches-staging-checks.json','utf8'));
+const ok=r=>{if(r.error)throw Error(r.error.code+': '+r.error.message);return r.data;};const clients={};
+for(const name of ['A','A2','D']){const c=createClient(env.VITE_SUPABASE_URL,env.VITE_SUPABASE_PUBLISHABLE_KEY,{auth:{persistSession:false,autoRefreshToken:false}});ok(await c.auth.signInWithPassword({email:f.users[name].email,password:f.password}));clients[name]=c;}
+const tasks=ok(await clients.A2.from('tasks').select('*').in('id',proof.confirmedTasks.map(x=>x.task_id)));assert.equal(tasks.length,1);const task=tasks[0];
+const draftId=proof.confirmedTasks.find(d=>d.task_id===task.id).draft_id;
+const before=ok(await clients.A.from('task_drafts').select('*').eq('id',draftId))[0];assert.ok(before);
+ok(await clients.A2.rpc('business_save_task',{p_board:task.board_id,p_request:randomUUID(),p_id:task.id,p_updated:task.updated_at,p_payload:{title:'Homologação · atualização privada do responsável',description:'Conteúdo novo da tarefa, indisponível ao encaminhador.',company_id:task.company_id??'',operator:task.operator??'',project:task.project??'',operational_code:task.operational_code??'',due_date:task.due_date.slice(0,10),priority:task.priority,stage_id:task.stage_id}}));
+assert.equal(ok(await clients.A.from('tasks').select('id').eq('id',task.id)).length,0);
+assert.equal(ok(await clients.D.from('task_drafts').select('id').eq('id',draftId)).length,0);
+const after=ok(await clients.A.from('task_drafts').select('*').eq('id',draftId))[0];assert.deepEqual(after.payload,before.payload);
+const receipt=ok(await clients.A.rpc('task_confirm_batch',{p_conversation:proof.conversation,p_items:[{id:draftId,version:before.version}]}));assert.deepEqual(receipt,[{draft_id:draftId,task_id:task.id}]);
+assert.ok(!JSON.stringify(after).includes('atualização privada do responsável'));
+const original=ok(await clients.A.from('tasks').select('*').in('id',proof.confirmedTasks.map(x=>x.task_id)))[0];assert.ok(original);
+const conversation=ok(await clients.A.rpc('business_start_conversation',{p_board:original.board_id,p_id:randomUUID()}));
+const draft=ok(await clients.A.rpc('task_save_draft',{p_conversation:conversation.id,p_id:randomUUID(),p_version:0,p_target:original.id,p_payload:{title:original.title,description:original.description??'',board_id:original.board_id,sector_id:original.sector_id,assigned_to:f.users.A2.id,company_id:original.company_id??'',operator:original.operator??'',project:original.project??'',operational_code:original.operational_code??'',due_date:original.due_date.slice(0,10),priority:original.priority,stage_id:original.stage_id,unresolved:[]}}));
+const reassigned=ok(await clients.A.rpc('task_confirm_batch',{p_conversation:conversation.id,p_items:[{id:draft.id,version:draft.version}]}));assert.deepEqual(reassigned,[{draft_id:draft.id,task_id:original.id}]);
+assert.deepEqual(ok(await clients.A.rpc('task_confirm_batch',{p_conversation:conversation.id,p_items:[{id:draft.id,version:draft.version}]})),reassigned);
+assert.equal(ok(await clients.A.from('tasks').select('id').eq('id',original.id)).length,0);
+assert.equal(ok(await clients.A2.from('tasks').select('id').eq('id',original.id)).length,1);
+const report={project:stagingReference,completedAt:new Date().toISOString(),realGoTrue:true,productionMutated:false,checks:{recipientCanUpdateOwnTask:true,dispatcherCannotReadCurrentPrivateTask:true,approvedSnapshotUnchanged:true,retryReturnsOnlyDraftAndTaskIds:true,otherOrganizationCannotReadSnapshot:true,reviewedReassignmentKeepsTheOriginalTaskId:true,reassignedPrivateTaskStillHiddenFromDispatcher:true,reassignmentRetryReusesReceipt:true}};
+await fs.writeFile('outputs/isolation/task-batch-receipt-checks.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report));

@@ -1,0 +1,26 @@
+import {randomUUID} from 'node:crypto';
+import assert from 'node:assert/strict';
+import {writeFile} from 'node:fs/promises';
+import {isolatedDatabase} from './bootstrap.mjs';
+process.env.ISOLATION_NATIVE_POSTGRES='1';
+const user=randomUUID(),other=randomUUID(),personal=randomUUID(),queue=randomUUID(),unknown=randomUUID();let ws,sector;
+const db=await isolatedDatabase({beforeScope:async db=>{
+ await db.query(`INSERT INTO auth.users(id,email) VALUES($1,'legacy-one@isolation.invalid'),($2,'legacy-other@isolation.invalid')`,[user,other]);
+ ws=(await db.query('SELECT id FROM public.workspaces WHERE owner_id=$1',[user])).rows[0].id;
+ await db.query(`INSERT INTO public.workspace_members(workspace_id,user_id,role) VALUES($1,$2,'member')`,[ws,other]);
+ sector=(await db.query(`INSERT INTO public.task_sectors(workspace_id,name) VALUES($1,'Financeiro') RETURNING id`,[ws])).rows[0].id;
+ await db.query('INSERT INTO public.task_sector_members VALUES($1,$2,$3)',[ws,sector,user]);
+ await db.exec('BEGIN;SET LOCAL ROLE authenticated');await db.query(`SELECT set_config('request.jwt.claim.sub',$1,true)`,[user]);
+ await db.query(`INSERT INTO public.tasks(id,workspace_id,title,created_by,assigned_to) VALUES($1,$4,'Proven legacy personal',$5,$5),($2,$4,'Unproven sector queue',$5,NULL),($3,$4,'Unproven other ownership',$5,$6)`,[personal,queue,unknown,ws,user,other]);
+ await db.query('UPDATE public.tasks SET sector_id=$1 WHERE id=$2',[sector,queue]);await db.exec('COMMIT');
+}});
+const rows=(await db.query('SELECT id,board_id,owner_id,sector_id,visibility FROM public.tasks WHERE workspace_id=$1 ORDER BY id',[ws])).rows;
+assert.equal(rows.length,3);assert.equal(rows.find(r=>r.id===personal).visibility,'personal');assert.ok(rows.find(r=>r.id===personal).board_id);
+assert.equal(rows.find(r=>r.id===queue).visibility,'restricted');assert.equal(rows.find(r=>r.id===unknown).visibility,'restricted');
+await db.exec('BEGIN;SET LOCAL ROLE authenticated');await db.query(`SELECT set_config('request.jwt.claim.sub',$1,true)`,[user]);
+assert.equal((await db.query('SELECT count(*)::int n FROM public.tasks WHERE workspace_id=$1',[ws])).rows[0].n,1);
+const audit=(await db.query('SELECT public.business_legacy_audit($1) audit',[ws])).rows[0].audit;
+assert.equal(audit.tasks_restricted,2);assert.equal(audit.pipelines_restricted,2);assert.equal(audit.leads_restricted,5);
+await db.exec('COMMIT');
+await writeFile('outputs/isolation/legacy-checks.json',JSON.stringify({engine:db.engine,allThreeTaskIdsPreserved:true,provenPersonalBackfilled:1,ambiguousTasksRestricted:2,legacyAudit:audit,preMigrationDemoPipelinesAndLeadsRestricted:true},null,2));
+console.log('PASS: legacy IDs preserved, one proven personal row backfilled, two ambiguous tasks restricted; old demo roots quarantined.');await db.close();

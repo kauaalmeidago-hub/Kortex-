@@ -1,0 +1,40 @@
+import fs from 'node:fs/promises';
+import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
+import {createRequire} from 'node:module';
+import {stagingConfiguration,stagingReference} from './staging-preflight.mjs';
+const {createClient}=createRequire(new URL('../../package.json',import.meta.url))('@supabase/supabase-js');
+const {env}=await stagingConfiguration({requireDatabase:false});
+const f=JSON.parse(await fs.readFile('tmp/staging-fixtures.json','utf8'));assert.equal(f.project,stagingReference);
+const proof=JSON.parse(await fs.readFile('outputs/isolation/pipeline-refactor-checks.json','utf8'));assert.equal(proof.project,stagingReference);
+const ok=r=>{if(r.error)throw Error(r.error.code+': '+r.error.message);return r.data;};
+const rpc=async(c,n,p={})=>ok(await c.rpc(n,p));
+const clients={};for(const name of ['A','C','G']){const c=createClient(env.VITE_SUPABASE_URL,env.VITE_SUPABASE_PUBLISHABLE_KEY,{auth:{persistSession:false,autoRefreshToken:false}});ok(await c.auth.signInWithPassword({email:f.users[name].email,password:f.password}));clients[name]=c;}
+const report={project:stagingReference,productionMutated:false,checks:[]};
+const check=async(name,fn)=>{await fn();report.checks.push({name,passed:true});console.log('PASS',name);};
+const cs=await rpc(clients.C,'business_contexts');const com=cs.find(c=>c.kind==='pipeline'&&c.sector_name==='Comercial');assert.ok(com);
+const commercial=()=>clients.C.from('stages').select('id,name,position').eq('pipeline_id',com.pipeline_id).order('position').then(ok);
+const snapshot=await commercial();
+const rel=(await rpc(clients.G,'business_contexts')).find(c=>c.kind==='pipeline'&&c.sector_name==='Relacionamento'&&c.workspace_id===f.workspace);assert.ok(rel);
+const shared=await rpc(clients.G,'business_create_board',{p_sector:rel.sector_id,p_kind:'pipeline',p_name:'Homologação · exclusão protegida',p_visibility:'sector',p_access:'sector'});
+let context=(await rpc(clients.G,'business_contexts')).find(c=>c.board_id===shared);assert.ok(context);
+await rpc(clients.G,'business_set_board_member',{p_board:shared,p_user:f.users.A.id,p_active:true,p_write:true});
+const stages=ok(await clients.G.from('stages').select('*').eq('pipeline_id',context.pipeline_id).order('position'));
+const privateLead=ok(await clients.A.from('leads').insert({workspace_id:context.workspace_id,sector_id:context.sector_id,pipeline_id:context.pipeline_id,stage_id:stages[0].id,title:'Homologação · registro privado de outro participante',visibility:'personal'}).select('*').single());
+await check('A manager cannot count or remove a stage containing inaccessible personal records',async()=>{
+ const count=await clients.G.rpc('business_pipeline_column_count',{p_board:shared,p_id:stages[0].id});assert.equal(count.error?.code,'42501');
+ const remove=await clients.G.rpc('business_pipeline_remove_column',{p_board:shared,p_version:context.version,p_id:stages[0].id,p_destination:stages[1].id,p_request:randomUUID()});assert.equal(remove.error?.code,'42501');
+ assert.equal(ok(await clients.A.from('leads').select('stage_id').eq('id',privateLead.id).single()).stage_id,stages[0].id);
+ assert.equal(ok(await clients.G.from('stages').select('id').eq('pipeline_id',context.pipeline_id)).length,stages.length);
+});
+await check('Removing the only valid stage is refused by the server',async()=>{
+ const b=await rpc(clients.G,'business_create_board',{p_sector:rel.sector_id,p_kind:'pipeline',p_name:'Homologação · última etapa',p_visibility:'personal',p_access:'members'});
+ let c=(await rpc(clients.G,'business_contexts')).find(c=>c.board_id===b);
+ const cols=ok(await clients.G.from('stages').select('*').eq('pipeline_id',c.pipeline_id).order('position'));
+ await rpc(clients.G,'business_save_columns',{p_board:b,p_version:c.version,p_columns:[cols[0]],p_moves:Object.fromEntries(cols.slice(1).map(s=>[s.id,cols[0].id]))});
+ c=(await rpc(clients.G,'business_contexts')).find(c=>c.board_id===b);
+ const result=await clients.G.rpc('business_pipeline_remove_column',{p_board:b,p_version:c.version,p_id:cols[0].id,p_destination:cols[0].id,p_request:randomUUID()});assert.ok(result.error);
+ assert.equal(ok(await clients.G.from('stages').select('id').eq('pipeline_id',c.pipeline_id)).length,1);
+});
+await check('Commercial stage IDs, labels and configured order stay unchanged',async()=>{assert.deepEqual(await commercial(),snapshot);});
+report.completedAt=new Date().toISOString();await fs.writeFile('outputs/isolation/pipeline-refactor-integrity.json',JSON.stringify(report,null,2));

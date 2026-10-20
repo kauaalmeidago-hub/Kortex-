@@ -1,594 +1,527 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  CalendarDays,
-  ChevronDown,
-  ChevronRight,
-  ChevronsUpDown,
   Filter,
   LayoutGrid,
   List,
-  Mail,
-  Phone,
   Plus,
   Search,
-  UserRound,
-  X,
+  Settings,
+  Settings2,
 } from "lucide-react";
-import LeadWorkspaceModal, { NewLeadPayload } from "@/components/leads/LeadWorkspaceModal";
-import { Lead, leads, pipelines } from "@/data/mockData";
-import { cn } from "@/lib/utils";
+import { useAuth } from "@/contexts/AuthContext";
+import {
+  BusinessContextPicker,
+  useBusinessAccess,
+} from "@/features/access/BusinessAccess";
+import { BoardMembersEditor } from "@/features/access/BoardMembersEditor";
+import { ColumnsEditor } from "@/features/access/ColumnsEditor";
+import { LeadEditor } from "@/features/pipeline/LeadEditor";
+import PipelineBoard from "@/features/pipeline/PipelineBoard";
+import { PipelineInitialState } from "./PipelineSetupPage";
+import { pipelinePosition, recordHref, savePipelinePosition } from "@/features/pipeline/navigation";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { moveLead, pipelineData } from "@/features/pipeline/service";
 
-type PipelineView = "kanban" | "list";
-type SortMode = "recent" | "name" | "stage";
 
-type PipelineFilters = {
-  withCompany: boolean;
-  withTag: boolean;
-};
 
-type PipelineRouteState = {
-  pipelineState?: Partial<{
-    view: PipelineView;
-    query: string;
-    tagFilter: string;
-    sortMode: SortMode;
-    filters: PipelineFilters;
-  }>;
-};
+import { TaskField } from "@/components/tasks/TaskFormDialog";
+import "./TasksPage.css";
+import "./PipelinePage.css";
 
-const emptyFilters: PipelineFilters = {
-  withCompany: false,
-  withTag: false,
-};
-
-const pipelineControl =
-  "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-border/80 bg-background/75 px-3 text-[13px] font-medium text-muted-foreground shadow-sm shadow-black/0 transition-colors hover:border-primary/30 hover:bg-accent/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:ring-offset-2 focus-visible:ring-offset-background";
-
-const pipelineControlActive =
-  "border-primary/40 bg-primary/10 text-primary hover:border-primary/50 hover:bg-primary/20 hover:text-primary";
-
-const pipelineSelect =
-  "h-9 rounded-xl border border-border/80 bg-background/75 px-3 text-[13px] font-medium text-foreground outline-none transition-colors hover:border-primary/30 focus:border-primary/60 focus:ring-2 focus:ring-primary/20";
-
-function initials(name: string) {
-  return name
-    .split(" ")
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase())
-    .join("");
-}
-
-function normalize(value: string) {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase();
-}
-
-function resolvePipeline(pipelineId?: string) {
-  const found = pipelines.find((item) => item.id === pipelineId);
-  if (found) return found;
-
-  if (pipelineId === "relacionamento") {
-    const base = pipelines.find((item) => item.id === "atendimento-luisa") || pipelines[0];
-    return { ...base, id: "relacionamento", name: "Relacionamento" };
-  }
-
-  return pipelines[0];
-}
-
-function leadEmail(lead: Lead) {
-  return lead.email || (lead.contact?.includes("@") ? lead.contact : "");
-}
-
-function leadPhone(lead: Lead) {
-  return lead.phone || "";
-}
-
-function leadResponsible(lead: Lead) {
-  return lead.responsible || "";
-}
-
-function leadTasksLabel(lead: Lead) {
-  const count = lead.tasksCount || 0;
-  return count ? `${count} tarefa${count === 1 ? "" : "s"}` : "Sem tarefas";
-}
-
-function sortLeads(items: Lead[], sortMode: SortMode, stages: string[]) {
-  const next = [...items];
-  if (sortMode === "name") {
-    return next.sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
-  }
-  if (sortMode === "stage") {
-    return next.sort((a, b) => stages.indexOf(a.stage) - stages.indexOf(b.stage));
-  }
-  return next;
-}
-
+const money = (value: number) =>
+  new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(
+    value,
+  );
 export default function PipelinePage() {
+  const access = useBusinessAccess();
+  const { user, workspace } = useAuth();
   const { pipelineId } = useParams();
   const navigate = useNavigate();
+  const client = useQueryClient();
   const location = useLocation();
-  const pipeline = resolvePipeline(pipelineId);
-  const initialRouteState = (location.state as PipelineRouteState | null)?.pipelineState;
-  const [boardLeads, setBoardLeads] = useState<Lead[]>(leads);
-  const [query, setQuery] = useState(initialRouteState?.query || "");
-  const [view, setView] = useState<PipelineView>(initialRouteState?.view || "kanban");
-  const [tagFilter, setTagFilter] = useState(initialRouteState?.tagFilter || "all");
-  const [sortMode, setSortMode] = useState<SortMode>(initialRouteState?.sortMode || "recent");
-  const [filters, setFilters] = useState<PipelineFilters>(initialRouteState?.filters || emptyFilters);
-  const [showFilters, setShowFilters] = useState(false);
-  const [showNewLead, setShowNewLead] = useState(false);
-  const [newLeadStage, setNewLeadStage] = useState(pipeline.stages[0]);
-  const [collapsedStages, setCollapsedStages] = useState<Set<string>>(new Set());
-  const filterMenuRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    setNewLeadStage((current) => (pipeline.stages.includes(current) ? current : pipeline.stages[0]));
-  }, [pipeline.stages]);
-
-  useEffect(() => {
-    if (!showFilters) return undefined;
-
-    const closeOnOutsideClick = (event: MouseEvent) => {
-      if (!filterMenuRef.current?.contains(event.target as Node)) setShowFilters(false);
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setShowFilters(false);
-    };
-
-    document.addEventListener("mousedown", closeOnOutsideClick);
-    window.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("mousedown", closeOnOutsideClick);
-      window.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [showFilters]);
-
-  const aliases = useMemo(
-    () => (pipeline.id === "relacionamento" ? ["relacionamento", "atendimento-luisa"] : [pipeline.id]),
-    [pipeline.id],
+  const [params, setParams] = useSearchParams();
+  const scope = access.selected("pipeline");
+  const taskScope = access.selected("tasks");
+  const currentWorkspace = scope?.workspace_id ?? workspace?.id ?? taskScope?.workspace_id;
+  const currentSector = scope?.sector_id ?? (taskScope?.workspace_id === currentWorkspace ? taskScope.sector_id : undefined);
+  const available = access.contexts.filter(c => c.kind === "pipeline" && (!currentWorkspace || c.workspace_id === currentWorkspace) && (!currentSector || c.sector_id === currentSector));
+  const routeScope = access.contexts.find(
+    (c) => c.kind === "pipeline" && c.pipeline_id === pipelineId,
   );
-
-  const allPipelineLeads = useMemo(() => boardLeads.filter((lead) => aliases.includes(lead.pipeline)), [aliases, boardLeads]);
-
-  const tagOptions = useMemo(
-    () => Array.from(new Set(allPipelineLeads.flatMap((lead) => lead.tags || []))).sort((a, b) => a.localeCompare(b, "pt-BR")),
-    [allPipelineLeads],
+  useEffect(() => {
+    const target = routeScope ?? (!pipelineId && !scope && available.length === 1 ? available[0] : null);
+    if (target && scope?.board_id !== target.board_id) access.select(target);
+  }, [access, routeScope, scope, pipelineId, available]);
+  const valid = Boolean(
+    scope && (!pipelineId || scope.pipeline_id === pipelineId),
   );
+  const data = useQuery({
+    queryKey: access.key("pipeline", "pipeline-data"),
+    enabled: valid,
+    retry: false,
+    refetchInterval: 15000,
+    queryFn: ({ signal }) => pipelineData(scope!, signal),
+  });
+  const query = params.get("q") ?? "";
+  const view = params.get("view") === "list" ? "list" : "kanban";
+  const page = Math.max(1, Number(params.get("page")) || 1);
+  const size = [10,25,50].includes(Number(params.get("size"))) ? Number(params.get("size")) : 25;
+  const update = (values: Record<string, string>) => setParams(current => {
+    const next = new URLSearchParams(current);
+    for (const [key,value] of Object.entries(values)) {
+      if (value) next.set(key,value); else next.delete(key);
+    }
+    return next;
+  }, { replace: true });
+  const returnTo = `/pipeline/${scope?.pipeline_id ?? ""}${location.search}`;
+  const newPipeline = () => {
+    const search = new URLSearchParams();
+    if (scope) { search.set("sector", scope.sector_id); search.set("return", returnTo); }
+    navigate(`/pipeline/new${search.size ? `?${search}` : ""}`);
+  };
+  const positionKey = `${user?.id}:${scope?.board_id}:${location.search}`;
+  const listRef = useRef<HTMLDivElement>(null);
+  const [columnsOpen, setColumnsOpen] = useState(false);
+  const [membersOpen, setMembersOpen] = useState(false);
 
-  const pipelineLeads = useMemo(() => {
-    const normalized = normalize(query.trim());
-    const filtered = allPipelineLeads.filter((lead) => {
-      const matchesQuery =
-        !normalized ||
-        normalize(lead.name).includes(normalized) ||
-        normalize(lead.company || "").includes(normalized) ||
-        normalize(lead.contact || "").includes(normalized) ||
-        normalize(leadEmail(lead)).includes(normalized) ||
-        normalize(leadPhone(lead)).includes(normalized);
-
-      const matchesTag = tagFilter === "all" || (lead.tags || []).includes(tagFilter);
-      const matchesFilters =
-        (!filters.withCompany || Boolean(lead.company)) &&
-        (!filters.withTag || Boolean(lead.tags?.length));
-
-      return matchesQuery && matchesTag && matchesFilters;
+  const [initialStage, setInitialStage] = useState<string | null>(null);
+  const [quick, setQuick] = useState(false);
+  const [moving, setMoving] = useState("");
+  const moveLock = useRef(false);
+  const ownerFilter = params.get("owner") === "mine" ? "mine" : "all";
+  const dateFilter = ["dated","undated","overdue"].includes(params.get("date") ?? "") ? params.get("date")! : "all";
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [draftOwner, setDraftOwner] = useState(ownerFilter);
+  const [draftDate, setDraftDate] = useState(dateFilter);
+  const financial =
+    scope?.sector_name.toLocaleLowerCase("pt-BR").includes("comercial") ??
+    false;
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    setInitialStage(null);
+    setColumnsOpen(false);
+    setMembersOpen(false);
+    setError("");
+    setMoving("");
+  }, [scope?.board_id, user?.id]);
+  useEffect(() => {
+    if (listRef.current) listRef.current.scrollTop = pipelinePosition(positionKey).top;
+  }, [positionKey, view, data.isLoading]);
+  const filtered = useMemo(() => {
+    const text = query.trim().toLocaleLowerCase("pt-BR");
+    const today = new Date().toLocaleDateString("en-CA");
+    return (data.data?.leads ?? []).filter((l) => {
+      const matchesText =
+        !text ||
+        `${l.title} ${l.description ?? ""} ${l.company?.name ?? ""} ${l.contact?.full_name ?? ""} ${l.email ?? l.contact?.email ?? l.company?.email ?? ""} ${l.phone ?? l.contact?.phone ?? l.company?.phone ?? ""} ${l.project ?? ""} ${l.city ?? ""} ${(l.tags ?? []).join(" ")}`
+          .toLocaleLowerCase("pt-BR")
+          .includes(text);
+      const matchesOwner = ownerFilter === "all" || l.assigned_to === user?.id;
+      const due = l.expected_close_date;
+      const matchesDate =
+        dateFilter === "all" ||
+        (dateFilter === "dated" && Boolean(due)) ||
+        (dateFilter === "undated" && !due) ||
+        (dateFilter === "overdue" && Boolean(due && due < today));
+      return matchesText && matchesOwner && matchesDate;
     });
-
-    return sortLeads(filtered, sortMode, pipeline.stages);
-  }, [allPipelineLeads, filters, pipeline.stages, query, sortMode, tagFilter]);
-
-  const totalValue = pipelineLeads.reduce((sum, lead) => sum + lead.value, 0);
-  const hasFilters = filters.withCompany || filters.withTag || tagFilter !== "all" || Boolean(query);
-
-  const getLeadsForStage = (stage: string) => pipelineLeads.filter((lead) => lead.stage === stage);
-
-  const openNewLead = (stage = pipeline.stages[0]) => {
-    setNewLeadStage(stage);
-    setShowNewLead(true);
+  }, [data.data, query, ownerFilter, dateFilter, user?.id]);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / size));
+  const currentPage = Math.min(page, totalPages);
+  const refresh = async () => {
+    await Promise.all([
+      client.invalidateQueries({
+        queryKey: access.key("pipeline", "pipeline-data"),
+      }),
+      access.retry(),
+    ]);
   };
-
-  const currentPipelineState = {
-    view,
-    query,
-    tagFilter,
-    sortMode,
-    filters,
+  const changeStage = async (id: string, stage: string) => {
+    const lead = data.data?.leads.find((l) => l.id === id);
+    if (
+      !scope ||
+      !lead?.can_edit ||
+      moveLock.current ||
+      !data.data?.stages.some((s) => s.id === stage) ||
+      lead.stage_id === stage
+    )
+      return;
+    const token = access.token;
+    moveLock.current = true;
+    setBusy(true);
+    setMoving(id);
+    setError("");
+    try {
+      const position =
+        Math.max(
+          -1,
+          ...data.data.leads
+            .filter((l) => l.stage_id === stage)
+            .map((l) => l.position),
+        ) + 1;
+      await moveLead(scope, lead, stage, position);
+      if (access.isCurrent(token)) await refresh();
+    } catch (e) {
+      if (access.isCurrent(token)) {
+        setError((e as Error).message);
+        await data.refetch();
+      }
+    } finally {
+      moveLock.current = false;
+      setBusy(false);
+      setMoving("");
+    }
   };
-
-  const openLead = (lead: Lead) => {
-    navigate(`/leads/${lead.id}`, {
-      state: {
-        lead,
-        returnTo: `${location.pathname}${location.search}`,
-        pipelineState: currentPipelineState,
-      },
-    });
-  };
-
-  const handleCreateLead = (payload: NewLeadPayload) => {
-    const newLead: Lead = {
-      id: crypto.randomUUID(),
-      name: payload.title,
-      contact: payload.contact,
-      company: payload.company,
-      email: payload.email,
-      phone: payload.phone,
-      value: 0,
-      date: new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date()),
-      tags: payload.source ? [payload.source] : ["Novo lead"],
-      stage: newLeadStage,
-      pipeline: pipeline.id,
-    };
-
-    setBoardLeads((current) => [newLead, ...current]);
-    setShowNewLead(false);
-    openLead(newLead);
-  };
-
-  const toggleStage = (stage: string) => {
-    setCollapsedStages((current) => {
-      const next = new Set(current);
-      if (next.has(stage)) next.delete(stage);
-      else next.add(stage);
-      return next;
-    });
-  };
-
-  const clearSelection = () => {
-    setFilters(emptyFilters);
-    setTagFilter("all");
-    setQuery("");
-  };
-
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background p-3 text-foreground">
-      <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm">
-        <header className="shrink-0 border-b border-border p-3 [font-family:Inter,system-ui,-apple-system,sans-serif]">
-          <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
-            <div className="relative min-w-[220px] flex-1 xl:max-w-[340px]">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                className="h-9 w-full rounded-xl border border-input/90 bg-background/75 pl-9 pr-3 text-[13px] font-normal outline-none transition-colors placeholder:text-muted-foreground hover:border-primary/30 focus:border-primary/60 focus:ring-2 focus:ring-primary/20"
-                placeholder="Buscar leads..."
-                type="search"
-              />
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <select
-                value={tagFilter}
-                onChange={(event) => setTagFilter(event.target.value)}
-                className={pipelineSelect}
-                aria-label="Filtrar por tags"
-              >
-                <option value="all">Todas as tags</option>
-                {tagOptions.map((tag) => (
-                  <option key={tag} value={tag}>{tag}</option>
-                ))}
-              </select>
-
-              <select
-                value={sortMode}
-                onChange={(event) => setSortMode(event.target.value as SortMode)}
-                className={pipelineSelect}
-                aria-label="Ordenar leads"
-              >
-                <option value="recent">Recentes</option>
-                <option value="name">Nome A-Z</option>
-                <option value="stage">Etapa</option>
-              </select>
-
-              <div ref={filterMenuRef} className="relative">
-                <button
-                  type="button"
-                  onClick={() => setShowFilters((current) => !current)}
-                  className={cn(
-                    pipelineControl,
-                    filters.withCompany || filters.withTag
-                      ? pipelineControlActive
-                      : "hover:text-foreground",
-                  )}
-                  aria-pressed={filters.withCompany || filters.withTag}
-                >
-                  <Filter className="h-3.5 w-3.5" />
-                  Filtros
-                </button>
-                {showFilters && (
-                  <div className="absolute right-0 top-10 z-20 w-60 rounded-xl border border-border bg-popover p-2 text-popover-foreground shadow-xl">
-                    {[
-                      ["withCompany", "Somente com empresa"],
-                      ["withTag", "Somente com tag"],
-                    ].map(([key, label]) => (
-                      <button
-                        key={key}
-                        type="button"
-                        onClick={() => setFilters((current) => ({ ...current, [key]: !current[key as keyof PipelineFilters] }))}
-                        className="flex h-9 w-full items-center justify-between rounded-lg px-3 text-left text-[13px] font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
-                      >
-                        {label}
-                        <span className={cn("h-4 w-4 rounded border", filters[key as keyof PipelineFilters] && "border-primary bg-primary")} />
-                      </button>
-                    ))}
-                    <button
-                      type="button"
-                      onClick={() => setFilters(emptyFilters)}
-                      className="mt-1 h-8 w-full rounded-lg border border-border text-[13px] font-medium transition-colors hover:border-primary/40 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
-                    >
-                      Limpar filtros
-                    </button>
-                  </div>
-                )}
+    <div className="tasks-theme pipeline-workspace">
+      <div className="pipeline-context">
+        {(access.loading || access.error || !valid && available.length > 0) && <BusinessContextPicker
+          kind="pipeline"
+          onSelect={(c) => navigate(`/pipeline/${c.pipeline_id}`)}
+        />}
+        {access.contexts.length > 0 && !valid && (
+          <button
+            className="task-button pipeline-new-board"
+            onClick={() => newPipeline()}
+          >
+            <Plus size={16} />
+            Nova pipeline
+          </button>
+        )}
+      </div>
+      {!pipelineId && !valid && !access.loading && !access.error && available.length === 0 && (
+        <PipelineInitialState workspaceId={currentWorkspace} sectorId={currentSector} cancelled={params.get("setup") === "cancelled"} />
+      )}
+      {pipelineId && !access.loading && !access.error && !routeScope ? (
+        <p role="alert" className="task-empty">
+          Registro indisponível para esta conta.
+        </p>
+      ) : (
+        valid &&
+        scope && (
+          <>
+            <div className="pipeline-toolbar">
+              {access.contexts.filter(c=>c.kind==="pipeline").length>1 && <select className="pipeline-compact-picker" aria-label="Pipeline ativa" value={scope.board_id} onChange={e=>{const next=access.contexts.find(c=>c.kind==="pipeline"&&c.board_id===e.target.value);if(next){access.select(next);navigate(`/pipeline/${next.pipeline_id}`);}}}>{access.contexts.filter(c=>c.kind==="pipeline").map(c=><option key={c.board_id} value={c.board_id}>{c.board_name} · {c.sector_name}{new Set(access.contexts.filter(c=>c.kind==="pipeline").map(c=>c.workspace_id)).size>1?` · ${c.workspace_name??c.workspace_id.slice(-6)}`:""}</option>)}</select>}
+              <div className="pipeline-search">
+                <Search size={16} />
+                <input
+                  aria-label="Buscar registros"
+                  placeholder="Buscar nesta pipeline..."
+                  value={query}
+                  onChange={(e) => {
+                    update({ q: e.target.value, page: "" });
+                  }}
+                />
               </div>
-
-              <div className="inline-flex h-9 rounded-xl border border-border/80 bg-background/60 p-1 shadow-sm" role="group" aria-label="Alternar visualização do pipeline">
-                <button
-                  type="button"
-                  onClick={() => setView("kanban")}
-                  aria-pressed={view === "kanban"}
-                  className={cn(
-                    "inline-flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30",
-                    view === "kanban" ? "bg-primary/10 text-primary shadow-sm ring-1 ring-primary/25" : "text-muted-foreground hover:bg-accent/40 hover:text-foreground",
-                  )}
+              <Popover open={filtersOpen} onOpenChange={(open) => {
+                setFiltersOpen(open);
+                if (open) { setDraftOwner(ownerFilter); setDraftDate(dateFilter); }
+              }}>
+                <PopoverTrigger asChild>
+                  <button
+                    className="task-button"
+                    aria-label="Filtros da pipeline"
+                  >
+                    <Filter size={15} />
+                    Filtros
+                    {(ownerFilter !== "all" || dateFilter !== "all") && (
+                      <span className="pipeline-filter-count">
+                        {Number(ownerFilter !== "all") +
+                          Number(dateFilter !== "all")}
+                      </span>
+                    )}
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent
+                  align="end"
+                  className="tasks-theme pipeline-filter-popover"
                 >
-                  <LayoutGrid className="h-3.5 w-3.5" />
+                  <h2>Filtrar registros</h2>
+                  <TaskField label="Responsável">
+                    <select
+                      value={draftOwner}
+                      onChange={(e) => {
+                        setDraftOwner(e.target.value);
+                      }}
+                    >
+                      <option value="all">Todos</option>
+                      <option value="mine">Atribuídos a mim</option>
+                    </select>
+                  </TaskField>
+                  <TaskField label="Previsão">
+                    <select
+                      value={draftDate}
+                      onChange={(e) => {
+                        setDraftDate(e.target.value);
+                      }}
+                    >
+                      <option value="all">Todas</option>
+                      <option value="overdue">Em atraso</option>
+                      <option value="dated">Com previsão</option>
+                      <option value="undated">Sem previsão</option>
+                    </select>
+                  </TaskField>
+                  <div className="task-actions"><button
+                    className="task-link"
+                    onClick={() => {
+                      setDraftOwner("all"); setDraftDate("all");
+                      update({ owner: "", date: "", page: "" });
+                      setFiltersOpen(false);
+                    }}
+                  >
+                    Limpar filtros
+                  </button>
+                  <button className="task-button task-cyan" onClick={() => {
+                    update({ owner: draftOwner === "all" ? "" : draftOwner, date: draftDate === "all" ? "" : draftDate, page: "" });
+                    setFiltersOpen(false);
+                  }}>Aplicar filtros</button></div>
+                </PopoverContent>
+              </Popover>
+              <div
+                className="pipeline-views"
+                role="group"
+                aria-label="Visualização da pipeline"
+              >
+                <button
+                  aria-label="Kanban"
+                  aria-pressed={view === "kanban"}
+                  onClick={() => update({view: ""})}
+                >
+                  <LayoutGrid size={17} />
                   Kanban
                 </button>
                 <button
-                  type="button"
-                  onClick={() => setView("list")}
+                  aria-label="Lista"
                   aria-pressed={view === "list"}
-                  className={cn(
-                    "inline-flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30",
-                    view === "list" ? "bg-primary/10 text-primary shadow-sm ring-1 ring-primary/25" : "text-muted-foreground hover:bg-accent/40 hover:text-foreground",
-                  )}
+                  onClick={() => update({view: "list"})}
                 >
-                  <List className="h-3.5 w-3.5" />
+                  <List size={17} />
                   Lista
                 </button>
               </div>
-
-              <span className="min-w-[60px] text-center text-[13px] font-semibold text-muted-foreground">
-                {pipelineLeads.length} leads
-              </span>
-
+              {financial && <div className="pipeline-summary" aria-live="polite">
+                <span>{money(filtered.reduce((sum,l) => sum + Number(l.value ?? 0),0))}</span>
+              </div>}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    className="task-button pipeline-icon"
+                    aria-label="Configurações da pipeline"
+                    title="Configurações da pipeline"
+                  >
+                    <Settings size={18} className="shrink-0" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  {scope.can_manage && (
+                    <DropdownMenuItem onSelect={() => setMembersOpen(true)}>
+                      Participantes
+                    </DropdownMenuItem>
+                  )}
+                  {scope.can_manage && (
+                    <DropdownMenuItem
+                      disabled={!data.data || busy}
+                      onSelect={() => setColumnsOpen(true)}
+                    >
+                      <Settings2 size={15} />
+                      Gerenciar etapas
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuItem onSelect={() => newPipeline()}>
+                    Nova pipeline
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
               <button
-                type="button"
-                onClick={() => openNewLead(pipeline.stages[0])}
-                className="inline-flex h-9 items-center gap-2 rounded-xl bg-primary px-3.5 text-[13px] font-semibold text-primary-foreground shadow-sm shadow-primary/20 transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                className="task-button task-cyan"
+                disabled={!scope.can_write || !data.data?.stages.length || busy}
+                onClick={() => { setQuick(false); setInitialStage(data.data?.stages[0]?.id ?? ""); }}
               >
-                <Plus className="h-3.5 w-3.5" />
-                Novo lead
+                <Plus size={16} />
+                Novo
               </button>
             </div>
-          </div>
-        </header>
-
-        {view === "kanban" ? (
-          <div className="min-h-0 flex-1 overflow-hidden p-3">
-            <div className="h-full overflow-x-auto overflow-y-hidden pb-2 scrollbar-thin">
-              <div className="flex h-full min-w-max gap-3">
-                {pipeline.stages.map((stage, index) => {
-                  const stageLeads = getLeadsForStage(stage);
-                  return (
-                    <section key={stage} className="flex w-[292px] min-w-[292px] flex-col border-r border-border pr-3 last:border-r-0">
-                      <div className="mb-3 flex items-center gap-2">
-                        <div role="heading" aria-level={2} className="text-sm font-semibold uppercase leading-5 tracking-normal">
-                          {stage}
-                        </div>
-                        <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">{stageLeads.length}</span>
-                      </div>
-                      <div
-                        className="mb-2 h-0.5 rounded-full"
-                        style={{ backgroundColor: pipeline.stageColors[index] || "hsl(var(--primary))" }}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => openNewLead(stage)}
-                        className="mb-2.5 flex h-9 w-full items-center justify-center gap-2 rounded-xl border border-dashed border-border/75 bg-background/50 text-[13px] font-semibold text-muted-foreground transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
-                      >
-                        <Plus className="h-3.5 w-3.5" />
-                        Adição rápida
-                      </button>
-
-                      <div className="min-h-0 flex-1 space-y-2.5 overflow-y-auto pr-1 scrollbar-thin">
-                        {stageLeads.length === 0 ? (
-                          <div className="rounded-lg border border-dashed border-border bg-background/60 p-3 text-[13px] text-muted-foreground">
-                            Nenhum lead nesta etapa.
-                          </div>
-                        ) : (
-                          stageLeads.map((lead) => (
-                            <article
-                              key={lead.id}
-                              tabIndex={0}
-                              onClick={() => openLead(lead)}
-                              onKeyDown={(event) => {
-                                if (event.key === "Enter" || event.key === " ") {
-                                  event.preventDefault();
-                                  openLead(lead);
-                                }
-                              }}
-                              className="cursor-pointer rounded-lg border border-border bg-background p-2.5 shadow-sm transition hover:border-primary/60 hover:shadow-md focus:outline-none focus:ring-4 focus:ring-primary/10"
-                            >
-                              <div className="mb-2 flex items-start justify-between gap-2">
-                                <h3 className="line-clamp-2 text-[13px] font-semibold leading-4">{lead.name}</h3>
-                                <ChevronsUpDown className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                              </div>
-                              {leadEmail(lead) && (
-                                <p className="mt-1.5 flex items-center gap-1.5 truncate text-[11px] text-muted-foreground">
-                                  <Mail className="h-3 w-3 shrink-0" />
-                                  {leadEmail(lead)}
-                                </p>
-                              )}
-                              <p className="mt-1.5 flex items-center gap-1.5 truncate text-[11px] text-muted-foreground">
-                                <Phone className="h-3 w-3 shrink-0" />
-                                {leadPhone(lead) || "Telefone não informado"}
-                              </p>
-                              {lead.tags?.[0] && (
-                                <span className="mt-2 inline-flex rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
-                                  {lead.tags[0]}
-                                </span>
-                              )}
-                              <div className="mt-2.5 border-t border-border pt-2.5">
-                                <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-                                  <span className="inline-flex min-w-0 items-center gap-2">
-                                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 font-semibold text-primary">
-                                      {initials(leadResponsible(lead) || lead.name) || <UserRound className="h-3 w-3" />}
-                                    </span>
-                                    <span className="truncate">{leadResponsible(lead) || "Responsável não informado"}</span>
-                                  </span>
-                                  <span className="font-medium">{leadTasksLabel(lead)}</span>
-                                </div>
-                                <p className="mt-1.5 flex items-center gap-1 text-[11px] text-muted-foreground">
-                                  <CalendarDays className="h-3 w-3" />
-                                  {lead.date}
-                                </p>
-                              </div>
-                            </article>
-                          ))
-                        )}
-                      </div>
-                    </section>
-                  );
-                })}
+            {(error || data.error) && (
+              <div className="p-4" role="alert">
+                <p className="task-error">{error || data.error?.message}</p>
+                <button
+                  className="task-button mt-2"
+                  onClick={() => void data.refetch()}
+                >
+                  Tentar novamente
+                </button>
               </div>
-            </div>
-          </div>
-        ) : (
-          <div className="min-h-0 flex-1 overflow-auto p-3 scrollbar-thin">
-            <div className="overflow-hidden rounded-xl border border-border bg-background">
-              <div className="overflow-x-auto scrollbar-thin">
-                <table className="w-full min-w-[920px] text-[13px]">
-                  <thead className="border-b border-border bg-muted/30 text-left text-[11px] font-bold text-muted-foreground">
-                    <tr>
-                      <th className="px-4 py-2.5">Contato</th>
-                      <th className="px-4 py-2.5">Telefone</th>
-                      <th className="px-4 py-2.5">Responsável</th>
-                      <th className="px-4 py-2.5">Data</th>
-                      <th className="px-4 py-2.5">Tarefas</th>
-                      <th className="px-4 py-2.5 text-right">Abrir</th>
-                    </tr>
-                  </thead>
-                  {pipeline.stages.map((stage) => {
-                    const stageLeads = getLeadsForStage(stage);
-                    const collapsed = collapsedStages.has(stage);
-                    return (
-                      <tbody key={stage} className="border-b border-border last:border-b-0">
-                        <tr className="bg-muted/20">
-                          <td colSpan={6} className="px-4 py-3">
-                            <div className="flex items-center justify-between gap-4">
-                              <button
-                                type="button"
-                                onClick={() => toggleStage(stage)}
-                                className="inline-flex items-center gap-2 text-left text-sm font-semibold uppercase text-foreground transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
-                              >
-                                <ChevronDown className={cn("h-4 w-4 transition", collapsed && "-rotate-90")} />
-                                {stage}
-                                <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{stageLeads.length}</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => openNewLead(stage)}
-                                className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-primary transition-colors hover:text-primary/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
-                              >
-                                <Plus className="h-3.5 w-3.5" />
-                                Adição rápida
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                        {!collapsed && stageLeads.length === 0 && (
+            )}
+            {data.isLoading ? (
+              <p className="task-empty" role="status">
+                Carregando pipeline...
+              </p>
+            ) : (
+              data.data &&
+              !data.isError && (
+                <>
+                  {view === "kanban" ? (
+                    <PipelineBoard
+                      key={scope.board_id}
+                      scope={scope}
+                      stages={data.data.stages}
+                      leads={data.data.leads}
+                      filtered={filtered}
+                      financial={financial}
+                      moving={moving}
+                      onMove={changeStage}
+                      onChanged={refresh}
+                      onAddRecord={stage => { setQuick(true); setInitialStage(stage); }}
+                      returnTo={returnTo}
+                      positionKey={positionKey}
+                    />
+                  ) : (
+                    <div className="pipeline-list" ref={listRef} onScroll={e => savePipelinePosition(positionKey, 0, e.currentTarget.scrollTop)}>
+                      <table className="w-full min-w-[650px] rounded-xl border border-border bg-card text-left text-sm">
+                        <thead className="bg-muted/50 text-muted-foreground">
                           <tr>
-                            <td colSpan={6} className="px-4 py-5 text-center text-muted-foreground">
-                              Nenhum lead nesta etapa.
-                            </td>
+                            {[
+                              "Registro",
+                              "Etapa",
+                              ...(financial ? ["Valor"] : []),
+                              "Previsão",
+                              "Visibilidade",
+                            ].map((t) => (
+                              <th className="p-3 font-medium" key={t}>
+                                {t}
+                              </th>
+                            ))}
                           </tr>
-                        )}
-                        {!collapsed && stageLeads.map((lead) => (
-                          <tr
-                            key={lead.id}
-                            onClick={() => openLead(lead)}
-                            className="cursor-pointer border-t border-border transition hover:bg-muted/30"
-                          >
-                            <td className="px-4 py-3">
-                              <div className="flex min-w-0 items-center gap-3">
-                                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
-                                  {initials(lead.name)}
-                                </span>
-                                <div className="min-w-0">
-                                  <div className="flex items-center gap-2">
-                                    <p className="truncate font-semibold text-foreground">{lead.name}</p>
-                                    {lead.tags?.[0] && (
-                                      <span className="rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
-                                        {lead.tags[0]}
-                                      </span>
-                                    )}
-                                  </div>
-                                  <p className="mt-0.5 truncate text-xs text-muted-foreground">{leadEmail(lead) || lead.company || "E-mail não informado"}</p>
-                                </div>
-                              </div>
-                            </td>
-                            <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">{leadPhone(lead) || "Não informado"}</td>
-                            <td className="px-4 py-3">
-                              <span className="inline-flex items-center gap-2 text-muted-foreground">
-                                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-[11px] font-semibold text-primary">
-                                  {initials(leadResponsible(lead) || lead.name)}
-                                </span>
-                                {leadResponsible(lead) || "Não informado"}
-                              </span>
-                            </td>
-                            <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">{lead.date}</td>
-                            <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">{leadTasksLabel(lead)}</td>
-                            <td className="px-4 py-3 text-right">
-                              <button
-                                type="button"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  openLead(lead);
-                                }}
-                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition hover:bg-muted hover:text-primary"
-                                aria-label={`Abrir ${lead.name}`}
-                              >
-                                <ChevronRight className="h-4 w-4" />
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    );
-                  })}
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
-
-        <footer className="shrink-0 border-t border-border px-4 py-2 text-xs text-muted-foreground">
-          Pipeline: <span className="font-semibold text-foreground">{pipeline.name}</span>
-          <span className="mx-2">•</span>
-          Valor filtrado: R$ {totalValue.toLocaleString("pt-BR")}
-          {hasFilters && (
-            <button type="button" onClick={clearSelection} className="ml-3 inline-flex items-center gap-1 font-semibold text-primary">
-              <X className="h-3.5 w-3.5" />
-              limpar seleção
-            </button>
-          )}
-        </footer>
-      </section>
-
-      {showNewLead && (
-        <LeadWorkspaceModal
-          initialStage={newLeadStage}
-          pipelineName={pipeline.name}
-          onClose={() => setShowNewLead(false)}
-          onCreate={handleCreateLead}
-        />
+                        </thead>
+                        <tbody>
+                          {filtered
+                            .slice((currentPage - 1) * size, currentPage * size)
+                            .map((l) => (
+                              <tr key={l.id} className="border-t border-border">
+                                <td className="max-w-xs truncate p-3">
+                                  <Link
+                                    className="hover:text-primary"
+                                    to={recordHref(l.id, returnTo)}
+                                  >
+                                    {l.title}
+                                  </Link>
+                                </td>
+                                <td className="p-3">
+                                  {
+                                    data.data!.stages.find(
+                                      (s) => s.id === l.stage_id,
+                                    )?.name
+                                  }
+                                </td>
+                                {financial && (
+                                  <td className="p-3">{money(l.value ?? 0)}</td>
+                                )}
+                                <td className="p-3">
+                                  {l.expected_close_date
+                                    ? new Intl.DateTimeFormat("pt-BR").format(
+                                        new Date(
+                                          l.expected_close_date + "T12:00:00",
+                                        ),
+                                      )
+                                    : "Sem previsão"}
+                                </td>
+                                <td className="p-3">
+                                  {l.visibility === "personal"
+                                    ? "Pessoal"
+                                    : "Compartilhado"}
+                                </td>
+                              </tr>
+                            ))}
+                        </tbody>
+                      </table>
+                      {!filtered.length && (
+                        <p className="task-empty">
+                          {query || ownerFilter !== "all" || dateFilter !== "all"
+                            ? "Nenhum resultado para esta busca e filtros."
+                            : "Nenhum registro cadastrado nesta pipeline."}
+                        </p>
+                      )}
+                      <div className="flex flex-wrap items-center justify-end gap-3 py-4 text-[13px]">
+                        <button
+                          className="task-button"
+                          disabled={currentPage === 1}
+                          onClick={() => update({page: String(currentPage - 1)})}
+                        >
+                          Anterior
+                        </button>
+                        <span>
+                          {currentPage} de {totalPages}
+                        </span>
+                        <button
+                          className="task-button"
+                          disabled={currentPage === totalPages}
+                          onClick={() => update({page: String(currentPage + 1)})}
+                        >
+                          Próxima
+                        </button>
+                        <select
+                          aria-label="Leads por página"
+                          value={size}
+                          onChange={(e) => {
+                            update({size: e.target.value, page: ""});
+                          }}
+                        >
+                          {[10, 25, 50].map((s) => (
+                            <option key={s} value={s}>
+                              {s} por página
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )
+            )}
+            {membersOpen && (
+              <BoardMembersEditor
+                scope={scope}
+                onClose={() => setMembersOpen(false)}
+              />
+            )}
+            {columnsOpen && data.data && (
+              <ColumnsEditor
+                scope={scope}
+                columns={data.data.stages}
+                onClose={() => setColumnsOpen(false)}
+                onSaved={refresh}
+              />
+            )}
+            {initialStage !== null && user && data.data && (
+              <LeadEditor
+                key={`${user.id}:${scope.board_id}`}
+                scope={scope}
+                stages={data.data.stages}
+                userId={user.id}
+                initialStage={initialStage}
+                quick={quick}
+                onClose={() => setInitialStage(null)}
+                onSaved={refresh}
+              />
+            )}
+          </>
+        )
       )}
+
     </div>
   );
 }
+

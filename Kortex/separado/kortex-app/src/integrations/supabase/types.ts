@@ -1,3 +1,6 @@
+import type { BusinessTables, BusinessFunctions } from "./businessTypes"
+import type { TaskTables, TaskFunctions } from "./taskTypes"
+
 export type Json =
   | string
   | number
@@ -133,6 +136,16 @@ export type Database = {
       }
       companies: {
         Row: {
+          sector_id?: string | null
+          owner_id?: string | null
+          visibility?: string
+          cnpj: string | null
+          email: string | null
+          city: string | null
+          project: string | null
+          responsible_name: string | null
+          avatar_path: string | null
+          offerings: Json
           address: string | null
           created_at: string
           created_by: string | null
@@ -146,6 +159,16 @@ export type Database = {
           workspace_id: string
         }
         Insert: {
+          sector_id?: string | null
+          owner_id?: string | null
+          visibility?: string
+          cnpj?: string | null
+          email?: string | null
+          city?: string | null
+          project?: string | null
+          responsible_name?: string | null
+          avatar_path?: string | null
+          offerings?: Json
           address?: string | null
           created_at?: string
           created_by?: string | null
@@ -159,6 +182,16 @@ export type Database = {
           workspace_id: string
         }
         Update: {
+          sector_id?: string | null
+          owner_id?: string | null
+          visibility?: string
+          cnpj?: string | null
+          email?: string | null
+          city?: string | null
+          project?: string | null
+          responsible_name?: string | null
+          avatar_path?: string | null
+          offerings?: Json
           address?: string | null
           created_at?: string
           created_by?: string | null
@@ -181,8 +214,62 @@ export type Database = {
           },
         ]
       }
+      company_files: {
+        Row: {
+          id: string
+          workspace_id: string
+          company_id: string
+          name: string
+          storage_path: string
+          mime_type: string
+          size_bytes: number
+          created_by: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          workspace_id: string
+          company_id: string
+          name: string
+          storage_path: string
+          mime_type: string
+          size_bytes: number
+          created_by?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          workspace_id?: string
+          company_id?: string
+          name?: string
+          storage_path?: string
+          mime_type?: string
+          size_bytes?: number
+          created_by?: string | null
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "company_files_workspace_id_company_id_fkey"
+            columns: ["workspace_id", "company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["workspace_id", "id"]
+          },
+          {
+            foreignKeyName: "company_files_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       contacts: {
         Row: {
+          sector_id?: string | null
+          owner_id?: string | null
+          visibility?: string
           company_id: string | null
           created_at: string
           created_by: string | null
@@ -196,6 +283,9 @@ export type Database = {
           workspace_id: string
         }
         Insert: {
+          sector_id?: string | null
+          owner_id?: string | null
+          visibility?: string
           company_id?: string | null
           created_at?: string
           created_by?: string | null
@@ -209,6 +299,9 @@ export type Database = {
           workspace_id: string
         }
         Update: {
+          sector_id?: string | null
+          owner_id?: string | null
+          visibility?: string
           company_id?: string | null
           created_at?: string
           created_by?: string | null
@@ -240,6 +333,15 @@ export type Database = {
       }
       leads: {
         Row: {
+          phone?: string | null
+          email?: string | null
+          city?: string | null
+          project?: string | null
+          offerings?: Json | null
+          sector_id?: string | null
+          owner_id?: string | null
+          visibility?: string
+          tags?: string[]
           assigned_to: string | null
           company_id: string | null
           contact_id: string | null
@@ -258,6 +360,15 @@ export type Database = {
           workspace_id: string
         }
         Insert: {
+          phone?: string | null
+          email?: string | null
+          city?: string | null
+          project?: string | null
+          offerings?: Json | null
+          sector_id?: string | null
+          owner_id?: string | null
+          visibility?: string
+          tags?: string[]
           assigned_to?: string | null
           company_id?: string | null
           contact_id?: string | null
@@ -276,6 +387,15 @@ export type Database = {
           workspace_id: string
         }
         Update: {
+          phone?: string | null
+          email?: string | null
+          city?: string | null
+          project?: string | null
+          offerings?: Json | null
+          sector_id?: string | null
+          owner_id?: string | null
+          visibility?: string
+          tags?: string[]
           assigned_to?: string | null
           company_id?: string | null
           contact_id?: string | null
@@ -333,6 +453,7 @@ export type Database = {
       }
       notes: {
         Row: {
+          company_id: string | null
           contact_id: string | null
           content: string
           created_at: string
@@ -343,6 +464,7 @@ export type Database = {
           workspace_id: string
         }
         Insert: {
+          company_id?: string | null
           contact_id?: string | null
           content: string
           created_at?: string
@@ -353,6 +475,7 @@ export type Database = {
           workspace_id: string
         }
         Update: {
+          company_id?: string | null
           contact_id?: string | null
           content?: string
           created_at?: string
@@ -363,6 +486,13 @@ export type Database = {
           workspace_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "notes_company_workspace_fkey"
+            columns: ["workspace_id", "company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["workspace_id", "id"]
+          },
           {
             foreignKeyName: "notes_contact_id_fkey"
             columns: ["contact_id"]
@@ -388,6 +518,10 @@ export type Database = {
       }
       pipelines: {
         Row: {
+          board_id?: string | null
+          sector_id?: string | null
+          owner_id?: string | null
+          visibility?: string
           created_at: string
           id: string
           name: string
@@ -397,6 +531,10 @@ export type Database = {
           workspace_id: string
         }
         Insert: {
+          board_id?: string | null
+          sector_id?: string | null
+          owner_id?: string | null
+          visibility?: string
           created_at?: string
           id?: string
           name: string
@@ -406,6 +544,10 @@ export type Database = {
           workspace_id: string
         }
         Update: {
+          board_id?: string | null
+          sector_id?: string | null
+          owner_id?: string | null
+          visibility?: string
           created_at?: string
           id?: string
           name?: string
@@ -432,6 +574,7 @@ export type Database = {
           id: string
           job_title: string | null
           phone: string | null
+          sector: string | null
           updated_at: string
         }
         Insert: {
@@ -441,6 +584,7 @@ export type Database = {
           id: string
           job_title?: string | null
           phone?: string | null
+          sector?: string | null
           updated_at?: string
         }
         Update: {
@@ -450,6 +594,7 @@ export type Database = {
           id?: string
           job_title?: string | null
           phone?: string | null
+          sector?: string | null
           updated_at?: string
         }
         Relationships: []
@@ -501,6 +646,21 @@ export type Database = {
       }
       tasks: {
         Row: {
+          deleted_at?: string | null
+          deleted_by?: string | null
+          deletion_key?: string | null
+          board_id?: string | null
+          owner_id?: string | null
+          visibility?: string
+          company_id: string | null
+          operational_code: string | null
+          operator: string | null
+          project: string | null
+          sector_id: string | null
+          stage_id: string
+          assigned_by: string | null
+          assigned_at: string | null
+          request_key: string | null
           assigned_to: string | null
           completed_at: string | null
           contact_id: string | null
@@ -517,6 +677,18 @@ export type Database = {
           workspace_id: string
         }
         Insert: {
+          board_id?: string | null
+          owner_id?: string | null
+          visibility?: string
+          company_id?: string | null
+          operational_code?: string | null
+          operator?: string | null
+          project?: string | null
+          sector_id?: string | null
+          stage_id?: string
+          assigned_by?: string | null
+          assigned_at?: string | null
+          request_key?: string | null
           assigned_to?: string | null
           completed_at?: string | null
           contact_id?: string | null
@@ -533,6 +705,18 @@ export type Database = {
           workspace_id: string
         }
         Update: {
+          board_id?: string | null
+          owner_id?: string | null
+          visibility?: string
+          company_id?: string | null
+          operational_code?: string | null
+          operator?: string | null
+          project?: string | null
+          sector_id?: string | null
+          stage_id?: string
+          assigned_by?: string | null
+          assigned_at?: string | null
+          request_key?: string | null
           assigned_to?: string | null
           completed_at?: string | null
           contact_id?: string | null
@@ -574,6 +758,7 @@ export type Database = {
       }
       workspace_members: {
         Row: {
+          active?: boolean
           created_at: string
           id: string
           role: Database["public"]["Enums"]["app_role"]
@@ -581,6 +766,7 @@ export type Database = {
           workspace_id: string
         }
         Insert: {
+          active?: boolean
           created_at?: string
           id?: string
           role?: Database["public"]["Enums"]["app_role"]
@@ -588,6 +774,7 @@ export type Database = {
           workspace_id: string
         }
         Update: {
+          active?: boolean
           created_at?: string
           id?: string
           role?: Database["public"]["Enums"]["app_role"]
@@ -634,11 +821,15 @@ export type Database = {
         }
         Relationships: []
       }
-    }
+    } & TaskTables & BusinessTables
     Views: {
       [_ in never]: never
     }
     Functions: {
+      complete_my_profile: {
+        Args: { p_sector: string; p_full_name?: string }
+        Returns: Database["public"]["Tables"]["profiles"]["Row"]
+      }
       is_workspace_admin: {
         Args: { _user_id: string; _workspace_id: string }
         Returns: boolean
@@ -648,7 +839,7 @@ export type Database = {
         Returns: boolean
       }
       user_workspaces: { Args: { _user_id: string }; Returns: string[] }
-    }
+    } & TaskFunctions & BusinessFunctions
     Enums: {
       app_role: "admin" | "member"
       lead_status:
@@ -659,7 +850,7 @@ export type Database = {
         | "won"
         | "lost"
       task_priority: "low" | "medium" | "high"
-      task_status: "todo" | "in_progress" | "done" | "canceled"
+      task_status: "todo" | "in_progress" | "review" | "done" | "canceled"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -797,7 +988,7 @@ export const Constants = {
         "lost",
       ],
       task_priority: ["low", "medium", "high"],
-      task_status: ["todo", "in_progress", "done", "canceled"],
+      task_status: ["todo", "in_progress", "review", "done", "canceled"],
     },
   },
 } as const

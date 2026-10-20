@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
   Home, MessageSquare, BarChart3, Calendar, List,
@@ -6,7 +6,11 @@ import {
   CheckSquare, LogOut, BriefcaseBusiness,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
-import { pipelines } from "@/data/mockData";
+import {useBusinessAccess} from '@/features/access/BusinessAccess';
+import {fullModules} from '@/features/access/environment';
+import KoaBrand from "@/components/KoaBrand";
+import TaskAdminBrand from "@/components/TaskAdminBrand";
+import { useTaskAdmin, useTaskCount } from "@/features/tasks/hooks";
 
 interface MenuChild {
   label: string;
@@ -27,16 +31,17 @@ interface MenuItem {
 const phoneDisabledReason = "Telefonia indisponível no momento";
 
 const menuItems: MenuItem[] = [
-  { icon: Home, label: "Início", path: "/" },
+  ...(!fullModules ? [{ icon: MessageSquare, label: 'Chat', path: '/inbox' }] : []),
+  ...(!import.meta.env.DEV ? [{ icon: Home, label: "Início", path: "/" }] : []),
   {
-    icon: MessageSquare, label: "Comunicações", badge: 3, expandable: true,
+    icon: MessageSquare, label: "Comunicações", expandable: true,
     children: [
       { label: "Caixa de entrada", path: "/inbox" },
       { label: "Bate-papo de equipe", path: "/team-chat" },
       { label: "Telefone", path: "/phone", disabled: true, disabledReason: phoneDisabledReason },
     ]
   },
-  { icon: CheckSquare, label: "Tarefas", path: "/tasks", badge: 7 },
+  { icon: CheckSquare, label: "Tarefas", path: "/tasks" },
   { icon: Calendar, label: "Calendário", path: "/calendar" },
   {
     icon: List, label: "Listas", expandable: true,
@@ -54,9 +59,10 @@ const menuItems: MenuItem[] = [
   },
   {
     icon: BarChart3, label: "Pipelines", expandable: true,
-    children: pipelines.map((pipeline) => ({ label: pipeline.name, path: `/pipeline/${pipeline.id}` })),
+    children: [],
   },
-  { icon: KoaIcon, label: "Koa", path: "/movimentacoes/inclusao" },
+  { icon: KoaBrand, label: "Koa", path: "/movimentacoes/inclusao" },
+  { icon: TaskAdminBrand, label: "Gestão de tarefas", path: "/admin/tasks" },
 ];
 
 const bottomItems: MenuItem[] = [
@@ -72,28 +78,28 @@ const bottomItems: MenuItem[] = [
 ];
 
 const brandSymbol = "/brand/kortex-symbol.png";
-const koaLogo = "/brand/koa-ghost-static.png";
-
-function KoaIcon({ size = 20, className }: { size?: number; strokeWidth?: number; className?: string }) {
-  return (
-    <img
-      src={koaLogo}
-      alt=""
-      className={`koa-symbol-motion shrink-0 object-contain ${className ?? ""}`}
-      style={{ width: size, height: size }}
-    />
-  );
-}
+const inboxProfilesToggleEvent = "kortex:inbox-profiles-toggle";
 
 export default function AppSidebar() {
+  const access=useBusinessAccess();
+  const taskAdmin = useTaskAdmin();
+  const taskCount = useTaskCount();
   const navigate = useNavigate();
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
   const [isNarrowViewport, setIsNarrowViewport] = useState(false);
   const [expanded, setExpanded] = useState<string[]>(["Operacional", "Pipelines", "Listas", "Configurações"]);
   const restoreAfterKoaRef = useRef(false);
+  const logoClickTimerRef = useRef<number | null>(null);
   const { user, signOut } = useAuth();
   const compact = collapsed || isNarrowViewport;
+  const isInboxRoute = location.pathname === "/inbox";
+
+  const clearPendingLogoClick = useCallback(() => {
+    if (logoClickTimerRef.current === null) return;
+    window.clearTimeout(logoClickTimerRef.current);
+    logoClickTimerRef.current = null;
+  }, []);
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 767px)");
@@ -105,8 +111,17 @@ export default function AppSidebar() {
   }, []);
 
   useEffect(() => {
+    return () => clearPendingLogoClick();
+  }, [clearPendingLogoClick]);
+
+  useEffect(() => {
+    if (!isInboxRoute) clearPendingLogoClick();
+  }, [clearPendingLogoClick, isInboxRoute]);
+
+  useEffect(() => {
+    // Track the prior preference even on mobile, where compact is forced by CSS.
+    // This also restores it when KOA is closed after a viewport change.
     const handleKoaOpen = () => {
-      if (isNarrowViewport) return;
       setCollapsed((current) => {
         restoreAfterKoaRef.current = !current;
         return true;
@@ -114,9 +129,9 @@ export default function AppSidebar() {
     };
 
     const handleKoaClose = () => {
-      if (isNarrowViewport) return;
-      setCollapsed((current) => (restoreAfterKoaRef.current ? false : current));
+      const shouldRestoreExpanded = restoreAfterKoaRef.current;
       restoreAfterKoaRef.current = false;
+      setCollapsed((current) => (shouldRestoreExpanded ? false : current));
     };
 
     window.addEventListener("kortex:koa-panel-open", handleKoaOpen);
@@ -126,7 +141,7 @@ export default function AppSidebar() {
       window.removeEventListener("kortex:koa-panel-open", handleKoaOpen);
       window.removeEventListener("kortex:koa-panel-close", handleKoaClose);
     };
-  }, [isNarrowViewport]);
+  }, []);
 
   const toggle = (label: string) =>
     setExpanded(prev => prev.includes(label) ? prev.filter(l => l !== label) : [...prev, label]);
@@ -154,6 +169,34 @@ export default function AppSidebar() {
       return;
     }
     if (item.path) navigate(item.path);
+  };
+
+  const handleBrandClick = () => {
+    if (isNarrowViewport) return;
+
+    if (!isInboxRoute) {
+      setCollapsed((current) => !current);
+      return;
+    }
+
+    clearPendingLogoClick();
+    logoClickTimerRef.current = window.setTimeout(() => {
+      if (collapsed) {
+        window.dispatchEvent(new Event(inboxProfilesToggleEvent));
+      } else {
+        restoreAfterKoaRef.current = false;
+        setCollapsed(true);
+      }
+      logoClickTimerRef.current = null;
+    }, 230);
+  };
+
+  const handleBrandDoubleClick = () => {
+    if (isNarrowViewport || !isInboxRoute) return;
+
+    clearPendingLogoClick();
+    restoreAfterKoaRef.current = false;
+    setCollapsed(false);
   };
 
   const renderSubItems = (item: MenuItem) => {
@@ -200,15 +243,34 @@ export default function AppSidebar() {
       <div className={`flex h-[72px] shrink-0 items-center border-b border-sidebar-border ${compact ? "justify-center px-1.5" : "px-4"}`}>
         <button
           type="button"
-          onClick={() => {
-            if (!isNarrowViewport) setCollapsed((current) => !current);
-          }}
+          onClick={handleBrandClick}
+          onDoubleClick={handleBrandDoubleClick}
           disabled={isNarrowViewport}
           className={`group flex items-center rounded-2xl outline-none transition hover:opacity-85 focus-visible:ring-2 focus-visible:ring-sidebar-ring ${
             compact ? "h-10 w-10 justify-center" : "h-11 w-full justify-start gap-3"
           }`}
-          aria-label={isNarrowViewport ? "Menu compacto" : compact ? "Expandir menu" : "Recolher menu"}
-          title={isNarrowViewport ? "Menu compacto" : compact ? "Expandir menu" : "Recolher menu"}
+          aria-label={
+            isNarrowViewport
+              ? "Menu compacto"
+              : isInboxRoute
+                ? compact
+                  ? "Alternar perfis compactos do chat"
+                  : "Recolher menu"
+                : compact
+                  ? "Expandir menu"
+                  : "Recolher menu"
+          }
+          title={
+            isNarrowViewport
+              ? "Menu compacto"
+              : isInboxRoute
+                ? compact
+                  ? "Clique para alternar os perfis compactos. Duplo clique abre o menu completo."
+                  : "Clique para recolher o menu. Duplo clique mantém o menu completo."
+                : compact
+                  ? "Expandir menu"
+                  : "Recolher menu"
+          }
         >
           {compact ? (
             <img src={brandSymbol} alt="" className="h-6 w-6 object-contain drop-shadow-[0_5px_12px_rgba(15,23,42,0.18)] transition group-hover:scale-105" />
@@ -224,15 +286,17 @@ export default function AppSidebar() {
       </div>
 
       <nav className={`flex-1 overflow-y-auto overflow-x-hidden scrollbar-thin ${compact ? "space-y-2.5 px-1.5 py-2.5" : "space-y-1 px-2 py-3"}`}>
-        {menuItems.map((item) => {
+        {menuItems.filter(item => (fullModules || item.path==='/inbox' || item.path==='/tasks' || item.label==='Pipelines' || item.path==='/admin/tasks') && (item.path !== "/admin/tasks" || taskAdmin.data === true)).map(raw => raw.label==='Pipelines'?{...raw,children:[{label:'Meus quadros',path:'/pipeline'},...access.contexts.filter(c=>c.kind==='pipeline').map(c=>({label:`${c.sector_name} · ${c.board_name}`,path:`/pipeline/${c.pipeline_id}`}))]}:raw).map((item) => {
           const active = isItemActive(item);
           const Icon = item.icon;
+          const badge = item.path === "/tasks" ? taskCount.data : item.badge;
 
           return (
           <div key={item.label} className={item.label === "Koa" && compact ? "border-t border-sidebar-border pt-3" : undefined}>
             <button
               onClick={() => handleMainItemClick(item)}
               aria-label={item.label}
+              aria-current={active ? "page" : undefined}
               className={`relative flex w-full items-center rounded-2xl font-normal outline-none transition-all focus-visible:ring-2 focus-visible:ring-sidebar-ring ${
                 compact ? "h-10 justify-center px-0" : "h-10 gap-3 px-3 text-sm"
               } ${
@@ -244,11 +308,11 @@ export default function AppSidebar() {
             >
               <Icon size={compact ? 24 : item.label === "Koa" ? 24 : 20} className={`shrink-0 ${active && item.label !== "Koa" ? "text-sidebar-primary" : ""}`} strokeWidth={1.5} />
               {!compact && <span className="flex-1 text-left font-[inherit]">{item.label}</span>}
-              {item.badge && (
+              {Boolean(badge) && (
                 <span className={`flex items-center justify-center rounded-full bg-[#f43f5e] text-[0.72rem] font-black leading-none text-white shadow-[0_8px_18px_rgba(244,63,94,0.3)] ${
                   compact ? "absolute -right-0.5 top-0 h-5 min-w-5 px-1.5 text-[0.66rem]" : "h-5 min-w-5 px-1.5 text-[0.66rem]"
                 }`}>
-                  {item.badge}
+                  {badge}
                 </span>
               )}
               {item.expandable && !compact && (
@@ -261,7 +325,7 @@ export default function AppSidebar() {
       </nav>
 
       <div className={`mt-auto shrink-0 border-t border-sidebar-border ${compact ? "space-y-2.5 px-1.5 py-2.5" : "space-y-1 px-2 py-3"}`}>
-        {bottomItems.map(item => {
+        {(fullModules?bottomItems:[]).map(item => {
           const Icon = item.icon;
           const active = isItemActive(item);
           return (

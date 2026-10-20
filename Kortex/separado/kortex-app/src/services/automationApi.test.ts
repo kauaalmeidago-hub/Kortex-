@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Blob as NodeBlob } from "node:buffer";
 const mock = vi.hoisted(() => ({ getSession: vi.fn(), refreshSession: vi.fn(), signedUrl: vi.fn(), artifacts: vi.fn(), operation: vi.fn() }));
 vi.mock("@/integrations/supabase/client", () => ({ supabase: {
-  auth: { getSession: mock.getSession, refreshSession: mock.refreshSession },
+  auth: { getSession: mock.getSession, refreshSession: mock.refreshSession, onAuthStateChange:()=>({data:{subscription:{unsubscribe:vi.fn()}}}) },
   storage: { from: () => ({ createSignedUrl: mock.signedUrl }) },
   from: (table: string) => ({ select: () => ({ eq: () => table === "automation_artifacts" ? mock.artifacts() : mock.operation() }) }),
 } }));
@@ -22,8 +22,8 @@ describe("card file downloads from the chat", () => {
     Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectURL });
     Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
     click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
-    mock.getSession.mockResolvedValue({ data: { session: { access_token: "current-user-jwt" } } });
-    mock.refreshSession.mockResolvedValue({ data: { session: { access_token: "renewed-user-jwt" } } });
+    mock.getSession.mockResolvedValue({ data: { session: { access_token: "current-user-jwt",user:{id:"actor"} } } });
+    mock.refreshSession.mockResolvedValue({ data: { session: { access_token: "renewed-user-jwt",user:{id:"actor"} } } });
   });
   afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
   it("downloads with the current JWT in production and a filename for the user's computer", async () => {
@@ -69,24 +69,27 @@ describe("card file downloads from the chat", () => {
     }));
     expect(fetchMock).toHaveBeenCalledOnce();
   });
-  it("uses the configured local worker token without requiring a Kortex session", async () => {
-    vi.stubEnv("VITE_AUTOMATION_API_TOKEN", "local-worker-token");
-    mock.getSession.mockResolvedValue({ data: { session: null } });
-    fetchMock.mockResolvedValueOnce(new Response('{"operationId":"new-operation","status":"queued"}', { status: 202 }));
-    const { createOperation } = await import("./automationApi");
-    expect((await createOperation({ type: "CARD_ISSUE", companyId: "company-1", data: { contractCode: "0NEW" } })).operationId).toBe("new-operation");
-    expect(mock.getSession).not.toHaveBeenCalled();
-    expect(fetchMock).toHaveBeenCalledOnce();
-    const headers = new Headers(fetchMock.mock.calls[0][1].headers);
-    expect(headers.get("x-koa-automation-token")).toBe("local-worker-token");
-    expect(headers.get("authorization")).toBeNull();
+  it("requires a real session even when a legacy local token is configured",async()=>{
+    vi.stubEnv("VITE_AUTOMATION_API_TOKEN","local-worker-token");mock.getSession.mockResolvedValue({data:{session:null}});
+    const {createOperation}=await import("./automationApi");
+    await expect(createOperation({type:"CARD_ISSUE",companyId:"company-1",data:{}})).rejects.toThrow("Entre no Kortex");expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it("normalizes the portal company code before sending a reauthentication password", async () => {
+    fetchMock.mockResolvedValueOnce(new Response('{"ok":true,"status":"queued"}', { status: 200 }));
+    const { submitOperationAuthentication } = await import("./automationApi");
+    await submitOperationAuthentication({ operationId: "operation-1", companyCode: " ekk-ry ", password: "synthetic-password", rememberOnDevice: true });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      companyCode: "EKKRY",
+      password: "synthetic-password",
+      rememberOnDevice: true,
+    });
   });
 
-  it.each(["auto", "selected"])("sends a card request with the same NDI operator and portal and search=%s", async search => {
+  it.each(["auto", "selected"])("sends a card request with the same NDI operator and forces selected search when input search=%s", async search => {
     fetchMock.mockResolvedValueOnce(new Response('{"operationId":"new-operation","status":"queued"}', { status: 202 }));
     const { createOperation } = await import("./automationApi");
-    await createOperation({ type: "CARD_ISSUE", companyId: "company-1", portal: "ndi", data: { contractCode: "0NEW", ...(search === "selected" ? { portalSearch: "selected" } : {}) } });
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ portal: "ndi", operator: "ndi", input: { portalSearch: "auto", contractCode: "0NEW" } });
+    await createOperation({ type: "CARD_ISSUE", companyId: "company-1", portal: "ndi", data: { contractCode: "0NEW", portalSearch: search } });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ portal: "ndi", operator: "ndi", input: { portalSearch: "selected", contractCode: "0NEW" } });
     expect(fetchMock).toHaveBeenCalledOnce();
   });
   it("renews a rejected session and sends the same order once with the new JWT", async () => {
@@ -125,7 +128,7 @@ describe("card file downloads from the chat", () => {
     expect(mock.refreshSession).not.toHaveBeenCalled();
   });
   it("shares a session renewal between simultaneous rejected requests", async () => {
-    let finish!: (value: { data: { session: { access_token: string } } }) => void;
+    let finish!: (value: { data: { session: { access_token: string;user?:{id:string} } } }) => void;
     mock.refreshSession.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
     fetchMock.mockImplementation(async (_url, options) => new Headers(options.headers).get("authorization") === "Bearer renewed-user-jwt"
       ? new Response('{"operationId":"operation-1","status":"queued"}')
@@ -133,7 +136,7 @@ describe("card file downloads from the chat", () => {
     const { getOperation } = await import("./automationApi");
     const first = getOperation("operation-1"); const second = getOperation("operation-2");
     await vi.waitFor(() => expect(mock.refreshSession).toHaveBeenCalledOnce());
-    finish({ data: { session: { access_token: "renewed-user-jwt" } } });
+    finish({ data: { session: { access_token: "renewed-user-jwt",user:{id:"actor"} } } });
     await Promise.all([first, second]);
     expect(mock.refreshSession).toHaveBeenCalledOnce();
     expect(fetchMock).toHaveBeenCalledTimes(4);
@@ -147,27 +150,13 @@ describe("card file downloads from the chat", () => {
     expect(new Headers(fetchMock.mock.calls[1][1].headers).get("authorization")).toBe("Bearer renewed-user-jwt");
     expect(click).toHaveBeenCalledOnce();
   });
-  it("uses the current session on each event stream reconnection", async () => {
-    vi.useFakeTimers();
-    const streams: Array<{ url: string; close: ReturnType<typeof vi.fn>; onerror?: () => void }> = [];
-    class TestEventSource {
-      close = vi.fn(); onerror?: () => void;
-      constructor(public url: string) { streams.push(this); }
-    }
-    vi.stubGlobal("EventSource", TestEventSource);
-    fetchMock.mockImplementation(async () => new Response('{"operationId":"operation-1","status":"queued"}'));
-    try {
-      const { subscribeToOperation } = await import("./automationApi");
-      const stop = await subscribeToOperation("operation-1", { onEvent: vi.fn() });
-      expect(new URL(streams[0].url).searchParams.get("token")).toBe("current-user-jwt");
-      mock.getSession.mockResolvedValue({ data: { session: { access_token: "renewed-user-jwt" } } });
-      streams[0].onerror?.();
-      await vi.advanceTimersByTimeAsync(5000);
-      expect(new URL(streams[1].url).searchParams.get("token")).toBe("renewed-user-jwt");
-      expect(streams[0].close).toHaveBeenCalled();
-      stop();
-      expect(streams[1].close).toHaveBeenCalled();
-    } finally { vi.useRealTimers(); }
+  it("polls with the current JWT and never places it in an event-stream URL",async()=>{
+    vi.useFakeTimers();fetchMock.mockImplementation(async()=>new Response('{"operationId":"operation-1","status":"queued"}'));
+    try{const {subscribeToOperation}=await import("./automationApi");const onEvent=vi.fn();const stop=await subscribeToOperation("operation-1",{onEvent});await vi.advanceTimersByTimeAsync(10);
+     expect(fetchMock.mock.calls[0][0]).not.toContain("token=");expect(new Headers(fetchMock.mock.calls[0][1].headers).get("authorization")).toBe("Bearer current-user-jwt");
+     mock.getSession.mockResolvedValue({data:{session:{access_token:"renewed-user-jwt",user:{id:"actor"}}}});await vi.advanceTimersByTimeAsync(2500);
+     expect(new Headers(fetchMock.mock.lastCall![1].headers).get("authorization")).toBe("Bearer renewed-user-jwt");stop();const calls=fetchMock.mock.calls.length;await vi.advanceTimersByTimeAsync(5000);expect(fetchMock).toHaveBeenCalledTimes(calls);
+    }finally{vi.useRealTimers();}
   });
   it("does not save an HTML error page with a PDF extension", async () => {
     fetchMock.mockResolvedValue(fileResponse("<html>Erro</html>"));

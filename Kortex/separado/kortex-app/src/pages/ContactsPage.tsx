@@ -1,3 +1,4 @@
+import {useBusinessAccess} from "@/features/access/BusinessAccess";
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
@@ -113,7 +114,7 @@ function contactDraftKey(contactId?: string | null) {
 }
 
 function readContactDraft(key: string): ContactDraft | null {
-  if (typeof window === "undefined") return null;
+  if (!key || typeof window === "undefined") return null;
   try {
     const stored = window.localStorage.getItem(key);
     return stored ? (JSON.parse(stored) as ContactDraft) : null;
@@ -1703,7 +1704,9 @@ function ContactModal({
   onSubmit: (payload: ContactSubmitPayload) => Promise<ContactSubmitResult>;
 }) {
   const [activeTab, setActiveTab] = useState<"contact" | "files">("contact");
-  const draftKey = contactDraftKey(contact?.id);
+  const access=useBusinessAccess();
+  const scope=access.selected("tasks")??access.selected("pipeline");
+  const draftKey=scope?`${contactDraftKey(contact?.id)}:${JSON.stringify(access.key(scope.kind,"contact-draft"))}`:"";
   const draft = useMemo(() => readContactDraft(draftKey), [draftKey]);
   const [form, setForm] = useState<ContactFormValues>(() => draft?.form || formFromContact(contact));
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -1823,7 +1826,7 @@ function ContactModal({
     };
 
     try {
-      window.localStorage.setItem(draftKey, JSON.stringify(draftToSave));
+      if(draftKey)window.localStorage.setItem(draftKey, JSON.stringify(draftToSave));
       setLocalError("");
       setLocalNotice("Rascunho salvo neste navegador.");
     } catch {

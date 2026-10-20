@@ -1,0 +1,25 @@
+import type { Company } from "@/features/companies/model";
+export const companyFixture: Company = {
+  id: "00000000-0000-4000-8000-000000000001",
+  workspace_id: "workspace-test",
+  name: "Empresa de teste Alfa",
+  cnpj: "11222333000181",
+  phone: "11900000001",
+  email: "financeiro@alfa.invalid",
+  city: "Cidade teste",
+  project: "PME",
+  responsible_name: "Responsável teste",
+  industry: "Serviços",
+  website: null,
+  address: null,
+  notes: null,
+  avatar_path: null,
+  avatarUrl: null,
+  offerings: [
+    { product: "Saúde", operator: "Hapvida" },
+    { product: "Odonto", operator: "NDI" },
+  ],
+  created_at: "2026-10-15T12:00:00Z",
+  updated_at: "2026-10-15T12:00:00Z",
+  created_by: "user-test",
+};

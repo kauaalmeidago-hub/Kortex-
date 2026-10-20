@@ -1,0 +1,95 @@
+// Dedicated headless developer test. Never attaches to user browsers/profiles.
+// Only the QA backend and explicit localhost targets are allowed on this network.
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import {createRequire} from 'node:module';
+import {spawn,execFile} from 'node:child_process';
+import {promisify} from 'node:util';
+import assert from 'node:assert/strict';
+import {stagingConfiguration,stagingReference} from './staging-preflight.mjs';
+const require=createRequire(new URL('../../automation-server/package.json',import.meta.url));
+const {chromium}=require('playwright');const {createClient}=require('@supabase/supabase-js');
+const {env}=await stagingConfiguration({requireDatabase:false});
+const f=JSON.parse(await fs.readFile('tmp/staging-fixtures.json','utf8'));
+const proof=JSON.parse(await fs.readFile('outputs/isolation/task-batches-staging-checks.json','utf8'));
+assert.equal(f.project,stagingReference);assert.equal(proof.checks.length,8);
+const publicEnv=Object.fromEntries(Object.entries(env).filter(([name])=>name.startsWith('VITE_')));
+Object.assign(publicEnv,{VITE_APP_ENV:'production',VITE_AUTOMATION_API_URL:'',VITE_AUTOMATION_API_TOKEN:'',VITE_KOA_DEFAULT_COMPANY_ID:'',VITE_KOA_DEFAULT_WORKSPACE_ID:''});
+const build=process.argv.includes('--build');
+const sourceRoot=path.resolve(process.argv.find(a=>a.startsWith('--source-root='))?.slice('--source-root='.length)||process.cwd());
+if(build)await promisify(execFile)(process.execPath,['node_modules/vite/bin/vite.js','build','--mode','production','--outDir','tmp/task-batches-portal-dist'],{cwd:sourceRoot,env:{...process.env,...publicEnv},windowsHide:true,timeout:600000,maxBuffer:4*1024*1024});
+const server=spawn(process.execPath,['node_modules/vite/bin/vite.js',...(build?['preview','--outDir','tmp/task-batches-portal-dist']:['--mode','production']),'--host','127.0.0.1','--port','5182','--strictPort'],{cwd:sourceRoot,env:{...process.env,...publicEnv},windowsHide:true,stdio:'ignore'});
+let browser;
+const report={browser:'Isolated headless Chrome, new ephemeral profile',sourceRoot,servingMode:build?'Optimized build':'Vite source server with production environment policy',backend:stagingReference,productionMutated:false,checks:[],screenshots:[]};
+const pause=ms=>new Promise(r=>setTimeout(r,ms));
+const endpoint='http://127.0.0.1:5182';
+try{
+ for(let i=0;i<40;i++){try{if((await fetch(endpoint)).ok)break;}catch{}await pause(250);if(i===39)throw Error('PREVIEW_UNAVAILABLE');}
+ browser=await chromium.launch({channel:'chrome',headless:true});
+ const c=createClient(env.VITE_SUPABASE_URL,env.VITE_SUPABASE_PUBLISHABLE_KEY,{auth:{persistSession:false,autoRefreshToken:false}});
+ const auth=await c.auth.signInWithPassword({email:f.users.A.email,password:f.password});if(auth.error)throw Error('QA_LOGIN_FAILED');
+ const context=await browser.newContext({viewport:{width:1440,height:900},colorScheme:'dark'});
+ await context.route('**/*',route=>{const u=new URL(route.request().url());return ['http://127.0.0.1:5182','http://127.0.0.1:5181',env.VITE_SUPABASE_URL,'https://fonts.googleapis.com','https://fonts.gstatic.com'].includes(u.origin)?route.continue():route.abort();});
+ await context.addInitScript(({session,ref})=>{localStorage.setItem('crm-theme-mode','dark');localStorage.setItem('sb-'+ref+'-auth-token',JSON.stringify(session));},{session:auth.data.session,ref:stagingReference});
+ const page=await context.newPage();
+ const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ const url=endpoint+'/admin/tasks?board='+proof.board+'&conversation='+proof.conversation;
+ await page.goto(url);await page.getByRole('heading',{name:'Resumo das tarefas',exact:true}).waitFor({timeout:30000});
+ const summary=page.getByRole('region',{name:'Resumo das tarefas'});
+ assert.equal(await summary.getByRole('checkbox').count(),7);
+ assert.equal(await summary.locator('input:checked').count(),0);
+ report.checks.push('Seven persisted QA rows load in one collection; unchecked selections; confirmed items stay locked.');
+ const enabled=summary.locator('input[type=checkbox]:not(:disabled)').first();await enabled.check();
+ await page.getByRole('button',{name:'Aprovar e encaminhar (1)',exact:true}).waitFor();
+ await page.getByRole('button',{name:'Ver detalhes das tarefas'}).click();
+ assert.equal(await summary.locator('input:checked').count(),1);
+ assert.equal(await page.getByRole('dialog').count(),0);
+ await page.getByRole('button',{name:'Voltar ao resumo'}).click();assert.equal(await summary.locator('input:checked').count(),1);
+ const row=summary.locator('.task-summary-item:has(input:checked)').first();
+ const selectedId=await row.getAttribute('data-draft-id');
+ await row.locator('.task-summary-name').click();await page.getByRole('dialog').waitFor();
+ await page.getByLabel('Data de vencimento',{exact:true}).fill('2026-12-01');
+ await page.getByRole('button',{name:'Salvar ajustes',exact:true}).click();await page.getByRole('dialog').waitFor({state:'hidden'});
+ await page.waitForFunction(id=>document.querySelector('[data-draft-id="'+id+'"] input')?.checked,selectedId);
+ report.checks.push('Summary/details return preserves selection; saving the edited due date keeps the same selected draft.');
+ await page.reload();await page.getByRole('heading',{name:'Resumo das tarefas',exact:true}).waitFor();
+ assert.equal(await page.getByLabel('Quadro autorizado').inputValue(),proof.board);assert.equal(await summary.locator('input:checked').count(),0);assert.equal(await summary.getByRole('checkbox').count(),7);
+ report.checks.push('Reload preserves the authorized board, conversation, drafts and confirmations; approvals remain explicit.');
+ const name='homologacao-lote-'+Date.now()+'.txt';
+ const selectedTitle=await summary.locator('[data-draft-id="'+selectedId+'"] .task-summary-name').innerText();
+ await page.getByRole('button',{name:'Anexar arquivo',exact:true}).click();
+ await page.getByRole('dialog',{name:'Anexar a qual tarefa?'}).waitFor();
+ const [chooser]=await Promise.all([page.waitForEvent('filechooser'),page.getByRole('dialog').getByRole('button',{name:selectedTitle,exact:true}).click()]);
+ await chooser.setFiles({name,mimeType:'text/plain',buffer:Buffer.from('Arquivo exclusivo de homologação; sem dados operacionais.')});
+ await page.getByRole('status').filter({hasText:'Anexos enviados.'}).waitFor();
+ const files=await c.from('task_attachments').select('draft_id,name').eq('workspace_id',f.workspace).eq('name',name);
+ if(files.error)throw Error('QA_ATTACHMENT_READ_FAILED');assert.deepEqual(files.data,[{draft_id:selectedId,name}]);
+ report.checks.push('The real file picker and Storage upload attach the QA file only to the explicitly chosen draft.');
+ for(const {width,height} of [{width:1280,height:800},{width:1366,height:768},{width:1440,height:900},{width:1920,height:1080},{width:1280,height:560},{width:412,height:824},{width:360,height:640}]){
+  await page.setViewportSize({width,height});
+  const theme=await page.evaluate(()=>({dark:document.documentElement.classList.contains('dark'),scheme:getComputedStyle(document.documentElement).colorScheme,overflow:document.documentElement.scrollWidth>innerWidth,font:getComputedStyle(document.querySelector('main')).fontFamily,sidebar:getComputedStyle(document.querySelector('aside')).backgroundColor}));
+  assert.equal(theme.dark,false);assert.equal(theme.scheme,'light');assert.equal(theme.overflow,false);assert.ok(theme.font.includes('Inter'));
+  await page.getByRole('button',{name:'Ver detalhes das tarefas'}).click();
+  const panels=await page.locator('.task-sector-panels').evaluate(e=>({columns:getComputedStyle(e).gridTemplateColumns.split(' ').length,width:e.getBoundingClientRect().width,scroll:e.scrollWidth}));assert.ok(panels.scroll<=panels.width+1);
+  assert.equal(panels.columns,width===1920?3:width>=1280?2:1);
+  await page.getByRole('button',{name:'Voltar ao resumo'}).scrollIntoViewIfNeeded();
+  const bounds=await page.evaluate(()=>({footer:document.querySelector('.task-collection footer').getBoundingClientRect().bottom,composer:document.querySelector('.task-chat-composer').getBoundingClientRect().top}));assert.ok(bounds.footer<=bounds.composer+1);
+  await page.locator('.task-admin-history').evaluate(e=>{e.scrollTop=0;});
+  const name='task-batches-details-'+width+'x'+height+'.png';await page.screenshot({path:'outputs/isolation/'+name});report.screenshots.push(name);
+  await page.getByRole('button',{name:'Voltar ao resumo'}).click();
+  report.checks.push({viewport:width+'x'+height,forcedLightWithSavedDarkAndDarkOs:true,columns:panels.columns,noOverlap:true,noHorizontalOverflow:true});
+ }
+ await page.setViewportSize({width:1440,height:900});await page.locator('.task-admin-history').evaluate(e=>{e.scrollTop=0;});await page.screenshot({path:'outputs/isolation/task-batches-summary.png'});report.screenshots.push('task-batches-summary.png');
+ await page.getByRole('button',{name:'Mais ações da conversa'}).click();await page.getByRole('menuitem',{name:'Nova conversa',exact:true}).click();
+ await page.getByRole('heading',{name:'Qual tarefa vamos realizar hoje e para qual setor?'}).waitFor();await page.screenshot({path:'outputs/isolation/task-batches-initial.png'});report.screenshots.push('task-batches-initial.png');
+ await page.getByRole('button',{name:'Setores',exact:true}).click();await page.getByRole('dialog').waitFor();assert.equal(await page.evaluate(()=>getComputedStyle(document.querySelector('[role=dialog]')).backgroundColor),'rgb(255, 255, 255)');await page.keyboard.press('Escape');
+ report.checks.push('Menus, dialog portals, sidebar and initial state share the effective light theme.');
+ // The standalone development server is the environment that permits dark mode.
+ await page.goto('http://127.0.0.1:5181/admin/tasks?board='+proof.board+'&conversation='+proof.conversation);await page.getByRole('heading',{name:'Resumo das tarefas',exact:true}).waitFor();
+ assert.equal(await page.evaluate(()=>document.documentElement.classList.contains('dark')),true);
+ assert.notEqual(await page.locator('.task-collection').evaluate(e=>getComputedStyle(e).backgroundColor),'rgb(255, 255, 255)');
+ await page.getByRole('button',{name:'Ver detalhes das tarefas'}).click();assert.notEqual(await page.locator('.task-detail-card').first().evaluate(e=>getComputedStyle(e).backgroundColor),'rgb(255, 255, 255)');await page.screenshot({path:'outputs/isolation/task-batches-staging-dark.png'});report.screenshots.push('task-batches-staging-dark.png');
+ report.checks.push('Staging still respects the saved dark preference across shell, collection and detail cards.');
+ assert.deepEqual(errors,[]);report.completedAt=new Date().toISOString();
+}finally{if(browser)await browser.close();server.kill();await fs.writeFile('outputs/isolation/task-batches-browser-checks.json',JSON.stringify(report,null,2));}
+console.log(JSON.stringify({passed:true,checks:report.checks.length,screenshots:report.screenshots.length}));

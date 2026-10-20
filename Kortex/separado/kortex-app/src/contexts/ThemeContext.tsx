@@ -1,32 +1,55 @@
-import React, { createContext, useContext, useState, useEffect } from "react";
-
-type ThemeMode = "light" | "dark";
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useLayoutEffect,
+} from "react";
+import {
+  applyTheme,
+  lightPortal,
+  resolveTheme,
+  type ThemeMode,
+} from "@/theme-policy";
 
 interface ThemeContextType {
   mode: ThemeMode;
   toggleMode: () => void;
+  forcedLight?: boolean;
 }
 
 const ThemeContext = createContext<ThemeContextType>({
-  mode: "dark",
+  mode: "light",
   toggleMode: () => {},
 });
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [mode, setMode] = useState<ThemeMode>(() => {
-    const saved = localStorage.getItem("crm-theme-mode");
-    return (saved === "light" || saved === "dark") ? saved : "dark";
+    try {
+      return resolveTheme(localStorage.getItem("crm-theme-mode"));
+    } catch {
+      return resolveTheme(null);
+    }
   });
 
-  useEffect(() => {
-    document.documentElement.classList.toggle("dark", mode === "dark");
-    localStorage.setItem("crm-theme-mode", mode);
+  useLayoutEffect(() => {
+    applyTheme(mode);
+    if (!lightPortal) {
+      try {
+        localStorage.setItem("crm-theme-mode", mode);
+      } catch {
+        /* Storage may be unavailable. */
+      }
+    }
   }, [mode]);
 
-  const toggleMode = () => setMode(m => m === "dark" ? "light" : "dark");
+  const toggleMode = () => {
+    if (!lightPortal) setMode((m) => (m === "dark" ? "light" : "dark"));
+  };
 
   return (
-    <ThemeContext.Provider value={{ mode, toggleMode }}>
+    <ThemeContext.Provider
+      value={{ mode, toggleMode, forcedLight: lightPortal }}
+    >
       {children}
     </ThemeContext.Provider>
   );

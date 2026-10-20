@@ -133,7 +133,10 @@ const explicitProvider = import.meta.env.VITE_AUTOMATION_PROVIDER as "local" | "
 const configuredLocalUrl = import.meta.env.VITE_AUTOMATION_API_URL as string | undefined;
 const useLocalApi = explicitProvider === "local" || (!explicitProvider && Boolean(configuredLocalUrl));
 const automationBaseUrl = configuredLocalUrl ?? "";
-const automationToken = import.meta.env.VITE_AUTOMATION_API_TOKEN as string | undefined;
+
+function normalizeCompanyCode(value: string | undefined) {
+  return value?.replace(/[^a-zA-Z0-9]/g, "").toUpperCase() || undefined;
+}
 
 function hasSensitiveKey(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
@@ -181,18 +184,9 @@ async function headers() {
     "content-type": "application/json",
   };
 
-  if (automationToken) {
-    result["x-koa-automation-token"] = automationToken;
-  } else {
-    result.authorization = `Bearer ${await sessionToken()}`;
-  }
+  result.authorization = `Bearer ${await sessionToken()}`;
 
   return result;
-}
-
-async function authTokenForSse() {
-  if (automationToken) return automationToken;
-  return sessionToken();
 }
 
 async function parseResponse<T>(response: Response): Promise<T> {
@@ -218,7 +212,7 @@ async function workerFetch(url: string, options: RequestInit) {
 
 async function localFetch(url: string, options: RequestInit) {
   const response = await workerFetch(url, options);
-  if (response.status !== 401 || automationToken) return response;
+  if (response.status !== 401) return response;
   // The worker rejects 401 requests in onRequest, before creating an operation or accepting a password.
   // Retry only that rejection, once. Never repeat a POST after an uncertain network/server failure.
   const requestHeaders = new Headers(options.headers);
@@ -240,7 +234,7 @@ function createOperationRpcName(type: AutomationOperationType) {
 }
 
 async function signedArtifactUrl(artifact: SupabaseArtifactRow) {
-  const { data, error } = await supabase.storage.from(artifact.bucket).createSignedUrl(artifact.storage_path, 5 * 60);
+  const { data, error } = await supabase.storage.from(artifact.bucket).createSignedUrl(artifact.storage_path, 60);
   if (error || !data?.signedUrl) {
     throw new Error(error?.message ?? "Não foi possível criar a URL temporária do arquivo.");
   }
@@ -311,8 +305,8 @@ async function createLocalOperation(input: {
       workspaceId: input.workspaceId,
       companyId: input.companyId,
       requestedBy: input.requestedBy,
-      portal: input.portal ?? input.operator ?? "hapvida",
-      operator: input.portal ?? input.operator ?? "hapvida",
+      ...(input.portal || input.operator ? { portal: input.portal ?? input.operator } : {}),
+      ...(input.operator || input.portal ? { operator: input.operator ?? input.portal } : {}),
       input: input.data,
     }),
   });
@@ -329,7 +323,7 @@ export async function createOperation(input: {
   operator?: "hapvida" | "ndi";
   data: Record<string, unknown>;
 }) {
-  const payload = input.type === "CARD_ISSUE" ? { ...input.data, portalSearch: "auto" } : input.data;
+  const payload = input.type === "CARD_ISSUE" ? { ...input.data, portalSearch: "selected" } : input.data;
   assertSafePayload(payload);
 
   if (useLocalApi) return createLocalOperation({ ...input, data: payload });
@@ -404,7 +398,8 @@ export async function submitOperationAuthentication(input: {
     password: input.password,
     rememberOnDevice: input.rememberOnDevice,
   };
-  if (input.companyCode?.trim()) body.companyCode = input.companyCode.trim();
+  const companyCode = normalizeCompanyCode(input.companyCode);
+  if (companyCode) body.companyCode = companyCode;
 
   const response = await localFetch(`${automationBaseUrl}/api/operations/${input.operationId}/reauth`, {
     method: "POST",
@@ -481,122 +476,17 @@ export async function subscribeToOperation(operationId: string, handlers: {
   onError?: (error: Event) => void;
   onConnectionState?: (state: OperationConnectionState) => void;
 }) {
-  if (useLocalApi) {
-    if (!automationBaseUrl) throw new Error("VITE_AUTOMATION_API_URL e obrigatorio quando VITE_AUTOMATION_PROVIDER=local.");
-    let closed = false;
-    let connecting = false;
-    let source: EventSource | null = null;
-
-    const connect = () => {
-      if (closed || connecting) return;
-      connecting = true;
-      source?.close();
-      return authTokenForSse().then((token) => {
-        if (closed) return;
-        const url = new URL(`${automationBaseUrl}/api/operations/${operationId}/events`);
-        url.searchParams.set("token", token);
-        source = new EventSource(url.toString());
-        source.onopen = () => fallback.stopFallback();
-        source.onmessage = (event) => {
-          try {
-            fallback.stopFallback();
-            handlers.onEvent(JSON.parse(event.data) as AutomationEvent);
-          } catch {
-            fallback.startFallback();
-          }
-        };
-        source.onerror = () => fallback.startFallback();
-      }).catch(() => fallback.startFallback()).finally(() => { connecting = false; });
-    };
-
-    const fallback = createOperationFallbackMonitor({
-      operationId,
-      pollOperation: getOperation,
-      onEvent: handlers.onEvent,
-      onConnectionState: handlers.onConnectionState,
-      reconnect: connect,
-    });
-
-    await connect();
-
-    return () => {
-      closed = true;
-      fallback.stop();
-      source?.close();
-    };
-  }
-
-  let closed = false;
-  let channel: SupabaseChannelLike | null = null;
-
-  const removeCurrentChannel = () => {
-    if (!channel) return;
-    const current = channel;
-    channel = null;
-    void supabaseClient.removeChannel(current);
-  };
-
-  const connect = () => {
-    if (closed) return;
-    removeCurrentChannel();
-    channel = supabaseClient
-      .channel(`koa-operation-${operationId}`)
-      .on(
-        "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "automation_operations", filter: `id=eq.${operationId}` },
-        (payload) => {
-          const row = payload.new as SupabaseOperationRow;
-          fallback.stopFallback();
-          handlers.onEvent({
-            id: `${row.id}:${row.updated_at}`,
-            operationId: row.id,
-            type: row.status === "success" ? "operation.success" : row.status === "error" ? "operation.error" : "operation.status",
-            status: row.status,
-            step: row.current_step ?? undefined,
-            data: row.result ?? undefined,
-            createdAt: row.updated_at,
-          });
-        },
-      )
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "automation_events", filter: `operation_id=eq.${operationId}` },
-        (payload) => {
-          const row = payload.new as SupabaseEventRow;
-          fallback.stopFallback();
-          handlers.onEvent({
-            id: row.id,
-            operationId: row.operation_id,
-            type: row.event_type,
-            step: row.step ?? undefined,
-            data: row.payload ?? undefined,
-            createdAt: row.created_at,
-          });
-        },
-      )
-      .subscribe((status) => {
-        if (status === "SUBSCRIBED") {
-          fallback.stopFallback();
-        }
-        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
-          fallback.startFallback();
-        }
-      });
-  };
-
-  const fallback = createOperationFallbackMonitor({
-    operationId,
-    pollOperation: getOperation,
-    onEvent: handlers.onEvent,
-    onConnectionState: handlers.onConnectionState,
-    reconnect: connect,
-  });
-
-  connect();
-
-  return () => {
-    closed = true;
-    fallback.stop();
-    removeCurrentChannel();
-  };
+  // Polling uses a fresh authorized HTTP/RLS read on every request. No JWT is
+  // placed in a URL, and no legacy Postgres Changes channel remains open.
+  const {data}=await supabase.auth.getSession();
+  const actor=data.session?.user.id;
+  let stopped=false;
+  const monitor=createOperationFallbackMonitor({operationId,pollOperation:async id=>{
+    const session=await supabase.auth.getSession();
+    if(!actor||session.data.session?.user.id!==actor){stopped=true;monitor.stop();throw new Error('SESSION_CHANGED');}
+    return getOperation(id);
+  },onEvent:event=>{if(!stopped)handlers.onEvent(event);},onConnectionState:handlers.onConnectionState});
+  const {data:subscription}=supabase.auth.onAuthStateChange((_event,session)=>{if(session?.user.id!==actor){stopped=true;monitor.stop();}});
+  monitor.startFallback();
+  return ()=>{stopped=true;monitor.stop();subscription.subscription.unsubscribe();};
 }

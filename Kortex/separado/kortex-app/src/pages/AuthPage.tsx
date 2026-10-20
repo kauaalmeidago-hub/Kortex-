@@ -1,844 +1,1062 @@
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
   type InputHTMLAttributes,
   type ReactNode,
 } from "react";
-import { Link, useLocation, useNavigate, type Location } from "react-router-dom";
 import {
-  ArrowRight,
-  Check,
-  CheckCircle2,
-  Eye,
-  EyeOff,
-  Loader2,
-  Lock,
-  Mail,
-  User,
-} from "lucide-react";
-import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
+  Link,
+  useLocation,
+  useNavigate,
+  type Location,
+} from "react-router-dom";
+import type { Session } from "@supabase/supabase-js";
+import { ArrowLeft, CheckCircle2, Eye, EyeOff, Loader2 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
+import {
+  authMode,
+  authReturnUrl,
+  isProfileSector,
+  profileSectors,
+  safeAuthDestination,
+  validateAuthFields,
+  type AuthErrors,
+} from "@/features/auth/model";
+import {
+  authFailure,
+  completeAuthProfile,
+  loadAuthProfile,
+  loadAuthSettings,
+  restoreAuthReturn,
+  startGoogleAuth,
+  type AuthProfile,
+  type AuthSettings,
+} from "@/features/auth/service";
+import {
+  finishRecovery,
+  RecoveryError,
+  restoreRecoverySession,
+  saveRecoveredPassword,
+} from "@/features/auth/recovery";
+import "./AuthPage.css";
+import { waRequest, WaError } from '@/features/whatsapp/api';
 
-type AuthMode = "login" | "signup" | "forgot" | "reset";
-
-const brandLogo = "/auth/kortex-wordmark.png";
-const authVisual = "/auth/kortex-auth-visual.png";
 const emailStorageKey = "kortex-auth-email";
-
-function getRedirectTo(location: Location) {
-  const locationState = location.state as { from?: Location } | null;
-  return locationState?.from
-    ? `${locationState.from.pathname}${locationState.from.search}${locationState.from.hash}`
-    : "/";
-}
-
-function getAuthMode(location: Location): AuthMode {
-  const pathname = location.pathname.toLowerCase();
-  const search = new URLSearchParams(location.search);
-  const hash = new URLSearchParams(location.hash.replace(/^#/, ""));
-
-  if (
-    pathname.includes("reset-password") ||
-    pathname.includes("nova-senha") ||
-    search.has("code") ||
-    hash.get("type") === "recovery" ||
-    hash.has("access_token")
-  ) {
-    return "reset";
-  }
-
-  if (pathname.includes("forgot-password") || pathname.includes("recuperar-senha")) {
-    return "forgot";
-  }
-
-  if (pathname.includes("signup") || pathname.includes("criar-conta")) {
-    return "signup";
-  }
-
-  return "login";
-}
-
-export default function AuthPage() {
-  const navigate = useNavigate();
-  const location = useLocation();
-  const { loading: authLoading, user } = useAuth();
-  const mode = useMemo(() => getAuthMode(location), [location]);
-  const redirectTo = useMemo(() => getRedirectTo(location), [location]);
-
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [name, setName] = useState("");
-  const [remember, setRemember] = useState(true);
-  const [termsAccepted, setTermsAccepted] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [resetSent, setResetSent] = useState(false);
-  const [checkingRecovery, setCheckingRecovery] = useState(false);
-  const [recoveryReady, setRecoveryReady] = useState(false);
-  const [passwordChanged, setPasswordChanged] = useState(false);
-
-  useEffect(() => {
-    const savedEmail = localStorage.getItem(emailStorageKey);
-    if (savedEmail) {
-      setEmail(savedEmail);
-      setRemember(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!authLoading && user && mode !== "reset") {
-      navigate(redirectTo, { replace: true });
-    }
-  }, [authLoading, mode, navigate, redirectTo, user]);
-
-  useEffect(() => {
-    if (mode !== "reset") return;
-
-    let mounted = true;
-
-    async function activateRecoverySession() {
-      setCheckingRecovery(true);
-
-      const searchParams = new URLSearchParams(location.search);
-      const hashParams = new URLSearchParams(location.hash.replace(/^#/, ""));
-      const code = searchParams.get("code");
-      const accessToken = hashParams.get("access_token");
-      const refreshToken = hashParams.get("refresh_token");
-
-      if (code) {
-        const { error } = await supabase.auth.exchangeCodeForSession(code);
-        if (!mounted) return;
-        if (error) toast.error(error.message);
-      } else if (accessToken && refreshToken) {
-        const { error } = await supabase.auth.setSession({
-          access_token: accessToken,
-          refresh_token: refreshToken,
-        });
-        if (!mounted) return;
-        if (error) toast.error(error.message);
-      }
-
-      const { data } = await supabase.auth.getSession();
-      if (!mounted) return;
-
-      const sessionEmail = data.session?.user?.email;
-      if (sessionEmail) setEmail((current) => current || sessionEmail);
-      setRecoveryReady(Boolean(data.session));
-      setCheckingRecovery(false);
-    }
-
-    activateRecoverySession();
-
-    return () => {
-      mounted = false;
-    };
-  }, [location.hash, location.search, mode]);
-
-  const signIn = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setLoading(true);
-
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    setLoading(false);
-
-    if (error) {
-      toast.error(error.message);
-      return;
-    }
-
-    if (remember) {
-      localStorage.setItem(emailStorageKey, email);
-    } else {
-      localStorage.removeItem(emailStorageKey);
-    }
-
-    navigate(redirectTo, { replace: true });
-  };
-
-  const signUp = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-
-    if (password !== confirmPassword) {
-      toast.error("As senhas precisam ser iguais.");
-      return;
-    }
-
-    if (!termsAccepted) {
-      toast.error("Aceite os Termos de Uso e a Política de Privacidade para continuar.");
-      return;
-    }
-
-    setLoading(true);
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        emailRedirectTo: `${window.location.origin}/`,
-        data: { full_name: name },
-      },
-    });
-    setLoading(false);
-
-    if (error) {
-      toast.error(error.message);
-      return;
-    }
-
-    toast.success("Conta criada! Bem-vindo ao Kortex.");
-    navigate("/", { replace: true });
-  };
-
-  const recoverPassword = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setLoading(true);
-
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/auth/reset-password`,
-    });
-    setLoading(false);
-
-    if (error) {
-      toast.error(error.message);
-      return;
-    }
-
-    setResetSent(true);
-    toast.success("Link de redefinição enviado para seu e-mail.");
-  };
-
-  const updatePassword = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-
-    if (password !== confirmPassword) {
-      toast.error("As senhas precisam ser iguais.");
-      return;
-    }
-
-    setLoading(true);
-    const { error } = await supabase.auth.updateUser({ password });
-    setLoading(false);
-
-    if (error) {
-      toast.error(error.message);
-      return;
-    }
-
-    setPasswordChanged(true);
-  };
-
-  return (
-    <AuthShell mode={mode}>
-      {mode === "signup" ? (
-        <SignupForm
-          confirmPassword={confirmPassword}
-          email={email}
-          loading={loading}
-          name={name}
-          password={password}
-          setConfirmPassword={setConfirmPassword}
-          setEmail={setEmail}
-          setName={setName}
-          setPassword={setPassword}
-          setShowConfirmPassword={setShowConfirmPassword}
-          setShowPassword={setShowPassword}
-          setTermsAccepted={setTermsAccepted}
-          showConfirmPassword={showConfirmPassword}
-          showPassword={showPassword}
-          signUp={signUp}
-          termsAccepted={termsAccepted}
-        />
-      ) : mode === "forgot" ? (
-        <ForgotPasswordForm
-          email={email}
-          loading={loading}
-          recoverPassword={recoverPassword}
-          resetSent={resetSent}
-          setEmail={setEmail}
-        />
-      ) : mode === "reset" ? (
-        <ResetPasswordForm
-          checkingRecovery={checkingRecovery}
-          confirmPassword={confirmPassword}
-          email={email}
-          loading={loading}
-          password={password}
-          recoveryReady={recoveryReady}
-          setConfirmPassword={setConfirmPassword}
-          setEmail={setEmail}
-          setPassword={setPassword}
-          setShowConfirmPassword={setShowConfirmPassword}
-          setShowPassword={setShowPassword}
-          showConfirmPassword={showConfirmPassword}
-          showPassword={showPassword}
-          updatePassword={updatePassword}
-        />
-      ) : (
-        <LoginForm
-          email={email}
-          loading={loading}
-          password={password}
-          remember={remember}
-          setEmail={setEmail}
-          setPassword={setPassword}
-          setRemember={setRemember}
-          setShowPassword={setShowPassword}
-          showPassword={showPassword}
-          signIn={signIn}
-        />
-      )}
-
-      {passwordChanged && (
-        <SuccessModal
-          onClose={() => {
-            setPasswordChanged(false);
-            navigate("/", { replace: true });
-          }}
-        />
-      )}
-    </AuthShell>
-  );
-}
-
-type AuthShellProps = {
-  children: ReactNode;
-  mode: AuthMode;
+// Temporarily hide the provider entry points while retaining existing callbacks.
+const showGoogleSignIn = false;
+const initialSettings: AuthSettings = {
+  google: false,
+  signupEnabled: true,
+  minPasswordLength: 6,
+  verified: false,
 };
+export default function AuthPage() {
+  const location = useLocation(),
+    navigate = useNavigate();
+  const { user, loading: authLoading } = useAuth();
+  const mode = authMode(location.pathname, location.search, location.hash);
+  const recoveryLayout = mode === "forgot" || mode === "reset";
+  const [forceLogin, setForceLogin] = useState(
+    Boolean(
+      location.state?.preventAutoLogin || location.state?.recoveryComplete,
+    ),
+  );
+  const [returnAttempt, setReturnAttempt] = useState(0);
 
-function AuthShell({ children, mode }: AuthShellProps) {
-  const isLogin = mode === "login";
+  const destination = useMemo(() => {
+    const from = (location.state as { from?: Location } | null)?.from;
+    return safeAuthDestination(
+      from
+        ? `${from.pathname}${from.search}${from.hash}`
+        : new URLSearchParams(location.search).get("next"),
+      window.location.origin,
+    );
+  }, [location]);
+  const callbackUrl = authReturnUrl(
+    window.location.origin,
+    "/auth/callback",
+    destination,
+  );
+  const linkState = { from: { pathname: destination, search: "", hash: "" } };
+  const [email, setEmail] = useState(() => {
+    try {
+      return localStorage.getItem(emailStorageKey) ?? "";
+    } catch {
+      return "";
+    }
+  });
+  const [remember, setRemember] = useState(() => {
+    try {
+      return Boolean(localStorage.getItem(emailStorageKey));
+    } catch {
+      return false;
+    }
+  });
+  const [name, setName] = useState(""),
+    [sector, setSector] = useState("");
+  const [password, setPassword] = useState(""),
+    [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false),
+    [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<AuthErrors>({});
+  const [error, setError] = useState(""),
+    [notice, setNotice] = useState(""),
+    [busy, setBusy] = useState("");
+  const inFlight = useRef(false);
+  const [settings, setSettings] = useState(initialSettings),
+    [settingsLoading, setSettingsLoading] = useState(true);
+  const passwordMinimum = Math.max(
+    mode === "reset" ? 8 : 6,
+    settings.minPasswordLength,
+  );
+  const [confirmationPending, setConfirmationPending] = useState(false),
+    [passwordChanged, setPasswordChanged] = useState(false);
+  const [returnedSession, setReturnedSession] = useState<Session | null>(null);
+  const [returnLoading, setReturnLoading] = useState(
+      mode === "callback" || mode === "reset",
+    ),
+    [returnError, setReturnError] = useState("");
+  const returnRequest = useRef<{
+    key: string;
+    promise: Promise<Session | null>;
+  }>();
+  const currentUser = user ?? returnedSession?.user;
+  const [profileAttempt, setProfileAttempt] = useState(0);
+  const [profileState, setProfileState] = useState<{
+    userId: string;
+    loading: boolean;
+    data: AuthProfile | null;
+    error: string;
+  }>({ userId: "", loading: false, data: null, error: "" });
+  useEffect(() => {
+    let active = true;
+    void loadAuthSettings().then((data) => {
+      if (active) {
+        setSettings(data);
+        setSettingsLoading(false);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+  useEffect(() => {
+    setError("");
+    setNotice("");
+    setFieldErrors({});
+    setPassword("");
+    setConfirmPassword("");
+    setShowPassword(false);
+    setShowConfirmPassword(false);
+    setConfirmationPending(false);
+    setPasswordChanged(false);
+  }, [mode]);
+  useEffect(() => {
+    if (mode === "login" && location.state?.recoveryComplete) {
+      setForceLogin(true);
+      setNotice("Senha redefinida com sucesso. Faça login com sua nova senha.");
+      navigate(location.pathname + location.search, {
+        replace: true,
+        state: { ...linkState, preventAutoLogin: true },
+      });
+    } else if (mode === "login" && location.state?.preventAutoLogin)
+      setForceLogin(true);
+    // Consume the success notification once; never carry tokens in navigation state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, location.state?.recoveryComplete]);
+  useEffect(() => {
+    if (mode !== "callback" && mode !== "reset") return;
+    let active = true;
+    const key = `${mode}:${location.pathname}:${returnAttempt}`;
+    const returnUrl = `${window.location.origin}${location.pathname}${location.search}${location.hash}`;
+    setReturnLoading(true);
+    setReturnError("");
+    if (returnRequest.current?.key !== key)
+      returnRequest.current = {
+        key,
+        promise:
+          mode === "reset"
+            ? restoreRecoverySession(returnUrl)
+            : restoreAuthReturn(returnUrl),
+      };
+    void returnRequest.current.promise
+      .then((session) => {
+        if (!active) return;
+        setReturnedSession(session);
+        if (!session)
+          setReturnError(
+            mode === "reset"
+              ? "Este link é inválido ou expirou. Solicite um novo link para redefinir sua senha."
+              : "Não foi possível confirmar seu acesso. Entre novamente ou solicite um novo link.",
+          );
+      })
+      .catch((failure) => {
+        if (active)
+          setReturnError(
+            mode === "reset"
+              ? failure instanceof RecoveryError && failure.reason === "invalid"
+                ? "Este link é inválido ou expirou. Solicite um novo link para redefinir sua senha."
+                : "Não foi possível validar o link agora. Confira sua conexão e tente novamente."
+              : "Não foi possível validar o link de acesso. Ele pode ter expirado; solicite um novo link.",
+          );
+      })
+      .finally(() => {
+        if (active) {
+          setReturnLoading(false);
+          const clean = new URL(returnUrl);
+          [
+            "code",
+            "error",
+            "error_code",
+            "error_description",
+            "token_hash",
+            "token",
+            "type",
+          ].forEach((name) => clean.searchParams.delete(name));
+          if (clean.hash || clean.search !== location.search)
+            navigate(clean.pathname + clean.search, {
+              replace: true,
+              state: location.state,
+            });
+        }
+      });
+    return () => {
+      active = false;
+    };
+    // The SDK consumes the return once. URL cleanup must reuse that result.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, location.pathname, returnAttempt]);
+  const userId = currentUser?.id,
+    needsProfile =
+      mode !== "reset" &&
+      mode !== "forgot" &&
+      !(
+        mode === "login" &&
+        (forceLogin ||
+          location.state?.preventAutoLogin ||
+          location.state?.recoveryComplete)
+      );
+  useEffect(() => {
+    if (!userId || !needsProfile) return;
+    let active = true;
+    setProfileState({ userId, loading: true, data: null, error: "" });
+    void loadAuthProfile(userId)
+      .then((data) => {
+        if (active)
+          setProfileState({ userId, loading: false, data, error: "" });
+      })
+      .catch((failure) => {
+        if (active)
+          setProfileState({
+            userId,
+            loading: false,
+            data: null,
+            error: authFailure(failure),
+          });
+      });
+    return () => {
+      active = false;
+    };
+  }, [userId, needsProfile, profileAttempt]);
+  const profileReady = Boolean(
+    userId && profileState.userId === userId && !profileState.loading,
+  );
+  const profileComplete =
+    profileReady && isProfileSector(profileState.data?.sector);
+  useEffect(() => {
+    if (
+      currentUser &&
+      !authLoading &&
+      !busy &&
+      !returnLoading &&
+      !returnError &&
+      needsProfile &&
+      profileComplete
+    )
+      navigate(destination, { replace: true });
+  }, [
+    currentUser,
+    authLoading,
+    busy,
+    returnLoading,
+    returnError,
+    needsProfile,
+    profileComplete,
+    destination,
+    navigate,
+  ]);
 
-  return (
-    <main className="relative flex min-h-[100dvh] w-full items-center justify-center overflow-x-hidden bg-[#020816] p-4 text-white sm:p-5 lg:p-6">
-      <div className="pointer-events-none fixed inset-0">
-        <div className="absolute -left-32 -top-40 h-[520px] w-[520px] rounded-full bg-[#075cff]/35 blur-[120px]" />
-        <div className="absolute -bottom-44 right-0 h-[620px] w-[620px] rounded-full bg-[#006eff]/40 blur-[130px]" />
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(48,144,255,0.18),transparent_38%),linear-gradient(135deg,rgba(4,17,38,0.92),rgba(2,8,22,0.98))]" />
+  const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (inFlight.current) return;
+    const invalid = validateAuthFields(
+      mode,
+      { name, sector, email, password, confirmPassword },
+      passwordMinimum,
+    );
+    setFieldErrors(invalid);
+    setError("");
+    setNotice("");
+    if (Object.keys(invalid).length) {
+      document.getElementById(`auth-${Object.keys(invalid)[0]}`)?.focus();
+      return;
+    }
+    if (mode === "signup" && !settings.signupEnabled) {
+      setError("A criação de contas está indisponível no momento.");
+      return;
+    }
+    if (mode === "reset" && (!returnedSession || returnLoading || returnError))
+      return;
+    inFlight.current = true;
+    setBusy("email");
+    try {
+      if (mode === "login") {
+        const result = await supabase.auth.signInWithPassword({
+          email: email.trim(),
+          password,
+        });
+        if (result.error) throw result.error;
+        if (!result.data.session) throw new Error("SESSION_UNAVAILABLE");
+        try {
+          if (remember) localStorage.setItem(emailStorageKey, email.trim());
+          else localStorage.removeItem(emailStorageKey);
+        } catch {
+          /* Optional email preference only. */
+        }
+        setForceLogin(false);
+        setReturnedSession(result.data.session);
+        setPassword("");
+        navigate(location.pathname + location.search, {
+          replace: true,
+          state: linkState,
+        });
+      } else if (mode === "signup") {
+        const result = await waRequest<{ created: boolean; session?: Session }>('signup', { body: {
+          email: email.trim(),
+          password,
+          name: name.trim(), sector,
+        } });
+        setPassword("");
+        setConfirmPassword("");
+        if (result.created) {
+          if (result.session) {
+            const restored = await supabase.auth.setSession(result.session);
+            if (restored.error) throw restored.error;
+          }
+          navigate('/auth/whatsapp', { replace: true });
+        } else setConfirmationPending(true);
+      } else if (mode === "forgot") {
+        const result = await supabase.auth.resetPasswordForEmail(email.trim(), {
+          redirectTo: authReturnUrl(
+            window.location.origin,
+            "/auth/reset-password",
+            destination,
+          ),
+        });
+        if (result.error) throw result.error;
+        setNotice(
+          "Se houver uma conta associada a este e-mail, você receberá as instruções para redefinir sua senha.",
+        );
+      } else if (mode === "reset") {
+        await saveRecoveredPassword(password, returnedSession!.user.id);
+        setPassword("");
+        setConfirmPassword("");
+        setPasswordChanged(true);
+        setReturnedSession(null);
+        try {
+          await finishRecovery();
+          navigate("/auth/login", {
+            replace: true,
+            state: { ...linkState, recoveryComplete: true },
+          });
+        } catch {
+          setError(
+            "Sua senha foi alterada, mas não foi possível encerrar a sessão. Tente concluir o retorno ao login.",
+          );
+        }
+      }
+    } catch (failure) {
+      if (failure instanceof RecoveryError && failure.reason === "invalid") {
+        setReturnError(
+          "Este link é inválido ou expirou. Solicite um novo link para redefinir sua senha.",
+        );
+        setReturnedSession(null);
+        setPassword("");
+        setConfirmPassword("");
+      } else setError(failure instanceof WaError ? failure.message : authFailure(failure));
+    } finally {
+      inFlight.current = false;
+      setBusy("");
+    }
+  };
+  const google = async () => {
+    if (inFlight.current || !settings.google) return;
+    inFlight.current = true;
+    setBusy("google");
+    setError("");
+    try {
+      await startGoogleAuth(callbackUrl);
+    } catch (failure) {
+      setError(authFailure(failure));
+    } finally {
+      inFlight.current = false;
+      setBusy("");
+    }
+  };
+  const saveProfile = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (inFlight.current || !userId) return;
+    if (!isProfileSector(sector)) {
+      setFieldErrors({ sector: "Selecione seu setor." });
+      return;
+    }
+    inFlight.current = true;
+    setBusy("profile");
+    setError("");
+    setFieldErrors({});
+    try {
+      const saved = await completeAuthProfile(
+        sector,
+        profileState.data?.full_name ||
+          currentUser?.user_metadata.full_name ||
+          currentUser?.user_metadata.name ||
+          name,
+      );
+      setProfileState({ userId, loading: false, data: saved, error: "" });
+    } catch (failure) {
+      setError(authFailure(failure));
+    } finally {
+      inFlight.current = false;
+      setBusy("");
+    }
+  };
+  const feedback = (
+    <>
+      {error && (
+        <p className="auth-error" role="alert">
+          {error}
+        </p>
+      )}
+      {notice && (
+        <p className="auth-notice" role="status">
+          {notice}
+        </p>
+      )}
+    </>
+  );
+  const googleButton = (
+    <>
+      <div className="auth-divider">
+        <span>ou</span>
       </div>
-
-      <section
-        className={[
-          "relative mx-auto grid w-full max-w-[1220px] overflow-hidden border border-[#0c83ff]/70 bg-[#030912]/92 shadow-[0_0_80px_rgba(0,99,255,0.38)] backdrop-blur-xl",
-          "rounded-[24px] lg:h-[clamp(520px,calc(100dvh-48px),680px)] lg:max-h-[calc(100dvh-48px)] lg:grid-cols-[minmax(0,3fr)_minmax(400px,2fr)]",
-        ].join(" ")}
+      <button
+        type="button"
+        className="auth-button auth-google"
+        onClick={() => void google()}
+        disabled={Boolean(busy) || settingsLoading || !settings.google}
+        aria-describedby={
+          !settings.google && !settingsLoading
+            ? "auth-google-status"
+            : undefined
+        }
       >
-        {isLogin ? <LoginVisual /> : <WorkspaceVisual />}
-
-        <section
-          className={[
-            "relative flex min-h-[calc(100dvh-32px)] min-w-0 items-center justify-center bg-[#030912]/96 px-6 py-8 sm:px-8",
-            "lg:h-full lg:min-h-0 lg:overflow-y-auto lg:px-10 lg:py-6 xl:px-12",
-          ].join(" ")}
+        {busy === "google" ? (
+          <Loader2 className="animate-spin" size={18} />
+        ) : (
+          <GoogleMark />
+        )}
+        Continuar com Google
+      </button>
+      {!settingsLoading && !settings.google && (
+        <p id="auth-google-status" className="auth-hint">
+          {settings.verified
+            ? "Acesso com Google ainda não habilitado."
+            : "Não foi possível verificar o acesso com Google. Tente mais tarde."}
+        </p>
+      )}
+    </>
+  );
+  let content: ReactNode;
+  if (passwordChanged) {
+    content = (
+      <div className="auth-status" role="status">
+        <CheckCircle2 size={36} />
+        <AuthHeading
+          title="Senha atualizada"
+          subtitle="Sua nova senha foi salva."
+        />
+        {feedback}
+        <button
+          type="button"
+          className="auth-button auth-primary"
+          disabled={Boolean(busy)}
+          onClick={async () => {
+            if (inFlight.current) return;
+            inFlight.current = true;
+            setBusy("finish");
+            try {
+              await finishRecovery();
+              navigate("/auth/login", {
+                replace: true,
+                state: { ...linkState, recoveryComplete: true },
+              });
+            } catch {
+              setError(
+                "Sua senha já foi alterada. Não foi possível encerrar a sessão; tente novamente.",
+              );
+            } finally {
+              inFlight.current = false;
+              setBusy("");
+            }
+          }}
         >
-          <div className={isLogin ? "w-full max-w-[390px]" : "w-full max-w-[470px]"}>{children}</div>
-        </section>
+          {busy ? "Aguarde..." : "Voltar para o login"}
+        </button>
+      </div>
+    );
+  } else if (confirmationPending && !currentUser) {
+    content = (
+      <div className="auth-status" role="status">
+        <CheckCircle2 size={36} />
+        <AuthHeading
+          title="Confira seu e-mail"
+          subtitle="Para continuar o cadastro, confirme o link enviado ao endereço informado."
+        />
+        <p className="auth-hint">
+          A confirmação ainda não inicia sua sessão nesta janela.
+        </p>
+        <Link
+          className="auth-button auth-primary"
+          to="/auth/login"
+          state={linkState}
+        >
+          Voltar para entrar
+        </Link>
+      </div>
+    );
+  } else if (currentUser && needsProfile) {
+    content =
+      !profileReady || authLoading ? (
+        <AuthStatus text="Carregando seu perfil..." />
+      ) : profileState.error ? (
+        <div className="auth-form">
+          <AuthHeading
+            title="Concluir seu perfil"
+            subtitle="Sua conta foi preservada."
+          />
+          <p role="alert" className="auth-error">
+            {profileState.error}
+          </p>
+          <button
+            type="button"
+            className="auth-button auth-primary"
+            onClick={() => setProfileAttempt((n) => n + 1)}
+          >
+            Tentar novamente
+          </button>
+        </div>
+      ) : profileComplete ? (
+        <AuthStatus text="Abrindo sua conta..." />
+      ) : (
+        <form className="auth-form" onSubmit={saveProfile} noValidate>
+          <AuthHeading
+            title="Qual é seu setor?"
+            subtitle="Complete seu perfil para continuar. Sua conta já está conectada."
+          />
+          <SectorField
+            value={sector}
+            onChange={setSector}
+            error={fieldErrors.sector}
+            disabled={Boolean(busy)}
+          />
+          <p className="auth-hint">
+            O setor informado compõe seu perfil. O acesso à equipe e às tarefas
+            segue as permissões da sua conta.
+          </p>
+          {feedback}
+          <AuthSubmit busy={Boolean(busy)} label="Salvar e continuar" />
+        </form>
+      );
+  } else if (mode === "callback") {
+    content = returnError ? (
+      <div className="auth-form">
+        <AuthHeading
+          title="Confira seu acesso"
+          subtitle="Não foi possível concluir a confirmação."
+        />
+        <p className="auth-error" role="alert">
+          {returnError}
+        </p>
+        <Link
+          className="auth-button auth-primary"
+          to="/auth/login"
+          state={linkState}
+        >
+          Voltar para entrar
+        </Link>
+      </div>
+    ) : (
+      <AuthStatus text="Confirmando seu acesso..." />
+    );
+  } else {
+    const signup = mode === "signup",
+      reset = mode === "reset",
+      forgot = mode === "forgot";
+    content = (
+      <form
+        className="auth-form"
+        onSubmit={onSubmit}
+        noValidate
+        aria-busy={Boolean(busy)}
+      >
+        {mode === "login" && (
+          <img
+            className="auth-platform-mark"
+            src="/brand/kortex-symbol.png"
+            alt="Kortex"
+            width="40"
+            height="40"
+          />
+        )}
+        <AuthHeading
+          title={
+            signup
+              ? "Crie sua conta"
+              : forgot
+                ? "Esqueceu sua senha?"
+                : reset
+                  ? "Redefina sua senha"
+                  : "Comece sua jornada"
+          }
+          subtitle={
+            signup
+              ? "Comece sua jornada com a gente."
+              : forgot
+                ? "Informe seu e-mail para receber as instruções de recuperação."
+                : reset
+                  ? "Crie uma nova senha para acessar sua conta."
+                  : "Seu próximo passo começa aqui."
+          }
+        />
+        <fieldset
+          disabled={
+            Boolean(busy) ||
+            (reset &&
+              (returnLoading || Boolean(returnError) || !returnedSession))
+          }
+          className="auth-fields"
+        >
+          {signup && (
+            <div className="auth-name-sector">
+              <AuthField
+                id="auth-name"
+                label="Nome"
+                autoComplete="name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Seu nome"
+                error={fieldErrors.name}
+                maxLength={160}
+                required
+              />
+              <SectorField
+                value={sector}
+                onChange={setSector}
+                error={fieldErrors.sector}
+                disabled={Boolean(busy)}
+              />
+            </div>
+          )}
+          {!reset && (
+            <AuthField
+              id="auth-email"
+              label="E-mail"
+              type="email"
+              autoComplete="email"
+              inputMode="email"
+              autoCapitalize="none"
+              spellCheck={false}
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="Digite seu e-mail"
+              error={fieldErrors.email}
+              required
+            />
+          )}
+          {!forgot && (
+            <PasswordField
+              id="auth-password"
+              label={reset ? "Nova senha" : "Senha"}
+              value={password}
+              onChange={setPassword}
+              shown={showPassword}
+              onToggle={() => setShowPassword((v) => !v)}
+              autoComplete={
+                signup || reset ? "new-password" : "current-password"
+              }
+              placeholder={
+                reset
+                  ? "Digite sua nova senha"
+                  : signup
+                    ? "Crie sua senha"
+                    : "Digite sua senha"
+              }
+              error={fieldErrors.password}
+              hint={
+                reset
+                  ? `Use pelo menos ${passwordMinimum} caracteres.`
+                  : undefined
+              }
+            />
+          )}
+          {(signup || reset) && (
+            <PasswordField
+              id="auth-confirmPassword"
+              label={reset ? "Confirmar nova senha" : "Confirmar senha"}
+              value={confirmPassword}
+              onChange={setConfirmPassword}
+              shown={showConfirmPassword}
+              onToggle={() => setShowConfirmPassword((v) => !v)}
+              autoComplete="new-password"
+              placeholder={
+                reset ? "Digite novamente sua senha" : "Confirme sua senha"
+              }
+              error={fieldErrors.confirmPassword}
+            />
+          )}
+        </fieldset>
+        {mode === "login" && (
+          <div>
+            <div className="auth-login-options">
+              <label htmlFor="auth-remember" className="auth-remember">
+                <Checkbox
+                  id="auth-remember"
+                  checked={remember}
+                  onCheckedChange={(value) => setRemember(value === true)}
+                  disabled={Boolean(busy)}
+                  aria-describedby="auth-remember-hint"
+                />
+                Lembrar de mim
+              </label>
+              <Link to="/auth/forgot-password" state={linkState}>
+                Esqueceu a senha?
+              </Link>
+            </div>
+            <p className="auth-hint" id="auth-remember-hint">
+              Salva somente seu e-mail neste dispositivo.
+            </p>
+          </div>
+        )}
+        {signup && (
+          <p className="auth-hint">
+            Use pelo menos {passwordMinimum} caracteres.
+          </p>
+        )}
+        {reset && returnLoading && (
+          <AuthStatus text="Validando o link de recuperação..." />
+        )}
+        {reset && returnError && (
+          <p className="auth-error" role="alert">
+            {returnError}{" "}
+            <Link to="/auth/forgot-password" state={linkState}>
+              Solicitar novo link
+            </Link>
+          </p>
+        )}
+        {reset && returnError && (
+          <button
+            type="button"
+            className="auth-button auth-google"
+            onClick={() => setReturnAttempt((value) => value + 1)}
+          >
+            Tentar validar novamente
+          </button>
+        )}
+        {feedback}
+        <AuthSubmit
+          busy={busy === "email"}
+          disabled={
+            Boolean(busy) ||
+            (reset &&
+              (returnLoading || Boolean(returnError) || !returnedSession)) ||
+            (signup && !settings.signupEnabled)
+          }
+          label={
+            signup
+              ? "Criar conta"
+              : forgot
+                ? "Enviar link de recuperação"
+                : reset
+                  ? "Salvar nova senha"
+                  : "Entrar"
+          }
+        />
+        {showGoogleSignIn && (signup || mode === "login") && googleButton}
+        <p className="auth-switch">
+          {signup ? (
+            <>
+              Já tem uma conta?{" "}
+              <Link to="/auth/login" state={linkState}>
+                Entrar
+              </Link>
+            </>
+          ) : mode === "login" ? (
+            <>
+              Ainda não tem uma conta?{" "}
+              <Link to="/auth/signup" state={linkState}>
+                Criar conta
+              </Link>
+            </>
+          ) : (
+            <Link
+              className="auth-back-link"
+              to="/auth/login"
+              state={{ ...linkState, preventAutoLogin: true }}
+            >
+              <ArrowLeft size={16} aria-hidden="true" /> Voltar para o login
+            </Link>
+          )}
+        </p>
+      </form>
+    );
+  }
+  return (
+    <main className="auth-page">
+      <section
+        className={`auth-card ${recoveryLayout ? "auth-card--recovery" : mode === "signup" ? "auth-card--signup" : "auth-card--login"}`}
+        aria-label={mode === "signup" ? "Criar conta Kortex" : "Acesso Kortex"}
+      >
+        <section className="auth-form-panel">{content}</section>
+        <aside className="auth-art" aria-hidden="true">
+          <img
+            src={
+              recoveryLayout
+                ? "/auth/koa-recovery-art.png"
+                : mode === "signup"
+                  ? "/auth/koa-signup-art.png"
+                  : "/auth/koa-login-art.png"
+            }
+            alt=""
+            width="1120"
+            height="1400"
+          />
+          {!recoveryLayout && mode !== "signup" && (
+            <div className="auth-art-copy">
+              <span>Sua operação, conectada.</span>
+              <h2>
+                Mais clareza para gerir.
+                <br />
+                Mais tempo para evoluir.
+              </h2>
+              <p>Centralize conversas, empresas e tarefas em um só lugar.</p>
+            </div>
+          )}
+        </aside>
       </section>
     </main>
   );
 }
-
-function LoginVisual() {
+function AuthHeading({ title, subtitle }: { title: string; subtitle: string }) {
   return (
-    <aside className="relative hidden h-full min-w-0 overflow-hidden bg-[#061736] lg:block">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_74%_8%,rgba(0,183,255,0.75),transparent_28%),radial-gradient(circle_at_2%_88%,rgba(0,78,255,0.95),transparent_35%),linear-gradient(145deg,#02112c,#06215a_48%,#020916)]" />
-      <div className="absolute -left-[25%] top-[5%] h-[880px] w-[880px] rounded-full border-[88px] border-[#0b5cff]/35 opacity-80 blur-[1px]" />
-      <div className="absolute -bottom-[34%] -left-[3%] h-[820px] w-[360px] rotate-[-44deg] rounded-[72px] bg-gradient-to-b from-[#063cff]/95 via-[#022a9d]/80 to-[#000b2f]/60 shadow-[0_0_90px_rgba(0,85,255,0.62)]" />
-      <div className="absolute left-[48%] top-[12%] h-[610px] w-[178px] rotate-45 rounded-[58px] bg-gradient-to-br from-[#00bbff] via-[#086eff] to-[#001c9f] shadow-[0_0_70px_rgba(0,157,255,0.65)]" />
-      <div className="absolute left-[68%] top-[34%] h-[420px] w-[156px] rotate-[-42deg] rounded-[48px] bg-gradient-to-br from-[#9ed7ff] via-[#197dff] to-[#061c69] opacity-85 shadow-[0_0_52px_rgba(113,190,255,0.42)]" />
-      <div className="absolute inset-y-0 right-0 w-px bg-[#0c83ff]/80" />
-      <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.05),transparent_28%,rgba(0,0,0,0.28)_72%)]" />
-    </aside>
+    <header className="auth-heading">
+      <h1>{title}</h1>
+      <p>{subtitle}</p>
+    </header>
   );
 }
-
-function WorkspaceVisual() {
+function AuthStatus({ text }: { text: string }) {
   return (
-    <aside className="relative hidden h-full min-w-0 overflow-hidden bg-[#f7fbff] lg:block">
-      <img
-        src={authVisual}
-        alt=""
-        className="absolute inset-0 h-full w-full object-cover object-center opacity-70 brightness-[1.34] contrast-[0.82] saturate-[0.82]"
-      />
-      <div className="absolute inset-0 bg-white/42" />
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_18%,rgba(255,255,255,0.96),transparent_28%),linear-gradient(90deg,rgba(255,255,255,0.95),rgba(244,250,255,0.54)_62%,rgba(231,242,255,0.35))]" />
-      <div className="absolute -right-[4%] top-[4%] h-[740px] w-[260px] rotate-45 rounded-[74px] bg-gradient-to-b from-[#0e7cff]/10 via-[#0e7cff]/24 to-[#0e7cff]/8" />
-      <div className="absolute right-[18%] top-[30%] h-[430px] w-[156px] rotate-[-43deg] rounded-[54px] bg-gradient-to-b from-white/78 via-[#ddecff]/68 to-white/42 shadow-[0_24px_80px_rgba(15,96,255,0.14)]" />
-      <div className="absolute bottom-[16%] left-[18%] h-[238px] w-[420px] rotate-[6deg] rounded-[22px] border border-[#b7cdf2]/60 bg-white/78 shadow-[0_30px_80px_rgba(8,35,92,0.22)] backdrop-blur">
-        <div className="mx-auto mt-4 h-[150px] w-[360px] rounded-[16px] bg-gradient-to-br from-[#eef6ff] to-white p-5 shadow-inner">
-          <div className="mb-5 flex items-center gap-2">
-            <span className="h-6 w-6 rounded-md bg-[#0a7cff]" />
-            <span className="h-2 w-20 rounded-full bg-[#12305d]/22" />
-          </div>
-          <div className="grid grid-cols-3 gap-3">
-            <span className="h-16 rounded-xl bg-[#0a7cff]/12" />
-            <span className="h-16 rounded-xl bg-[#0a7cff]/16" />
-            <span className="h-16 rounded-xl bg-[#0a7cff]/10" />
-          </div>
-        </div>
-        <div className="mx-auto h-5 w-52 rounded-b-[18px] bg-[#dce7f8]" />
-      </div>
-    </aside>
+    <p className="auth-loading" role="status">
+      <Loader2 size={18} className="animate-spin" />
+      {text}
+    </p>
   );
 }
-
-type FieldProps = InputHTMLAttributes<HTMLInputElement> & {
-  icon: ReactNode;
+function AuthSubmit({
+  busy,
+  disabled,
+  label,
+}: {
+  busy: boolean;
+  disabled?: boolean;
   label: string;
-  right?: ReactNode;
-  hint?: string;
-};
-
-function AuthField({ icon, label, right, hint, className, ...props }: FieldProps) {
+}) {
   return (
-    <label className="grid gap-2">
-      <span className="text-[15px] font-semibold text-white/88">{label}</span>
-      <span className="relative block">
-        <span className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 text-[#b9cff7]">{icon}</span>
-        <Input
-          {...props}
-          className={[
-            "h-[52px] rounded-[12px] border border-[#5a7fbd]/75 bg-[#0c1c35]/80 pl-[54px] pr-5 text-[16px] font-medium text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] outline-none placeholder:text-[#a8b9d8] focus-visible:border-[#16a0ff] focus-visible:ring-2 focus-visible:ring-[#0f85ff]/45 focus-visible:ring-offset-0",
-            className,
-          ]
-            .filter(Boolean)
-            .join(" ")}
-        />
-        {right}
-      </span>
-      {hint && <span className="text-[14px] leading-5 text-[#b9c8e2]">{hint}</span>}
-    </label>
+    <button
+      type="submit"
+      className="auth-button auth-primary auth-submit"
+      disabled={busy || disabled}
+    >
+      {busy && <Loader2 size={18} className="animate-spin" />}
+      {busy ? "Aguarde..." : label}
+    </button>
   );
 }
-
-type PasswordFieldProps = {
+function AuthField({
+  label,
+  error,
+  children,
+  hint,
+  ...props
+}: InputHTMLAttributes<HTMLInputElement> & {
+  label: string;
+  error?: string;
+  children?: ReactNode;
+  hint?: string;
+}) {
+  return (
+    <div className="auth-field">
+      <label htmlFor={props.id}>{label}</label>
+      <div className="auth-input-wrap">
+        <input
+          {...props}
+          aria-invalid={Boolean(error)}
+          aria-describedby={
+            [error ? `${props.id}-error` : "", hint ? `${props.id}-hint` : ""]
+              .filter(Boolean)
+              .join(" ") || undefined
+          }
+        />
+        {children}
+      </div>
+      {hint && (
+        <p id={`${props.id}-hint`} className="auth-hint">
+          {hint}
+        </p>
+      )}
+      {error && (
+        <p id={`${props.id}-error`} className="auth-field-error">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+function PasswordField({
+  id,
+  label,
+  value,
+  onChange,
+  shown,
+  onToggle,
+  autoComplete,
+  placeholder,
+  error,
+  hint,
+}: {
+  id: string;
   label: string;
   value: string;
-  onChange: (value: string) => void;
+  onChange: (v: string) => void;
+  shown: boolean;
+  onToggle: () => void;
+  autoComplete: string;
   placeholder: string;
-  show: boolean;
-  setShow: (show: boolean) => void;
+  error?: string;
   hint?: string;
-};
-
-function PasswordField({ label, value, onChange, placeholder, show, setShow, hint }: PasswordFieldProps) {
+}) {
   return (
     <AuthField
-      icon={<Lock size={27} strokeWidth={1.8} />}
+      id={id}
       label={label}
-      type={show ? "text" : "password"}
-      required
-      minLength={8}
+      type={shown ? "text" : "password"}
+      autoComplete={autoComplete}
       value={value}
       onChange={(event) => onChange(event.target.value)}
       placeholder={placeholder}
+      error={error}
+      required
+      className="auth-password-input"
       hint={hint}
-      className="pr-[58px]"
-      right={
-        <button
-          type="button"
-          onClick={() => setShow(!show)}
-          className="absolute right-5 top-1/2 -translate-y-1/2 text-[#b9cff7] transition hover:text-white"
-          aria-label={show ? "Ocultar senha" : "Mostrar senha"}
-        >
-          {show ? <EyeOff size={24} strokeWidth={1.8} /> : <Eye size={24} strokeWidth={1.8} />}
-        </button>
-      }
-    />
-  );
-}
-
-type LoginFormProps = {
-  email: string;
-  loading: boolean;
-  password: string;
-  remember: boolean;
-  setEmail: (value: string) => void;
-  setPassword: (value: string) => void;
-  setRemember: (value: boolean) => void;
-  setShowPassword: (value: boolean) => void;
-  showPassword: boolean;
-  signIn: (event: FormEvent<HTMLFormElement>) => void;
-};
-
-function LoginForm({
-  email,
-  loading,
-  password,
-  remember,
-  setEmail,
-  setPassword,
-  setRemember,
-  setShowPassword,
-  showPassword,
-  signIn,
-}: LoginFormProps) {
-  return (
-    <>
-      <img src={brandLogo} alt="Kortex" className="mb-10 h-auto w-[210px] object-contain xl:w-[224px]" />
-
-      <form onSubmit={signIn} className="space-y-6">
-        <AuthField
-          icon={<Mail size={27} strokeWidth={1.8} />}
-          label="E-mail"
-          type="email"
-          required
-          value={email}
-          onChange={(event) => setEmail(event.target.value)}
-          placeholder="seu@email.com"
-        />
-
-        <PasswordField
-          label="Senha"
-          value={password}
-          onChange={setPassword}
-          placeholder="Digite sua senha"
-          show={showPassword}
-          setShow={setShowPassword}
-        />
-
-        <div className="flex items-center justify-between gap-4 pt-1 text-[15px]">
-          <label className="flex items-center gap-3 font-semibold text-white/90">
-            <Checkbox
-              checked={remember}
-              onCheckedChange={(value) => setRemember(value === true)}
-              className="h-[26px] w-[26px] rounded-[6px] border-[#2d9bff] bg-[#0e8cff] text-white data-[state=checked]:bg-[#0e8cff]"
-            />
-            Lembrar de mim
-          </label>
-
-          <Link to="/auth/forgot-password" className="font-semibold text-[#18a7ff] underline-offset-4 hover:underline">
-            Esqueci minha senha?
-          </Link>
-        </div>
-
-        <Button
-          type="submit"
-          disabled={loading}
-          className="h-[58px] w-full rounded-[14px] bg-gradient-to-r from-[#00adff] to-[#0067ff] text-[21px] font-bold text-white shadow-[0_20px_55px_rgba(0,105,255,0.32)] hover:from-[#23bcff] hover:to-[#1474ff]"
-        >
-          {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : "Entrar"}
-          {!loading && <ArrowRight size={28} strokeWidth={1.8} />}
-        </Button>
-
-        <p className="pt-2 text-center text-[16px] text-white/78">
-          Não tem conta?{" "}
-          <Link to="/auth/signup" className="font-semibold text-[#18a7ff] hover:underline">
-            Criar conta
-          </Link>
-        </p>
-      </form>
-    </>
-  );
-}
-
-type SignupFormProps = {
-  confirmPassword: string;
-  email: string;
-  loading: boolean;
-  name: string;
-  password: string;
-  setConfirmPassword: (value: string) => void;
-  setEmail: (value: string) => void;
-  setName: (value: string) => void;
-  setPassword: (value: string) => void;
-  setShowConfirmPassword: (value: boolean) => void;
-  setShowPassword: (value: boolean) => void;
-  setTermsAccepted: (value: boolean) => void;
-  showConfirmPassword: boolean;
-  showPassword: boolean;
-  signUp: (event: FormEvent<HTMLFormElement>) => void;
-  termsAccepted: boolean;
-};
-
-function SignupForm({
-  confirmPassword,
-  email,
-  loading,
-  name,
-  password,
-  setConfirmPassword,
-  setEmail,
-  setName,
-  setPassword,
-  setShowConfirmPassword,
-  setShowPassword,
-  setTermsAccepted,
-  showConfirmPassword,
-  showPassword,
-  signUp,
-  termsAccepted,
-}: SignupFormProps) {
-  return (
-    <form onSubmit={signUp} className="space-y-4">
-      <div className="mb-5">
-        <h1 className="text-[40px] font-bold leading-none tracking-normal text-white">Criar conta</h1>
-        <p className="mt-3 text-[18px] leading-7 text-[#c1d2f1]">Preencha seus dados para começar.</p>
-      </div>
-
-      <AuthField
-        icon={<User size={27} strokeWidth={1.8} />}
-        label="Nome completo"
-        required
-        value={name}
-        onChange={(event) => setName(event.target.value)}
-        placeholder="Seu nome completo"
-      />
-
-      <AuthField
-        icon={<Mail size={27} strokeWidth={1.8} />}
-        label="E-mail"
-        type="email"
-        required
-        value={email}
-        onChange={(event) => setEmail(event.target.value)}
-        placeholder="seu@email.com"
-      />
-
-      <PasswordField
-        label="Senha"
-        value={password}
-        onChange={setPassword}
-        placeholder="Crie uma senha"
-        show={showPassword}
-        setShow={setShowPassword}
-      />
-
-      <PasswordField
-        label="Confirmar senha"
-        value={confirmPassword}
-        onChange={setConfirmPassword}
-        placeholder="Confirme sua senha"
-        show={showConfirmPassword}
-        setShow={setShowConfirmPassword}
-      />
-
-      <label className="flex items-start gap-3 pt-1 text-[16px] font-medium leading-6 text-white">
-        <Checkbox
-          checked={termsAccepted}
-          onCheckedChange={(value) => setTermsAccepted(value === true)}
-          className="mt-0.5 h-[28px] w-[28px] rounded-[7px] border-[#dbe8ff] bg-transparent text-white data-[state=checked]:border-[#0e8cff] data-[state=checked]:bg-[#0e8cff]"
-        />
-        <span>
-          Concordo com os{" "}
-          <a href="#" onClick={(event) => event.preventDefault()} className="font-semibold text-[#18a7ff]">
-            Termos de Uso
-          </a>{" "}
-          e a{" "}
-          <a href="#" onClick={(event) => event.preventDefault()} className="font-semibold text-[#18a7ff]">
-            Política de Privacidade.
-          </a>
-        </span>
-      </label>
-
-      <Button
-        type="submit"
-        disabled={loading}
-        className="mt-2 h-[58px] w-full rounded-[14px] bg-gradient-to-r from-[#00adff] to-[#0067ff] text-[21px] font-bold text-white shadow-[0_20px_55px_rgba(0,105,255,0.32)] hover:from-[#23bcff] hover:to-[#1474ff]"
+    >
+      <button
+        type="button"
+        className="auth-password-toggle"
+        onClick={onToggle}
+        aria-label={`${shown ? "Ocultar" : "Mostrar"} ${label.toLowerCase()}`}
+        aria-pressed={shown}
       >
-        {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : "Criar conta"}
-        {!loading && <ArrowRight size={28} strokeWidth={1.8} />}
-      </Button>
-
-      <div className="pt-3">
-        <div className="h-px w-full bg-[#7d98c4]/45" />
-        <p className="pt-4 text-center text-[16px] text-white/82">
-          Já tem conta?{" "}
-          <Link to="/auth" className="font-semibold text-[#18a7ff] hover:underline">
-            Entrar
-          </Link>
-        </p>
-      </div>
-    </form>
+        {shown ? <EyeOff size={19} /> : <Eye size={19} />}
+      </button>
+    </AuthField>
   );
 }
-
-type ForgotPasswordFormProps = {
-  email: string;
-  loading: boolean;
-  recoverPassword: (event: FormEvent<HTMLFormElement>) => void;
-  resetSent: boolean;
-  setEmail: (value: string) => void;
-};
-
-function ForgotPasswordForm({ email, loading, recoverPassword, resetSent, setEmail }: ForgotPasswordFormProps) {
+function SectorField({
+  value,
+  onChange,
+  error,
+  disabled,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  error?: string;
+  disabled?: boolean;
+}) {
   return (
-    <form onSubmit={recoverPassword} className="space-y-5">
-      <div className="mb-6">
-        <h1 className="text-[38px] font-bold leading-tight tracking-normal text-white">Recuperar senha</h1>
-        <p className="mt-3 text-[19px] leading-7 text-[#c1d2f1]">Informe seu e-mail para receber o link.</p>
-      </div>
-
-      <AuthField
-        icon={<Mail size={27} strokeWidth={1.8} />}
-        label="E-mail"
-        type="email"
+    <div className="auth-field">
+      <label htmlFor="auth-sector">Setor</label>
+      <Select
+        value={value}
+        onValueChange={onChange}
+        disabled={disabled}
         required
-        value={email}
-        onChange={(event) => setEmail(event.target.value)}
-        placeholder="seu@email.com"
-      />
-
-      {resetSent && (
-        <div className="rounded-[12px] border border-[#18a7ff]/45 bg-[#0d65d8]/18 px-4 py-3 text-[14px] leading-5 text-[#d5e5ff]">
-          Link enviado. Verifique seu e-mail para criar uma nova senha.
-        </div>
-      )}
-
-      <Button
-        type="submit"
-        disabled={loading}
-        className="h-[58px] w-full rounded-[14px] bg-gradient-to-r from-[#00adff] to-[#0067ff] text-[20px] font-bold text-white shadow-[0_20px_55px_rgba(0,105,255,0.32)] hover:from-[#23bcff] hover:to-[#1474ff]"
+        name="sector"
       >
-        {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : "Solicitar redefinição"}
-        {!loading && <ArrowRight size={27} strokeWidth={1.8} />}
-      </Button>
-
-      <div className="pt-4">
-        <div className="h-px w-full bg-[#7d98c4]/45" />
-        <p className="pt-4 text-center text-[16px] text-white/82">
-          Voltar para{" "}
-          <Link to="/auth" className="font-semibold text-[#18a7ff] hover:underline">
-            entrar
-          </Link>
-        </p>
-      </div>
-    </form>
-  );
-}
-
-type ResetPasswordFormProps = {
-  checkingRecovery: boolean;
-  confirmPassword: string;
-  email: string;
-  loading: boolean;
-  password: string;
-  recoveryReady: boolean;
-  setConfirmPassword: (value: string) => void;
-  setEmail: (value: string) => void;
-  setPassword: (value: string) => void;
-  setShowConfirmPassword: (value: boolean) => void;
-  setShowPassword: (value: boolean) => void;
-  showConfirmPassword: boolean;
-  showPassword: boolean;
-  updatePassword: (event: FormEvent<HTMLFormElement>) => void;
-};
-
-function ResetPasswordForm({
-  checkingRecovery,
-  confirmPassword,
-  email,
-  loading,
-  password,
-  recoveryReady,
-  setConfirmPassword,
-  setEmail,
-  setPassword,
-  setShowConfirmPassword,
-  setShowPassword,
-  showConfirmPassword,
-  showPassword,
-  updatePassword,
-}: ResetPasswordFormProps) {
-  return (
-    <form onSubmit={updatePassword} className="space-y-5">
-      <div className="mb-6">
-        <h1 className="text-[38px] font-bold leading-tight tracking-normal text-white">Criar nova senha</h1>
-        <p className="mt-3 text-[19px] leading-7 text-[#c1d2f1]">Atualize seu acesso.</p>
-      </div>
-
-      <AuthField
-        icon={<Mail size={27} strokeWidth={1.8} />}
-        label="E-mail"
-        type="email"
-        required
-        value={email}
-        onChange={(event) => setEmail(event.target.value)}
-        placeholder="seu@email.com"
-      />
-
-      <PasswordField
-        label="Nova senha"
-        value={password}
-        onChange={setPassword}
-        placeholder="Crie uma nova senha"
-        show={showPassword}
-        setShow={setShowPassword}
-        hint="Mínimo de 8 caracteres, com letras e números."
-      />
-
-      <PasswordField
-        label="Confirmar nova senha"
-        value={confirmPassword}
-        onChange={setConfirmPassword}
-        placeholder="Confirme sua nova senha"
-        show={showConfirmPassword}
-        setShow={setShowConfirmPassword}
-      />
-
-      {checkingRecovery && (
-        <div className="flex items-center gap-3 rounded-[12px] border border-white/12 bg-white/[0.04] px-4 py-3 text-[14px] text-[#d5e5ff]">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          Validando link de redefinição.
-        </div>
-      )}
-
-      {!checkingRecovery && !recoveryReady && (
-        <div className="rounded-[12px] border border-[#ffcf4c]/35 bg-[#ffcf4c]/10 px-4 py-3 text-[14px] leading-5 text-[#ffe8a3]">
-          Solicite um link de redefinição antes de criar uma nova senha.
-        </div>
-      )}
-
-      <Button
-        type="submit"
-        disabled={loading || checkingRecovery || !recoveryReady}
-        className="h-[58px] w-full rounded-[14px] bg-gradient-to-r from-[#00adff] to-[#0067ff] text-[20px] font-bold text-white shadow-[0_20px_55px_rgba(0,105,255,0.32)] hover:from-[#23bcff] hover:to-[#1474ff]"
-      >
-        {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : "Redefinir senha"}
-        {!loading && <ArrowRight size={27} strokeWidth={1.8} />}
-      </Button>
-
-      <div className="pt-4">
-        <div className="h-px w-full bg-[#7d98c4]/45" />
-        <p className="pt-4 text-center text-[16px] text-white/82">
-          Voltar para{" "}
-          <Link to="/auth" className="font-semibold text-[#18a7ff] hover:underline">
-            entrar
-          </Link>
-        </p>
-      </div>
-    </form>
-  );
-}
-
-type SuccessModalProps = {
-  onClose: () => void;
-};
-
-function SuccessModal({ onClose }: SuccessModalProps) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#020816]/80 px-4 backdrop-blur-sm">
-      <div className="w-full max-w-[390px] rounded-[22px] border border-[#2b86ff]/35 bg-[#06132a] p-7 text-center shadow-[0_28px_90px_rgba(0,72,255,0.36)]">
-        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-[#0e8cff]/18 text-[#58c7ff]">
-          <CheckCircle2 size={32} strokeWidth={1.9} />
-        </div>
-        <h2 className="mt-5 text-[26px] font-bold text-white">Senha alterada</h2>
-        <p className="mt-2 text-[15px] leading-6 text-[#c1d2f1]">Sua senha foi atualizada com sucesso.</p>
-        <Button
-          type="button"
-          onClick={onClose}
-          className="mt-7 h-12 w-full rounded-[12px] bg-gradient-to-r from-[#00adff] to-[#0067ff] text-[16px] font-bold text-white hover:from-[#23bcff] hover:to-[#1474ff]"
+        <SelectTrigger
+          id="auth-sector"
+          className="auth-sector-trigger"
+          aria-invalid={Boolean(error)}
+          aria-describedby={error ? "auth-sector-error" : undefined}
         >
-          Concluir
-          <Check size={18} />
-        </Button>
-      </div>
+          <SelectValue placeholder="Selecione seu setor" />
+        </SelectTrigger>
+        <SelectContent className="auth-sector-menu" collisionPadding={12}>
+          {profileSectors.map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {error && (
+        <p id="auth-sector-error" className="auth-field-error">
+          {error}
+        </p>
+      )}
     </div>
+  );
+}
+function GoogleMark() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 48 48" aria-hidden="true">
+      <path
+        fill="#4285f4"
+        d="M43.6 24.5c0-1.4-.1-2.8-.4-4.1H24v7.8h11a9.4 9.4 0 0 1-4.1 6.1v5h6.6c3.9-3.6 6.1-8.8 6.1-14.8Z"
+      />
+      <path
+        fill="#34a853"
+        d="M24 44c5.5 0 10.1-1.8 13.5-4.9l-6.6-5c-1.8 1.2-4.2 1.9-6.9 1.9-5.3 0-9.8-3.6-11.4-8.4H5.8v5.2A20.4 20.4 0 0 0 24 44Z"
+      />
+      <path
+        fill="#fbbc05"
+        d="M12.6 27.6a12.3 12.3 0 0 1 0-7.2v-5.2H5.8a20 20 0 0 0 0 17.6l6.8-5.2Z"
+      />
+      <path
+        fill="#ea4335"
+        d="M24 12c3 0 5.6 1 7.7 3l5.8-5.8C34 6 29.5 4 24 4A20.4 20.4 0 0 0 5.8 15.2l6.8 5.2C14.2 15.6 18.7 12 24 12Z"
+      />
+    </svg>
   );
 }

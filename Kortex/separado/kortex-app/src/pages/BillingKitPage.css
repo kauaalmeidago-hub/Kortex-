@@ -1,0 +1,255 @@
+.billing-kit {
+  /* The platform's global light-theme tokens also apply inside portals. */
+  --background: 0 0% 97%;
+  --foreground: 220 20% 15%;
+  --card: 0 0% 100%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 220 20% 15%;
+  --primary: 212 72% 50%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 220 14% 96%;
+  --muted-foreground: 220 9% 56%;
+  --accent: 212 72% 95%;
+  --border: 220 13% 91%;
+  --input: 220 13% 91%;
+  color: hsl(var(--foreground));
+}
+.billing-kit-control {
+  height: 36px;
+}
+.billing-kit-koa-trigger {
+  width: 36px;
+  height: 36px;
+}
+.billing-kit .billing-kit-new-request {
+  height: 36px;
+  min-height: 36px;
+  min-width: 0;
+  padding: 0 12px;
+  gap: 6px;
+}
+.billing-kit-new-request {
+  border: 1px solid #00b8df;
+  background:
+    radial-gradient(ellipse at 5% 0%, #a8edf7 0%, transparent 52%),
+    radial-gradient(ellipse at 100% 100%, #76e3f2 0%, transparent 48%),
+    linear-gradient(135deg, #29d0eb, #00bce5 60%, #21cde9);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 60%),
+    inset 0 -1px 0 rgb(255 255 255 / 18%),
+    0 2px 6px rgb(0 188 229 / 12%);
+  text-shadow: 0 1px 2px rgb(0 104 142 / 18%);
+  transition:
+    filter 150ms ease,
+    box-shadow 150ms ease;
+}
+.billing-kit-new-request:hover {
+  filter: brightness(1.03);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 70%),
+    0 3px 9px rgb(0 188 229 / 20%);
+}
+.billing-kit-new-request:active {
+  filter: brightness(0.97);
+}
+.billing-kit-page-button {
+  display: inline-flex;
+  height: 36px;
+  min-width: 36px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid hsl(var(--input));
+  border-radius: 8px;
+  padding: 0 8px;
+  color: hsl(var(--primary));
+}
+.billing-kit-page-button:hover:not(:disabled) {
+  background: hsl(var(--accent));
+}
+.billing-kit-page-button:disabled {
+  opacity: 0.45;
+}
+.billing-kit-page-button:focus-visible {
+  outline: 2px solid hsl(var(--primary));
+  outline-offset: 2px;
+}
+.billing-kit-filters {
+  max-height: min(620px, var(--radix-popover-content-available-height));
+  background: hsl(var(--popover));
+}
+.billing-kit-koa-panel {
+  position: relative;
+  display: flex;
+  width: 360px;
+  min-width: 360px;
+  min-height: 0;
+  flex-shrink: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid hsl(var(--border));
+  background: hsl(var(--card));
+}
+.billing-kit-koa-panel[hidden] {
+  display: none;
+}
+.billing-kit-koa-header {
+  display: flex;
+  min-height: 52px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 8px 12px;
+}
+.billing-kit-koa-body {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 20px 20px;
+}
+.billing-kit-koa-home {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+  gap: 24px;
+}
+.billing-kit-koa-welcome {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  text-align: center;
+}
+.billing-kit-koa-brand {
+  display: flex;
+  width: 144px;
+  height: 144px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+}
+.billing-kit-koa-title {
+  font-size: 18px;
+  line-height: 24px;
+}
+.billing-kit-koa-brand > video,
+.billing-kit-koa-brand > img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.billing-kit-koa-shortcuts {
+  display: flex;
+  flex-shrink: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+.billing-kit-koa-composer {
+  flex-shrink: 0;
+}
+.billing-kit-koa-composer input {
+  padding-inline: 0;
+}
+.billing-kit-koa-composer button {
+  width: 32px;
+  height: 32px;
+}
+@media (max-width: 767px) {
+  .billing-kit-koa-panel {
+    position: absolute;
+    inset: 0 0 0 auto;
+    z-index: 20;
+    width: 100%;
+    min-width: 0;
+    max-width: 390px;
+    box-shadow: -8px 0 24px rgb(15 23 42 / 8%);
+  }
+}
+.billing-kit-table-scroll {
+  container-type: inline-size;
+}
+.billing-kit-empty {
+  width: 100cqw;
+  max-width: 100%;
+}
+.billing-kit-empty-folder {
+  /* A dedicated class avoids the global compact-size overrides on h-14/w-14. */
+  width: 64px;
+  height: 64px;
+  filter: drop-shadow(0 2px 5px hsl(var(--primary) / 12%));
+  transition:
+    transform 180ms ease,
+    filter 180ms ease;
+}
+@media (hover: hover) and (pointer: fine) {
+  .billing-kit-empty-folder:hover {
+    transform: translateY(-3px) scale(1.06);
+    filter: drop-shadow(0 4px 9px hsl(var(--primary) / 28%));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .billing-kit-empty-folder {
+    transition: none;
+  }
+  .billing-kit-empty-folder:hover {
+    transform: none;
+  }
+}
+.billing-kit.billing-kit-manual-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: min(920px, calc(100vw - 48px));
+  height: auto;
+  max-width: 920px;
+  max-height: calc(100dvh - 48px);
+  overflow: hidden;
+  padding: 0;
+  background: hsl(var(--card));
+}
+/* This modal provides a labelled close control in its own header. */
+.billing-kit-manual-modal > button {
+  display: none;
+}
+.billing-kit-request-types {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.billing-kit-request-card:has(input:focus-visible) {
+  outline: 2px solid hsl(var(--primary));
+  outline-offset: 2px;
+}
+@media (max-width: 1100px) {
+  .billing-kit-request-types {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 639px) {
+  .billing-kit.billing-kit-manual-modal {
+    width: calc(100vw - 32px);
+    max-height: calc(100dvh - 32px);
+  }
+}
+@media (max-width: 479px) {
+  .billing-kit-request-types {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 767px) {
+  .billing-kit .billing-kit-search {
+    flex-basis: 100%;
+  }
+  .billing-kit .billing-kit-toolbar {
+    gap: 10px;
+  }
+  .billing-kit .billing-kit-toolbar > .billing-kit-new-request {
+    margin-left: auto;
+  }
+}
+@media (max-width: 480px) {
+  .billing-kit-toolbar > .billing-kit-control {
+    padding-inline: 12px;
+  }
+}

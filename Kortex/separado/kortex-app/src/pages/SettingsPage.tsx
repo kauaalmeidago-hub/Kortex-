@@ -162,7 +162,7 @@ function Toggle({
 
 export default function SettingsPage() {
   const { user } = useAuth();
-  const { mode, toggleMode } = useTheme();
+  const { mode, toggleMode, forcedLight } = useTheme();
   const metadata = user?.user_metadata as { full_name?: string; name?: string; phone?: string; role?: string } | undefined;
   const initialProfile = useMemo<ProfileForm>(() => {
     const fullName = getDisplayName(user?.email, metadata?.full_name || metadata?.name);
@@ -400,13 +400,13 @@ export default function SettingsPage() {
                 </div>
                 <div>
                   <p className="font-black">Tema</p>
-                  <p className="mt-1 text-sm text-[#5d6f91]">Escolha entre o tema claro ou escuro.</p>
+                  <p className="mt-1 text-sm text-[#5d6f91]">{forcedLight ? "O portal utiliza o tema claro nesta fase." : "Escolha entre o tema claro ou escuro."}</p>
                 </div>
               </div>
-              <PreferenceSelect value={currentThemeLabel} onChange={handleThemeChange}>
+              {forcedLight ? <span className="text-sm">Claro</span> : <PreferenceSelect value={currentThemeLabel} onChange={handleThemeChange}>
                 <option>Claro</option>
                 <option>Escuro</option>
-              </PreferenceSelect>
+              </PreferenceSelect>}
             </div>
 
             <div className="flex items-center justify-between gap-5">

@@ -1,0 +1,15 @@
+.git/
+.openai/
+node_modules/
+dist/
+dist-ssr/
+automation-server/
+scripts/
+supabase/.temp/
+supabase/migrations/
+supabase/functions/task-ai/
+tmp/
+outputs/
+docs/
+*.log
+.env*

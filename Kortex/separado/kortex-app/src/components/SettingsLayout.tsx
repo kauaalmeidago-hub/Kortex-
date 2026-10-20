@@ -1,6 +1,6 @@
 import { ElementType, ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { ClipboardList, MessageCircle, User } from "lucide-react";
+import { ClipboardList, LayoutGrid, MessageCircle, User } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type SettingsItem = {
@@ -13,6 +13,7 @@ const settingsItems: SettingsItem[] = [
   { icon: User, label: "Perfil", path: "/settings" },
   { icon: MessageCircle, label: "Canais WhatsApp", path: "/settings/channels/whatsapp" },
   { icon: ClipboardList, label: "Etapas de tarefas", path: "/settings/task-stages" },
+  { icon: LayoutGrid, label: "Pipelines & Etapas", path: "/settings/pipelines" },
 ];
 
 function isCurrentPath(currentPath: string, itemPath: string) {

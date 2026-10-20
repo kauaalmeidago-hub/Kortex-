@@ -13,7 +13,7 @@ export const DEFAULT_TASK_STAGES: TaskStage[] = [
   { id: "todo", name: "A fazer", color: "blue" },
   { id: "in_progress", name: "Em andamento", color: "yellow" },
   { id: "review", name: "Em revisão", color: "blue" },
-  { id: "done", name: "Concluídas", color: "emerald" },
+  { id: "done", name: "Concluído", color: "emerald" },
 ];
 
 export const TASK_STAGE_COLORS: Record<
