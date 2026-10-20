@@ -1,5 +1,14 @@
 # WhatsApp local com portal HTTPS
 
+## Homologação publicada em 20/10/2026
+
+- Portal: [conectar WhatsApp](https://kortex-usuarios-git-codex-wh-9dffcd-kauaalmeidago-hubs-projects.vercel.app/settings/channels/whatsapp). O preview mantém a autenticação Vercel e usa exclusivamente o Supabase staging.
+- Deployment `dpl_BuwdS1HHn7HSAMWuThxxq8nRrYPM`, estado `READY`, fonte `20b3a67ef7fda4c47afcd72188644fb161d385a3`.
+- Webhook: `https://ukahtcymdcjphvptjamz.supabase.co/functions/v1/whatsapp-events`, função ativa versão 2. A configuração privada do preview e o hash no banco estão definidos. Respostas reais: `405` para GET, `401` sem credencial e `404 INSTANCE_UNKNOWN` para credencial válida com instância de teste inexistente. Nenhum evento de uma conversa real foi inserido por esses testes.
+- A página de login do preview respondeu `200`. A API recusou preparar pareamento via GET com `405` e exigiu autenticação para consultar a conexão. O cliente Vercel classificou o `401` da consulta como exigência de autenticação e não disponibilizou seu corpo; não foi usado como comprovação de pareamento.
+- Última consulta ao banco: worker `evolution-local` em estado **offline**, zero solicitações pendentes. Nenhum QR real foi emitido por esta sessão remota. A ativação local abaixo é necessária para escanear.
+- O alias `kortex-usuarios.vercel.app` continua no deployment de produção anterior `dpl_Co5quHhHJLm1W8WuwPtC2RTkxCRR`. As duas migrações novas e a função foram aplicadas somente no staging.
+
 ## O que mudou
 
 A Vercel não acessa mais o `localhost` da Evolution. O backend grava solicitações numa fila privada do Supabase do mesmo ambiente. Um worker ao lado da Evolution consulta essa fila por HTTPS, executa as operações locais e devolve os resultados. A chave da Evolution permanece no computador. Os eventos chegam por um endpoint HTTPS próprio no Supabase, autenticado por header privado.
@@ -61,6 +70,7 @@ A integração só cria instâncias `koa-<identificador>` previamente vinculadas
 - 352 testes de interface/regressão passaram com URL/chave públicas de fixture, sem acessar contas reais.
 - A migração foi aplicada ao Supabase staging; validação SQL verificou privilégios, Storage privado, reivindicação exclusiva, rejeição de lease incorreta, despacho único, expiração e ausência de repetição de mutações incertas. Dados sintéticos foram removidos na própria transação.
 - Compilação e TypeScript passaram. O bundle mantém um aviso de tamanho anterior à mudança.
+- A função passou na verificação de tipos Deno usando a versão de `supabase-js` já fixada no lockfile npm do aplicativo (`2.117.2`) e foi compilada/publicada pelo Supabase.
 - Os testes automatizados não conectam um celular nem comprovam entrega real de mensagens.
 - O agendamento PowerShell foi preparado neste ambiente Linux e ainda precisa ser executado e validado no Windows da Evolution. A máquina remota deste trabalho não acessa o `localhost` do computador do usuário.
 - Produção permanece no build anterior até completar a homologação real e a configuração privada do backend de produção.

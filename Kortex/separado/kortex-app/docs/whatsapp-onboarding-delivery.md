@@ -94,6 +94,8 @@ Para concluir a homologação com a atualização relay, faltam: ativar o worker
 
 ## Publicação e fonte
 
+Atualização relay: branch `codex/whatsapp-https-worker`, preview protegido [conectar WhatsApp](https://kortex-usuarios-git-codex-wh-9dffcd-kauaalmeidago-hubs-projects.vercel.app/settings/channels/whatsapp), deployment `dpl_BuwdS1HHn7HSAMWuThxxq8nRrYPM` em `READY`. O webhook autenticado está ativo no Supabase staging. O worker local ainda está offline; o QR real e o pareamento ainda não foram homologados nesta sessão. Consulte [ativação e evidências](whatsapp-local-relay.md). As informações abaixo registram a entrega anterior à atualização relay.
+
 - Branch da entrega: `codex/whatsapp-onboarding`. A sincronização inclui a fonte atual da interface e as migrações locais anteriores necessárias a ela; os arquivos de automação locais fora desse escopo foram preservados.
 - Preview: [modal e onboarding](https://kortex-usuarios-gyfuw84bq-kauaalmeidago-hubs-projects.vercel.app/auth/whatsapp).
 - Deployment: `dpl_J7n4AuFYVMbBfSXYQXv6oSdyssx5`, estado final `READY`, projeto `kortex-usuarios`, ambiente preview, Supabase `ukahtcymdcjphvptjamz`.
