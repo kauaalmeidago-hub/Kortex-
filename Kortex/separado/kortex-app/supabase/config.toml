@@ -2,3 +2,7 @@ project_id = "vlacojrryjazwrljysqx"
 
 [functions.task-ai]
 verify_jwt = true
+
+[functions.whatsapp-events]
+# Evolution authenticates via x-kortex-webhook-secret; only its digest is stored.
+verify_jwt = false

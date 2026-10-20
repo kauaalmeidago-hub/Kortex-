@@ -1,10 +1,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { identity, resolveConnection, signup, onboardingCookie } from './service.mjs';
+import { identity, resolveConnection, signup, onboardingCookie, locked } from './service.mjs';
 
 function query(result, inspect = () => {}) {
   return new Proxy({}, { get(_target, key) { if (key === 'then') return Promise.resolve(result).then.bind(Promise.resolve(result)); return (...args) => { inspect(key, args); return query(result, inspect); }; } });
 }
+test('connection recovery holds its own bounded lease and cannot release another worker lease', async () => {
+  const writes = []; let ownLease;
+  const c = { id: 'connection', lease_token: null };
+  const admin = {
+    rpc: (_name, args) => { ownLease = args.p_token; return query({ data: true, error: null }); },
+    from: () => { const operations = []; writes.push(operations); return query({ data: { id: c.id }, error: null }, (key,args) => operations.push([key,args])); },
+  };
+  await assert.rejects(locked(admin, c, async () => { assert.equal(c.lease_token, ownLease); throw new Error('provider failed'); }), /provider failed/);
+  assert.equal(c.lease_token, null);
+  assert.equal(writes.length, 2);
+  for (const operations of writes) assert.ok(operations.some(([key,args]) => key === 'eq' && args[0] === 'lease_token' && args[1] === ownLease));
+  assert.ok(Date.parse(writes[0].find(([key]) => key === 'update')[1][0].lease_until) > Date.now() + 170000);
+});
+test('a connection that lost its lease never starts provider work', async () => {
+  let called = false;
+  const admin = { rpc: () => query({ data: true, error: null }), from: () => query({ data: null, error: null }) };
+  await assert.rejects(locked(admin, { id: 'connection' }, async () => { called = true; }), e => e.code === 'CONNECTION_BUSY');
+  assert.equal(called, false);
+});
 test('tampered or expired cookie is refused even if browser supplies a valid-looking user ID', async () => {
   const req = { headers: { cookie: '__Host-kortex-wa-onboarding=altered' }, body: { userId: 'victim' } };
   assert.equal(onboardingCookie(req), null);

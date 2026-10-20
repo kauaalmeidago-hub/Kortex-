@@ -2,7 +2,7 @@
 
 Implementação preparada sobre a fonte atual de `Kortex/separado/kortex-app`, preservando os ajustes locais de autenticação, identidade visual, Tarefas, Pipeline e KOA. O projeto existente é `kortex-usuarios`, ID `prj_s31Vluek0LXh3vTmRtlefPk28tCC`, da equipe `kauaalmeidago-hubs-projects`.
 
-**Estado da entrega: homologação. O pareamento real e a publicação em produção dependem do servidor Evolution persistente e acessível por HTTPS.** O sucesso do build e os testes com transportes simulados não comprovam pareamento, recebimento ou envio real de WhatsApp.
+**Estado da entrega: homologação.** A atualização `codex/whatsapp-https-worker` permite manter a Evolution local, com um worker consultando uma fila privada por HTTPS. O portal não acessa o localhost do computador. Consulte [ativação do worker local](whatsapp-local-relay.md). O pareamento real e a publicação em produção ainda dependem da ativação desse worker, do webhook e da leitura do QR pelo celular. O sucesso do build e os testes com transportes simulados não comprovam pareamento, recebimento ou envio real de WhatsApp.
 
 ## Comportamento implementado
 
@@ -34,7 +34,7 @@ A atualização da interface usa consultas autenticadas a cada quatro segundos; 
 
 `server/whatsapp/worker.mjs` é o processo persistente de recuperação/importação. Importa o histórico disponibilizado pelo provedor em lotes de 100, guarda o cursor no banco e reconcilia novamente após falhas. Não promete recuperar todo o histórico anterior ao pareamento. A interface informa essa limitação. A limpeza de instâncias nunca ativadas após sete dias usa exclusão mútua com a ativação; conexões ativadas não são apagadas por esse processo. Grants/reservas expirados também são limpos.
 
-**O worker está preparado e precisa ser instalado ao lado da Evolution existente. Um preview da Vercel não executa esse processo de forma contínua.** O Dockerfile está em `deploy/whatsapp-chat/Dockerfile`; não foi contratada infraestrutura nova.
+**O worker está preparado e precisa ser instalado ao lado da Evolution existente. Um preview da Vercel não executa esse processo de forma contínua.** O instalador Windows está em `scripts/whatsapp/install-worker.ps1`. O modo relay usa `node server/whatsapp/worker.mjs --relay`; o Dockerfile anterior continua voltado ao modo direto com Evolution HTTPS. Não foi contratada infraestrutura nova.
 
 ## Configuração privada
 
@@ -45,11 +45,13 @@ Configurar separadamente em preview e produção:
 | `SUPABASE_URL` | Projeto do ambiente correspondente |
 | `SUPABASE_SECRET_KEY` ou `SUPABASE_SERVICE_ROLE_KEY` | Backend/worker, nunca frontend |
 | `SUPABASE_PUBLISHABLE_KEY` | Cliente público usado pelo backend para validar o usuário |
-| `EVOLUTION_API_URL` ou `EVOLUTION_API_BASE_URL` | Endereço HTTPS do servidor persistente |
-| `EVOLUTION_API_KEY` | Credencial privada da Evolution |
+| `WHATSAPP_EVOLUTION_TRANSPORT` | `relay` na Vercel para usar Evolution local |
+| `WHATSAPP_WORKER_ID` | Identificador privado do worker; padrão `evolution-local` |
+| `EVOLUTION_API_URL` ou `EVOLUTION_API_BASE_URL` | Somente no worker local: loopback HTTP autorizado; modo direto exige HTTPS |
+| `EVOLUTION_API_KEY` | Credencial privada da Evolution, somente no worker em modo relay |
 | `EVOLUTION_REQUEST_ORIGIN` | Origem explicitamente aceita pelo CORS do servidor, se ele recusar requisições sem `Origin`; configurada no backend, nunca recebida livremente do navegador |
 | `EVOLUTION_WEBHOOK_SECRET` | Header secreto configurado nas novas instâncias |
-| `WHATSAPP_WEBHOOK_URL` | URL HTTPS de `/api/whatsapp-webhook` no ambiente correto |
+| `WHATSAPP_WEBHOOK_URL` | Endpoint HTTPS autenticado do ambiente; no staging relay, função Supabase `whatsapp-events` |
 | `APP_ORIGIN` | Origem do portal em produção; previews também aceitam seu `VERCEL_URL` |
 | `WHATSAPP_ALLOWED_ORIGINS` | Origens adicionais explícitas, separadas por vírgula, se necessárias |
 | `WHATSAPP_ENABLE_GROUPS` | Mantido `false`; grupos exigem habilitação explícita |
@@ -73,6 +75,8 @@ Migrações novas, aplicadas somente ao projeto staging `ukahtcymdcjphvptjamz`:
 3. `20261020212000_whatsapp_onboarding.sql`
 4. `20261020213000_whatsapp_signup_proof.sql`
 5. `20261020214000_whatsapp_cleanup_guard.sql`
+6. `20261020173632_whatsapp_local_provider_relay.sql` — fila e resultados privados, independente das demais migrações.
+7. `20261020175148_whatsapp_authenticated_events.sql` — hash privado de autenticação para a função Supabase `whatsapp-events`.
 
 ## Validação e dependências de publicação
 
@@ -86,7 +90,7 @@ Migrações novas, aplicadas somente ao projeto staging `ukahtcymdcjphvptjamz`:
 
 O endereço encontrado na configuração legada foi `http://localhost:8081`, inicialmente com conexão recusada. O worker administrativo existente usa `http://evolution-api:8080`, um nome interno de rede Docker. Após iniciar o Docker existente, os containers da Evolution 2.3.7, PostgreSQL e Redis ficaram disponíveis localmente. O servidor recusava chamadas sem uma origem aceita pelo CORS; utilizando sua configuração autorizada, o endpoint real respondeu `200` com versão `2.3.7`. O adaptador suporta essa origem como configuração privada. Essa verificação não comprova pareamento pelo portal nem acesso externo: não foi encontrado um servidor Evolution público configurado com HTTPS para a Vercel, nem acesso verificado a uma VPS onde instalar o novo worker.
 
-Para concluir a homologação, faltam: servidor Evolution operacional/persistente com HTTPS, credenciais privadas correspondentes, webhook atingível pelo provedor, worker ativo e leitura física do QR com conta/número de teste autorizado. Depois disso devem ser homologados pareamento, retorno do e-mail, histórico, recebimento, envio, anexos, áudio, queda/reconexão e troca de setor na integração real. Somente então aplicar as migrações em produção e publicar o build verificado no domínio `kortex-usuarios.vercel.app`.
+Para concluir a homologação com a atualização relay, faltam: ativar o worker no computador da Evolution, confirmar seu heartbeat, validar o webhook HTTPS do preview e ler fisicamente o QR com conta/número de teste autorizado. O modo relay não depende de expor a Evolution por HTTPS. Depois disso devem ser homologados pareamento, retorno do e-mail, histórico, recebimento, envio, anexos, áudio, queda/reconexão e troca de setor na integração real. Somente então configurar o backend privado de produção, aplicar suas migrações e publicar o build verificado no domínio `kortex-usuarios.vercel.app`.
 
 ## Publicação e fonte
 

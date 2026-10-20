@@ -96,11 +96,19 @@ export async function resolveConnection(req, admin, auth, who, create = false) {
 export async function locked(admin, c, work) {
   const lease = randomUUID();
   if (!await checked(admin.rpc('wa_claim', { p_id: c.id, p_token: lease }))) return c;
-  try { return await work(); }
-  finally { await checked(admin.from('wa_connections').update({ lease_until: null, lease_token: null }).eq('id', c.id).eq('lease_token', lease)); }
+  // Pairing may involve several queued requests. Fence all writes and allow a
+  // bounded recovery window, without holding a database transaction open.
+  const previous = c.lease_token;
+  c.lease_token = lease;
+  try {
+    const extended = await checked(admin.from('wa_connections').update({ lease_until: new Date(Date.now() + 180000).toISOString() }).eq('id', c.id).eq('lease_token', lease).select('id').maybeSingle());
+    if (!extended) throw new HttpError(409, 'CONNECTION_BUSY', 'A conexão está sendo atualizada. Aguarde alguns instantes.');
+    return await work();
+  }
+  finally { await checked(admin.from('wa_connections').update({ lease_until: null, lease_token: null }).eq('id', c.id).eq('lease_token', lease)); c.lease_token = previous; }
 }
 async function saveConnection(admin, c, patch) {
-  return checked(admin.from('wa_connections').update({ ...patch, updated_at: new Date().toISOString() }).eq('id', c.id).select('*').single());
+  return checked(admin.from('wa_connections').update({ ...patch, updated_at: new Date().toISOString() }).eq('id', c.id).eq('lease_token', c.lease_token).select('*').single());
 }
 async function providerState(c) {
   return evolution('/instance/connectionState/' + encodeURIComponent(c.instance_name));
