@@ -91,8 +91,8 @@ Para concluir a homologação, faltam: servidor Evolution operacional/persistent
 ## Publicação e fonte
 
 - Branch da entrega: `codex/whatsapp-onboarding`. A sincronização inclui a fonte atual da interface e as migrações locais anteriores necessárias a ela; os arquivos de automação locais fora desse escopo foram preservados.
-- Preview: [modal e onboarding](https://kortex-usuarios-5fzza6xum-kauaalmeidago-hubs-projects.vercel.app/auth/whatsapp).
-- Deployment: `dpl_CHyrY6mJH8qYtWW1aUeBpbatxoSY`, estado final `READY`, projeto `kortex-usuarios`, ambiente preview, Supabase `ukahtcymdcjphvptjamz`.
+- Preview: [modal e onboarding](https://kortex-usuarios-gyfuw84bq-kauaalmeidago-hubs-projects.vercel.app/auth/whatsapp).
+- Deployment: `dpl_J7n4AuFYVMbBfSXYQXv6oSdyssx5`, estado final `READY`, projeto `kortex-usuarios`, ambiente preview, Supabase `ukahtcymdcjphvptjamz`.
 - O preview mantém a autenticação de proteção da Vercel e requer acesso ao projeto para ser aberto. O smoke usa o acesso autenticado da CLI.
 - Produção continua no deployment existente `dpl_Co5quHhHJLm1W8WuwPtC2RTkxCRR`, estado `READY`, associado ao domínio informado pelo usuário. As migrações e o novo Chat desta entrega não foram publicados nesse ambiente, pois a integração real ainda depende dos itens acima.
 

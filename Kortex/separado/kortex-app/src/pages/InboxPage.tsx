@@ -55,6 +55,7 @@ import { useInbox, useWhatsAppScope } from '@/features/whatsapp/useInbox';
 import ConnectionModal, { connectionLabels } from '@/features/whatsapp/ConnectionModal';
 import WhatsAppComposer from '@/features/whatsapp/Composer';
 import { waRequest } from '@/features/whatsapp/api';
+import { fullModules } from '@/features/access/environment';
 import { validateKoaPeriod } from "@/utils/koaDate";
 import { inferCardOperatorFromContractCode, normalizeCompanyCode } from "@/utils/koaOperator";
 import { KoaArtifactDownload } from "@/components/KoaArtifactDownload";
@@ -553,7 +554,7 @@ function ChatArea({
 
           {showMenu && (
             <div className="absolute right-0 top-12 z-30 w-64 rounded-2xl border border-border bg-popover p-2 text-popover-foreground shadow-2xl">
-              <MenuAction imageSrc={koaLogo} label="Koa" onClick={() => { onOpenPanel("koa"); setShowMenu(false); }} />
+              {fullModules && <MenuAction imageSrc={koaLogo} label="Koa" onClick={() => { onOpenPanel("koa"); setShowMenu(false); }} />}
               
               <MenuAction icon={CheckCircle2} label="Finalizar conversa" onClick={() => { onResolve(conversation.id); setShowMenu(false); }} />
             </div>
