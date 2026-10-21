@@ -19,7 +19,10 @@ export async function send(admin, c, body, userId) {
     quoted = { key: m.provider_key, message: { conversation: m.body } };
   }
   const contentHash = hash(JSON.stringify([cv.id, body.text, body.file, body.quotedId]));
-  const result = await admin.from('wa_outbox').insert({ connection_id: c.id, request_id: body.requestId, conversation_id: cv.id, payload_hash: contentHash });
+  // Reserve under the same case lock used by claim/transfer/phase changes.
+  // Once dispatched, a pending/uncertain outbox prevents a contradictory move.
+  const result = c.reserveMessage ? (await c.reserveMessage(body.requestId, contentHash) ? { error: null } : { error: { code: '23505' } }) :
+    await admin.from('wa_outbox').insert({ connection_id: c.id, request_id: body.requestId, conversation_id: cv.id, payload_hash: contentHash });
   if (result.error) {
     if (result.error.code !== '23505') await checked(Promise.resolve(result));
     const prior = await checked(admin.from('wa_outbox').select('*').eq('connection_id', c.id).eq('request_id', body.requestId).single());

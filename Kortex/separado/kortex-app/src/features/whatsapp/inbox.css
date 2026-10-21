@@ -1,0 +1,45 @@
+.inbox-view { display:flex; height:100%; min-height:0; min-width:0; overflow:hidden; flex-direction:column; }
+.inbox-view .inbox-layout { display:flex; flex:1; min-height:0; min-width:0; overflow:hidden; }
+.inbox-conversation-list { width:clamp(280px,30%,390px); min-width:0; flex-shrink:0; }
+.inbox-chat-header { gap:12px; }
+.inbox-chat-header-actions { gap:6px; }
+.inbox-message-bubble { position:relative; cursor:pointer; overflow-wrap:anywhere; }
+.inbox-message-reply-target { position:absolute; inset:0; width:100%; height:100%; border-radius:inherit; pointer-events:none; outline:none; }
+.inbox-message-reply-target:focus-visible { outline:2px solid hsl(var(--primary)); outline-offset:4px; }
+.inbox-message-bubble:has(.inbox-message-reply-target:focus-visible) { box-shadow:0 0 0 5px hsl(var(--primary)/.14); }
+.inbox-message-body { white-space:pre-wrap; user-select:text; }
+.inbox-message-body a { text-decoration:underline; text-underline-offset:3px; }
+.inbox-message-quote { max-height:44px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.inbox-state { display:grid; flex:1; min-width:0; min-height:0; place-content:center; gap:12px; padding:24px; text-align:center; color:hsl(var(--muted-foreground)); font-size:14px; }
+.inbox-context-note { flex-shrink:0; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 16px; font-size:12px; color:hsl(var(--muted-foreground)); }
+.inbox-phase-control { position:relative; }
+.inbox-phase-trigger { display:flex; align-items:center; gap:4px; font-size:12px; color:hsl(var(--muted-foreground)); padding-block:2px; }
+.inbox-menu-dismiss { position:fixed; inset:0; z-index:29; cursor:default; }
+.inbox-phase-menu { position:absolute; top:100%; left:0; z-index:30; width:200px; padding:6px; border:1px solid hsl(var(--border)); border-radius:12px; background:hsl(var(--card)); box-shadow:0 10px 25px #172e4720; }
+.inbox-phase-menu button { display:block; width:100%; text-align:left; padding:8px 10px; font-size:12px; border-radius:7px; }
+.inbox-phase-menu button:hover { background:hsl(var(--secondary)); }
+.inbox-phase-menu button:disabled { opacity:.4; cursor:default; }
+.inbox-case-overlay { position:fixed; inset:0; z-index:60; background:#17253b66; backdrop-filter:blur(3px); }
+.inbox-case-dialog { position:fixed; z-index:61; left:50%; top:50%; transform:translate(-50%,-50%); width:min(520px,calc(100vw - 24px)); max-height:calc(100dvh - 32px); overflow-y:auto; padding:24px; border:1px solid hsl(var(--border)); border-radius:18px; background:hsl(var(--card)); color:hsl(var(--foreground)); box-shadow:0 24px 80px #111b3740; }
+.inbox-case-close { position:absolute; right:14px; top:14px; color:hsl(var(--muted-foreground)); padding:5px; }
+.inbox-case-field { display:grid; gap:6px; margin-block:12px; font-size:12px; font-weight:500; }
+.inbox-case-field :is(input,textarea,select) { width:100%; min-width:0; border:1px solid hsl(var(--border)); border-radius:9px; background:hsl(var(--background)); color:hsl(var(--foreground)); padding:9px 10px; font:inherit; font-weight:400; outline-color:hsl(var(--primary)); }
+.inbox-case-footer { display:flex; justify-content:flex-end; gap:12px; margin-top:20px; font-size:12px; }
+.inbox-case-footer button { display:flex; align-items:center; justify-content:center; gap:6px; padding:10px 14px; border-radius:9px; border:1px solid hsl(var(--border)); }
+.inbox-case-footer .inbox-case-primary { color:white; border-color:transparent; background:linear-gradient(125deg,#2687ff,#13b7dd); }
+.inbox-case-footer button:disabled { opacity:.5; }
+.inbox-case-summary { flex-shrink:0; padding:8px 16px; border-bottom:1px solid hsl(var(--border)); font-size:11px; color:hsl(var(--muted-foreground)); max-height:140px; overflow:auto; }
+.inbox-case-summary summary { cursor:pointer; }
+.inbox-case-summary p { margin-top:7px; white-space:pre-wrap; overflow-wrap:anywhere; }
+.inbox-case-claim { flex-shrink:0; padding:6px 16px; border-bottom:1px solid hsl(var(--border)); }
+.inbox-case-claim button { font-size:12px; font-weight:500; color:hsl(var(--primary)); }
+@media(max-width:767px) {
+  .inbox-view .inbox-layout { flex-direction:column; }
+  .inbox-conversation-list { width:100%; flex:1; min-height:0; }
+  .inbox-view[data-conversation-open='true'] .inbox-conversation-list { display:none; }
+  .inbox-view[data-conversation-open='false'] .inbox-chat-pane { display:none; }
+  .inbox-chat-header { height:64px; padding-inline:10px; gap:6px; }
+  .inbox-chat-header-actions { gap:4px; }
+  .inbox-chat-header-actions > button { width:32px; height:36px; }
+  .inbox-chat-header-actions .inbox-call-action { display:none; }
+}

@@ -2,9 +2,10 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/contexts/AuthContext';
-import { useWhatsAppScope } from '@/features/whatsapp/useInbox';
+import { useWhatsAppScope, whatsappQueryKey } from '@/features/whatsapp/useInbox';
 import ConnectionModal, { connectionLabels } from '@/features/whatsapp/ConnectionModal';
 import { WaConnection, waRequest } from '@/features/whatsapp/api';
+import ChannelAccess from '@/features/whatsapp/ChannelAccess';
 
 export default function WhatsAppConnectionPage() {
   const { user } = useAuth();
@@ -12,7 +13,7 @@ export default function WhatsAppConnectionPage() {
   const [open, setOpen] = useState(false);
   const [error, setError] = useState('');
   const [disconnecting, setDisconnecting] = useState(false);
-  const connection = useQuery({ queryKey: ['wa', user?.id, sectors.scope?.workspaceId, sectors.scope?.sectorId, 'connection'], enabled: Boolean(sectors.scope), queryFn: ({ signal }) => waRequest<WaConnection>('status', { scope: sectors.scope, signal }), retry: false });
+  const connection = useQuery({ queryKey: [...whatsappQueryKey(user?.id, sectors.scope), 'connection'], enabled: Boolean(sectors.scope), queryFn: ({ signal }) => waRequest<WaConnection>('status', { scope: sectors.scope, signal }), retry: false });
   return <div className="h-full overflow-auto p-6">
     <div className="mx-auto max-w-3xl space-y-5">
       <Link to="/inbox" className="text-sm text-primary underline">Voltar para o Chat</Link>
@@ -36,6 +37,7 @@ export default function WhatsAppConnectionPage() {
         </div>
       </section>
       <p className="text-sm text-muted-foreground">Sair da Kortex preserva a sessão do WhatsApp. Tarefas e Pipeline podem ser utilizados sem esta conexão.</p>
+      <ChannelAccess />
       <ConnectionModal key={`${sectors.scope?.workspaceId}:${sectors.scope?.sectorId}`} open={open} onOpenChange={setOpen} scope={sectors.scope} onContinue={() => { setOpen(false); void connection.refetch(); }} />
     </div>
   </div>;

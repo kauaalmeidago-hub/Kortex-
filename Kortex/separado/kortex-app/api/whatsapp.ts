@@ -2,6 +2,7 @@ import { HttpError } from '../server/whatsapp/core.mjs';
 import { clients, checked, signup, identity, resolveConnection, connectionState, completeOnboarding, publicConnection, setOnboardingCookie, rateLimit } from '../server/whatsapp/service.mjs';
 import { conversation, send, markRead, media } from '../server/whatsapp/chat.mjs';
 import { evolution } from '../server/whatsapp/evolution.mjs';
+import { caseRpc, caseConnection, caseAction } from '../server/whatsapp/cases.mjs';
 
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'private, no-store');
@@ -9,7 +10,7 @@ export default async function handler(req, res) {
   try {
     const action = String(req.query.action || 'status');
     if (!['GET', 'POST'].includes(req.method)) throw new HttpError(405, 'METHOD', 'Método não permitido.');
-    if (req.method === 'GET' && !['status', 'conversations', 'messages', 'media'].includes(action)) throw new HttpError(405, 'METHOD', 'Use POST para esta operação.');
+    if (req.method === 'GET' && !['status', 'conversations', 'messages', 'media', 'case-destinations', 'case-history', 'channel-settings'].includes(action)) throw new HttpError(405, 'METHOD', 'Use POST para esta operação.');
     // Same-origin HttpOnly onboarding cookie + explicit origin validation against configured deployment hosts.
     if (req.method === 'POST') {
       const origin = req.headers.origin;
@@ -22,8 +23,20 @@ export default async function handler(req, res) {
     if (action === 'signup') return res.status(200).json(await signup(req, res, admin, auth));
     const who = await identity(req, admin, auth);
     await rateLimit(admin, 'connection:' + who.user.id, 300, 300);
+    const caseRoutes = ['conversations', 'messages', 'media', 'send', 'read', 'case-action', 'case-destinations', 'case-history', 'channel-settings', 'channel-access'];
+    if (caseRoutes.includes(action) && who.temporary) throw new HttpError(403, 'ONBOARDING_ONLY', 'Conclua a conexão para abrir os atendimentos.');
+    if (action === 'conversations') return res.status(200).json(await caseRpc(auth, 'wa_case_inbox', { p_workspace: req.query.workspaceId || null, p_phase: req.query.phase || null, p_query: String(req.query.search || '').slice(0, 200), p_selected: req.query.selectedId || null }));
+    if (action === 'case-action') return res.status(200).json(await caseAction(req, auth));
+    if (action === 'channel-settings') return res.status(200).json(await caseRpc(auth, 'wa_channel_settings', {}));
+    if (action === 'channel-access') {
+      const b = req.body || {};
+      await caseRpc(auth, 'wa_channel_config', { p_channel: b.channelId, p_user: b.userId, p_manage: b.canManage === true, p_remove: b.remove === true });
+      return res.status(200).json({ saved: true });
+    }
+    if (['case-destinations', 'case-history'].includes(action)) return res.status(200).json(await caseRpc(auth, action === 'case-history' ? 'wa_case_history' : 'wa_case_destinations', { p_case: req.query.caseId }));
     if (['prepare', 'renew', 'activate', 'complete'].includes(action)) await rateLimit(admin, 'pairing:' + who.user.id, 12, 60);
-    const c = await resolveConnection(req, admin, auth, who, ['prepare', 'renew', 'activate'].includes(action));
+    const c = ['messages', 'media', 'send', 'read'].includes(action) ? await caseConnection(req, admin, auth) :
+      await resolveConnection(req, admin, auth, who, ['prepare', 'renew', 'activate'].includes(action));
     if (action === 'complete') return res.status(200).json(await completeOnboarding(req, res, admin, auth, c));
     if (['status', 'prepare', 'renew', 'activate'].includes(action)) {
       const updated = c ? await connectionState(admin, c, action !== 'status', action === 'renew') : null;
@@ -34,7 +47,6 @@ export default async function handler(req, res) {
     if (who.temporary || !c?.activated_at) throw new HttpError(403, 'AUTH_REQUIRED', 'Conecte seu WhatsApp e entre para acessar o Chat.');
     await rateLimit(admin, 'chat:' + who.user.id, 240, 60);
     const b = req.body ?? {};
-    if (action === 'conversations') return res.status(200).json(await checked(admin.from('wa_conversations').select('*').eq('connection_id', c.id).order('last_message_at', { ascending: false, nullsFirst: false }).limit(250)));
     if (action === 'messages') {
       const cv = await conversation(admin, c, req.query.conversationId);
       let query = admin.from('wa_messages').select('*').eq('connection_id', c.id).eq('conversation_id', cv.id).order('sent_at', { ascending: false }).order('id', { ascending: false }).limit(50);
@@ -49,10 +61,7 @@ export default async function handler(req, res) {
     if (action === 'read') return res.status(200).json(await markRead(admin, c, b));
     if (action === 'media') return res.status(200).json(await media(admin, c, req.query.messageId));
     if (action === 'conversation-status') {
-      const cv = await conversation(admin, c, b.conversationId);
-      if (!['active', 'pending', 'resolved'].includes(b.status)) throw new HttpError(400, 'STATUS', 'Situação inválida.');
-      await checked(admin.from('wa_conversations').update({ status: b.status }).eq('id', cv.id).eq('connection_id', c.id));
-      return res.status(200).json({ saved: true });
+      throw new HttpError(409, 'CASE_VERSION_REQUIRED', 'Atualize a página e use as ações do atendimento.');
     }
     if (action === 'disconnect') {
       if (b.confirm !== true) throw new HttpError(400, 'CONFIRM_REQUIRED', 'Confirme a desconexão do WhatsApp.');

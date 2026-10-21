@@ -3,6 +3,7 @@ import { KOA_BRAND_ASSET } from "@/components/KoaBrand";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUp,
+  ArrowLeft,
   ArrowRightLeft,
   Building2,
   CalendarDays,
@@ -52,16 +53,19 @@ import { KoaCardBeneficiaryConfirmation, type CardBeneficiaryChoice } from "@/co
 import type { OperationConnectionState } from "@/services/operationMonitoring";
 import { useAuth } from "@/contexts/AuthContext";
 import { useInbox, useWhatsAppScope } from '@/features/whatsapp/useInbox';
-import ConnectionModal, { connectionLabels } from '@/features/whatsapp/ConnectionModal';
-import WhatsAppComposer from '@/features/whatsapp/Composer';
-import { waRequest } from '@/features/whatsapp/api';
+import WhatsAppComposer, { type WhatsAppComposerHandle } from '@/features/whatsapp/Composer';
+import ReplyMessage from '@/features/whatsapp/ReplyMessage';
+import '@/features/whatsapp/inbox.css';
+import { waRequest, type WaConversation, type WaCounts } from '@/features/whatsapp/api';
+import { PhaseControl, CaseActionDialog, CaseSummary, TransferDialog, type CaseCommand } from '@/features/whatsapp/CaseControls';
 import { fullModules } from '@/features/access/environment';
 import { validateKoaPeriod } from "@/utils/koaDate";
 import { inferCardOperatorFromContractCode, normalizeCompanyCode } from "@/utils/koaOperator";
 import { KoaArtifactDownload } from "@/components/KoaArtifactDownload";
 import { isAllCardBeneficiaries } from "@/utils/cardIssueScope";
+import { localAuthBypass } from "@/features/auth/localBypass";
 
-type ConversationStatus = "active" | "pending" | "resolved";
+type ConversationStatus = "triage" | "active" | "pending" | "resolved";
 type ConversationTab = "all" | ConversationStatus;
 type ConversationSort = "recent" | "oldest";
 type SidePanel = "koa" | "transfer" | "funnel" | null;
@@ -92,6 +96,7 @@ type Message = {
   mediaName?: string;
   quotedId?: string;
   statusRank?: number;
+  author?: string;
 };
 
 type Conversation = {
@@ -103,6 +108,7 @@ type Conversation = {
   initials: string;
   avatarUrl?: string;
   status: ConversationStatus;
+  caseData?: WaConversation;
   avatarColor: string;
   timestamp?: number;
   unreadCount?: number;
@@ -124,6 +130,37 @@ type Conversation = {
   };
 };
 
+const localPreviewConversations: Conversation[] = [
+  {
+    id: "conv-1", name: "Paulo", company: "TRANSLOGMG LTDA", preview: "Boa tarde, preciso de plano para 12 funcionários.", time: "15:36", initials: "P", status: "active", avatarColor: "bg-primary",
+    profile: { cnpj: "Dado não conectado", phone: "Telefone não conectado", email: "Canal não conectado", segment: "Transporte", size: "PME", origin: "Caixa de entrada", address: "Belo Horizonte", city: "Belo Horizonte", state: "MG", role: "Contato comercial", notes: "Solicitação registrada na sessão local." },
+    messages: [
+      { id: "m1", text: "Boa tarde, preciso de plano de saúde para minha empresa. Temos 12 funcionários em BH.", time: "15:30" },
+      { id: "m2", text: "Boa tarde Paulo! Vou verificar as melhores opções para vocês. O CNAE da empresa é qual?", time: "15:32", fromMe: true },
+      { id: "m3", text: "É transporte rodoviário de carga, CNAE 4930-2/02.", time: "15:34" },
+      { id: "m4", text: "Precisamos de cobertura nacional se possível.", time: "15:36" },
+    ],
+  },
+  {
+    id: "conv-2", name: "Thiago", company: "Comercial", preview: "Não consegui entrar em contato com o responsável.", time: "14:20", initials: "T", status: "pending", avatarColor: "bg-amber-500",
+    profile: { origin: "WhatsApp", notes: "Aguardando retorno." },
+    messages: [{ id: "m1", text: "Não consegui entrar em contato com o responsável.", time: "14:20" }],
+  },
+  {
+    id: "conv-3", name: "Dpto. Operações VNR", company: "Salesbot: Norma", preview: "Sabe o plano que você cotou anteriormente?", time: "13:55", initials: "DO", status: "active", avatarColor: "bg-emerald-500",
+    profile: { origin: "Indicação", segment: "Operações" },
+    messages: [{ id: "m1", text: "Sabe o plano que você cotou anteriormente?", time: "13:55" }],
+  },
+  {
+    id: "conv-4", name: "Fernanda", company: "Comercial", preview: "Na região de Conselheiro Lafaiete, o atendimento cobre?", time: "12:40", initials: "F", status: "resolved", avatarColor: "bg-pink-500",
+    profile: { city: "Conselheiro Lafaiete", state: "MG", origin: "Site" },
+    messages: [
+      { id: "m1", text: "Na região de Conselheiro Lafaiete, o atendimento cobre?", time: "12:40" },
+      { id: "m2", text: "Cobre sim. Encaminhei as opções disponíveis para conferência.", time: "12:49", fromMe: true },
+    ],
+  },
+];
+
 const koaLogo = KOA_BRAND_ASSET;
 const koaLogoBody = "/brand/koa-ghost-body.png";
 const koaLogoEyes = "/brand/koa-ghost-eyes.png";
@@ -131,6 +168,7 @@ const inboxProfilesToggleEvent = "kortex:inbox-profiles-toggle";
 
 const tabOptions: Array<{ id: ConversationTab; label: string }> = [
   { id: "all", label: "Todos" },
+  { id: "triage", label: "Triagem" },
   { id: "active", label: "Em atendimento" },
   { id: "pending", label: "Pendentes" },
   { id: "resolved", label: "Resolvidos" },
@@ -138,6 +176,7 @@ const tabOptions: Array<{ id: ConversationTab; label: string }> = [
 
 function statusLabel(status: ConversationStatus) {
   return {
+    triage: "Triagem",
     active: "Em atendimento",
     pending: "Pendente",
     resolved: "Resolvida",
@@ -208,7 +247,11 @@ function ConversationList({
   onSelect,
   onMoveStatus,
   onRestoreProfiles,
+  loading = false,
+  error,
+  onRetry,
   profilesCompact = false,
+  serverCounts,
 }: {
   conversations: Conversation[];
   activeId: string;
@@ -222,15 +265,20 @@ function ConversationList({
   onMoveStatus: (id: string, status: ConversationStatus) => void;
   onRestoreProfiles: () => void;
   profilesCompact?: boolean;
+  loading?: boolean;
+  error?: string;
+  onRetry?: () => void;
+  serverCounts?: WaCounts;
 }) {
   const counts = useMemo(
-    () => ({
+    () => serverCounts ?? ({
       all: conversations.length,
+      triage: conversations.filter((conversation) => conversation.status === "triage").length,
       active: conversations.filter((conversation) => conversation.status === "active").length,
       pending: conversations.filter((conversation) => conversation.status === "pending").length,
       resolved: conversations.filter((conversation) => conversation.status === "resolved").length,
     }),
-    [conversations],
+    [conversations, serverCounts],
   );
 
   const filtered = conversations
@@ -252,7 +300,7 @@ function ConversationList({
   if (profilesCompact) {
     return (
       <aside
-        className="relative flex min-h-0 w-[72px] shrink-0 flex-col overflow-hidden rounded-br-2xl border-b border-border bg-[linear-gradient(180deg,hsl(var(--card))_0px,hsl(var(--card))_72px,hsl(var(--primary)/0.04)_100%)] p-3 shadow-[8px_14px_24px_rgba(15,23,42,0.025)] after:pointer-events-none after:absolute after:bottom-0 after:right-0 after:top-[72px] after:w-px after:bg-border after:content-[''] md:h-full md:w-[72px] md:min-w-[72px] md:border-b-0"
+        className="inbox-conversation-list relative flex min-h-0 !w-[72px] shrink-0 flex-col overflow-hidden rounded-br-2xl border-b border-border bg-card p-3 md:h-full md:min-w-[72px] md:border-b-0"
         aria-label="Perfis compactos das conversas"
       >
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto scrollbar-thin">
@@ -293,22 +341,22 @@ function ConversationList({
   }
 
   return (
-    <aside className="flex min-h-0 w-full shrink-0 flex-col overflow-hidden border-b border-border bg-secondary/35 p-3 md:h-full md:w-[360px] md:min-w-[360px] md:border-b-0 md:border-r lg:w-[420px] lg:min-w-[420px] xl:w-[450px] xl:min-w-[450px]">
-      <div className="flex shrink-0 items-center gap-3 pb-3">
+    <aside aria-label="Conversas" className="inbox-conversation-list flex min-h-0 flex-col border-b border-border bg-card md:h-full md:border-b-0 md:border-r">
+      <div className="flex shrink-0 items-center gap-3 p-4 pb-3">
         <label className="relative min-w-0 flex-1">
           <span className="sr-only">Buscar atendimentos</span>
-          <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" strokeWidth={1.7} />
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" strokeWidth={1.5} />
           <input
             value={query}
             onChange={(event) => onQueryChange(event.target.value)}
-            className="h-11 w-full rounded-2xl border border-transparent bg-secondary/80 pl-11 pr-3 text-sm font-normal text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary/35 focus:bg-card focus:ring-2 focus:ring-primary/10"
+            className="h-10 w-full rounded-xl border border-input bg-background/70 pl-10 pr-3 text-sm font-normal outline-none transition-colors placeholder:text-muted-foreground focus:border-primary/50 focus:ring-2 focus:ring-primary/15"
             placeholder="Buscar atendimentos..."
             type="search"
           />
         </label>
       </div>
 
-      <div className="flex shrink-0 gap-2 overflow-x-auto border-b border-border px-1 pb-1 scrollbar-thin">
+      <div className="flex shrink-0 gap-5 overflow-x-auto border-b border-border px-4 scrollbar-thin">
         {tabOptions.map((option) => (
           <button
             key={option.id}
@@ -322,7 +370,7 @@ function ConversationList({
               if (id && option.id !== "all") onMoveStatus(id, option.id);
             }}
             className={cx(
-              "relative h-10 shrink-0 px-0 text-[13px] font-medium transition-colors",
+              "relative h-11 shrink-0 px-0 text-sm font-normal transition-colors",
               tab === option.id ? "text-primary" : "text-muted-foreground hover:text-foreground",
             )}
           >
@@ -332,13 +380,13 @@ function ConversationList({
         ))}
       </div>
 
-      <div className="flex shrink-0 items-center px-1 py-2.5">
+      <div className="flex shrink-0 items-center px-4 py-2">
         <label className="relative">
           <span className="sr-only">Ordenar conversas</span>
           <select
             value={sort}
             onChange={(event) => onSortChange(event.target.value as ConversationSort)}
-            className="h-8 appearance-none rounded-xl border border-transparent bg-transparent py-0 pl-0 pr-7 text-sm font-semibold text-muted-dimmer outline-none transition hover:text-primary focus:text-primary"
+            className="h-8 appearance-none rounded-xl border border-transparent bg-transparent py-0 pl-0 pr-7 text-xs font-normal text-muted-foreground outline-none transition hover:text-primary focus:text-primary"
           >
             <option value="recent">Mais recentes</option>
             <option value="oldest">Mais antigas</option>
@@ -347,9 +395,10 @@ function ConversationList({
         </label>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-2.5 overflow-y-auto px-0.5 pb-1 scrollbar-thin">
-        {filtered.length === 0 ? (
-          <div className="rounded-2xl border border-border bg-card p-5 text-sm text-muted-foreground shadow-sm">Nenhuma conversa encontrada nesta lista.</div>
+      <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
+        {error && <div role="alert" className="px-4 py-3 text-xs text-destructive">Não foi possível atualizar as conversas. <button className="underline" onClick={onRetry}>Tentar novamente</button></div>}
+        {loading && !conversations.length ? <p role="status" className="p-5 text-sm text-muted-foreground">Carregando conversas...</p> : filtered.length === 0 && !error ? (
+          <div className="p-5 text-sm text-muted-foreground">Nenhuma conversa encontrada nesta lista.</div>
         ) : (
           filtered.map((conversation) => {
             const active = conversation.id === activeId;
@@ -361,26 +410,27 @@ function ConversationList({
                 onDragStart={(event) => event.dataTransfer.setData("text/conversation-id", conversation.id)}
                 onClick={() => onSelect(conversation.id)}
                 className={cx(
-                  "flex w-full items-center gap-2.5 rounded-2xl border px-3 py-2.5 text-left transition-all",
+                  "flex w-full items-center gap-3 border-b border-border px-4 py-3 text-left transition-colors",
                   active
-                    ? "border-primary/20 bg-gradient-to-r from-primary to-sky-400 text-primary-foreground shadow-[0_12px_28px_rgba(36,121,219,0.22)]"
-                    : "border-border bg-card text-muted-dimmer shadow-[0_10px_26px_rgba(15,23,42,0.06)] hover:border-primary/20 hover:shadow-[0_14px_30px_rgba(15,23,42,0.08)]",
+                    ? "bg-primary/10 shadow-[inset_3px_0_0_hsl(var(--primary))]"
+                    : "hover:bg-secondary/70",
                 )}
               >
                 <ConversationAvatar conversation={conversation} active={active} />
                 <span className="min-w-0 flex-1">
-                  <span className={cx("block truncate text-sm font-semibold leading-tight", active ? "text-primary-foreground" : "text-muted-dimmer")}>{conversation.name}</span>
+                  <span className="block truncate text-sm font-semibold text-foreground">{conversation.name}</span>
+                  <span className="block truncate text-[11px] text-muted-foreground">{statusLabel(conversation.status)}{conversation.caseData?.assignee_name ? ` · ${conversation.caseData.assignee_name}` : ''}</span>
                   {conversation.company && (
-                    <span className={cx("mt-0.5 block truncate text-[12px] font-medium", active ? "text-primary-foreground/90" : "text-muted-foreground")}>{conversation.company}</span>
+                    <span className="mt-0.5 block truncate text-xs text-muted-foreground">{conversation.company}</span>
                   )}
-                  <span className={cx("mt-0.5 block truncate text-[12px] leading-relaxed", active ? "text-primary-foreground/88" : "text-muted-foreground")}>
+                  <span className="mt-0.5 block truncate text-xs text-muted-foreground/80">
                     {conversation.preview}
                   </span>
                 </span>
                 <span className="flex min-h-[56px] w-10 shrink-0 flex-col items-end justify-start">
-                  <span className={cx("text-xs font-medium", active ? "text-primary-foreground/90" : "text-muted-foreground")}>{conversation.time}</span>
+                  <span className="text-xs font-normal text-primary">{conversation.time}</span>
                   {!!conversation.unreadCount && (
-                    <span className={cx("mt-2 flex h-6 min-w-6 items-center justify-center rounded-full px-1.5 text-xs font-semibold", active ? "bg-primary-foreground text-primary" : "bg-primary text-primary-foreground")}>
+                    <span className="mt-2 flex h-6 min-w-6 items-center justify-center rounded-full bg-primary px-1.5 text-xs font-semibold text-primary-foreground">
                       {conversation.unreadCount}
                     </span>
                   )}
@@ -407,9 +457,8 @@ function ConversationAvatar({
   rail?: boolean;
   selectionRing?: boolean;
 }) {
-  const size = rail ? "h-10 w-10 text-[15px]" : compact ? "h-8 w-8 text-[11px]" : "h-9 w-9 text-xs";
+  const size = rail ? "h-10 w-10 text-[15px]" : compact ? "h-9 w-9 text-xs" : "h-12 w-12 text-sm";
   const hasPhoto = Boolean(conversation.avatarUrl);
-  const activeInitialAvatar = active && rail && !hasPhoto;
   const activePhotoAvatar = active && rail && hasPhoto;
 
   return (
@@ -417,16 +466,12 @@ function ConversationAvatar({
       className={cx(
         "relative flex shrink-0 items-center justify-center rounded-full font-semibold transition-all",
         size,
-        activeInitialAvatar
-          ? "bg-[linear-gradient(135deg,hsl(var(--primary))_0%,#22d3ee_100%)] text-primary-foreground shadow-[0_12px_24px_rgba(36,121,219,0.24)]"
-          : activePhotoAvatar
-            ? "bg-card ring-2 ring-primary ring-offset-2 ring-offset-background"
-          : active
-            ? "bg-primary-foreground text-primary"
-            : rail
-              ? "bg-primary/10 text-primary shadow-[0_8px_18px_rgba(36,121,219,0.08)]"
-              : "bg-accent text-primary ring-1 ring-primary/10",
-        selectionRing && !activeInitialAvatar && "ring-2 ring-primary ring-offset-2 ring-offset-background",
+        activePhotoAvatar
+          ? "bg-card ring-2 ring-primary ring-offset-2 ring-offset-background"
+          : rail
+            ? "bg-primary/10 text-primary"
+            : "bg-primary text-primary-foreground",
+        selectionRing && "ring-2 ring-primary ring-offset-2 ring-offset-background",
       )}
     >
       {hasPhoto ? (
@@ -436,7 +481,6 @@ function ConversationAvatar({
       ) : (
         conversation.initials
       )}
-      <span className={cx("absolute rounded-full border-card bg-emerald-500", rail ? "bottom-0 right-0 h-2 w-2 border-[1.5px]" : "bottom-0 right-0 h-2.5 w-2.5 border-2")} />
     </span>
   );
 }
@@ -473,13 +517,16 @@ function ProfilePanel({ conversation }: { conversation: Conversation }) {
   );
 }
 
-function ChatArea({
+export function ChatArea({
   conversation,
   panel,
   onOpenPanel,
   onSend,
   onResolve,
   onLoadOlder, hasOlder, loading, loadError, connected, onDownload,
+  onBack,
+  onMoveStatus,
+  onNewCase,
 }: {
   conversation: Conversation;
   panel: SidePanel;
@@ -488,11 +535,21 @@ function ChatArea({
   onResolve: (conversationId: string) => void;
   onLoadOlder: () => void; hasOlder: boolean; loading: boolean; loadError?: string; connected: boolean;
   onDownload: (id: string) => Promise<void>;
+  onBack?: () => void;
+  onMoveStatus?: (id: string, status: ConversationStatus) => void;
+  onNewCase?: (id: string) => void;
 }) {
   const [quote, setQuote] = useState<Message>();
   const [showMenu, setShowMenu] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const messagesEnd = useRef<HTMLDivElement>(null);
+  const composer = useRef<WhatsAppComposerHandle>(null);
+  const reply = (message: Message) => {
+    setQuote(message);
+    composer.current?.focus();
+  };
+  const messagePreview = (message: Message) => message.text.trim() || message.mediaName || ({ audio: "Áudio", image: "Imagem", video: "Vídeo", document: "Arquivo" }[message.kind ?? ""] ?? "Mensagem");
+  const messageAuthor = (message: Message) => message.fromMe ? "Você" : message.author || (conversation.isGroup ? "Participante" : conversation.name);
 
   useEffect(() => {
     messagesEnd.current?.scrollIntoView({ behavior: "auto" });
@@ -504,25 +561,22 @@ function ChatArea({
 
   return (
     <section className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-background">
-      <header className="flex h-[72px] shrink-0 items-center justify-between border-b border-border bg-card px-4 shadow-[0_8px_22px_rgba(15,23,42,0.04)]">
-        <button
-          type="button"
-          onClick={() => setShowProfile((current) => !current)}
-          className="flex min-w-0 items-center gap-3 rounded-xl pr-3 text-left outline-none transition hover:bg-secondary/70 focus-visible:ring-2 focus-visible:ring-primary/25"
-        >
+      <header className="inbox-chat-header flex h-[72px] shrink-0 items-center justify-between border-b border-border bg-card px-4">
+        <button type="button" className="shrink-0 rounded-lg p-2 text-primary md:hidden" aria-label="Voltar para conversas" onClick={onBack}><ArrowLeft size={20} /></button>
+        <div className="flex min-w-0 items-center gap-3 pr-2 text-left">
           <ConversationAvatar conversation={conversation} />
           <span className="min-w-0">
-            <span className="block truncate text-base font-semibold leading-tight tracking-normal text-muted-dimmer">{conversation.name}</span>
-            <span className="block text-sm font-normal text-muted-foreground">{statusLabel(conversation.status)}</span>
+            <button type="button" onClick={() => setShowProfile(current => !current)} className="block max-w-full truncate text-lg font-semibold leading-tight tracking-normal text-foreground">{conversation.name}</button>
+            {conversation.caseData && onMoveStatus ? <PhaseControl conversation={conversation.caseData} onMove={phase => onMoveStatus(conversation.id, phase)} onNew={() => onNewCase?.(conversation.id)} /> : <span className="block text-sm font-normal text-muted-foreground">{statusLabel(conversation.status)}</span>}
           </span>
-        </button>
+        </div>
 
-        <div className="relative flex items-center gap-2">
+        <div className="inbox-chat-header-actions relative flex items-center gap-2">
           <button
             type="button"
             disabled
             title="Ligação indisponível sem integração de telefonia"
-            className="flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-card text-muted-foreground opacity-55"
+            className="inbox-call-action flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-card text-muted-foreground opacity-55"
           >
             <Phone className="h-5 w-5" strokeWidth={1.5} />
           </button>
@@ -530,13 +584,13 @@ function ChatArea({
             type="button"
             disabled
             title="Vídeo indisponível sem integração ativa"
-            className="flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-card text-muted-foreground opacity-55"
+            className="inbox-call-action flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-card text-muted-foreground opacity-55"
           >
             <Video className="h-5 w-5" strokeWidth={1.5} />
           </button>
           <button
             type="button"
-            disabled title="Transferência entre operadores ainda não disponível"
+            onClick={() => onOpenPanel('transfer')}
             className="flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-card text-primary transition hover:border-primary/40 hover:bg-primary/10"
             aria-label="Transferir conversa"
           >
@@ -563,37 +617,38 @@ function ChatArea({
       </header>
 
       {showProfile && <ProfilePanel conversation={conversation} />}
+      {conversation.caseData && <CaseSummary key={conversation.caseData.case_id} conversation={conversation.caseData} />}
+      {conversation.caseData?.can_claim && ['triage', 'pending'].includes(conversation.status) && <div className="inbox-case-claim"><button type="button" onClick={() => onMoveStatus?.(conversation.id, 'active')}>Assumir atendimento</button></div>}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 scrollbar-thin sm:px-6">
         <div className="flex w-full flex-col gap-4">
           {hasOlder && <button className="wa-secondary self-center" disabled={loading} onClick={onLoadOlder}>{loading ? 'Carregando...' : 'Carregar mensagens anteriores'}</button>}
-          {loading && <p role="status" className="text-center text-sm text-muted-foreground">Carregando mensagens...</p>}
+          {loading && !conversation.messages.length && <p role="status" className="text-center text-sm text-muted-foreground">Carregando mensagens...</p>}
           {loadError && <p role="alert" className="text-sm text-destructive">{loadError}</p>}
           {conversation.messages.map((message) => (
             <div key={message.id} className={`flex items-end gap-3 ${message.fromMe ? "justify-end" : "justify-start"}`}>
               {!message.fromMe && (
                 <ConversationAvatar conversation={conversation} compact />
               )}
-              <div className={`w-fit max-w-[78%] break-words rounded-2xl px-4 py-3 text-sm font-normal leading-relaxed ${
+              <ReplyMessage label={`Responder à mensagem de ${messageAuthor(message)}: ${messagePreview(message).slice(0, 100)}`} onReply={() => reply(message)} className={`max-w-[85%] break-words rounded-2xl px-4 py-3 text-sm font-normal leading-relaxed sm:max-w-[78%] ${
                 message.fromMe
-                  ? "rounded-br-md bg-[linear-gradient(90deg,hsl(var(--primary))_0%,#38bdf8_100%)] text-primary-foreground shadow-[0_12px_30px_rgba(36,121,219,0.18)]"
-                  : "rounded-bl-md border border-border bg-card text-muted-dimmer shadow-[0_8px_22px_rgba(15,23,42,0.045)]"
+                  ? "rounded-br-md bg-gradient-to-r from-primary to-[#1687f8] text-primary-foreground shadow-[0_12px_30px_rgba(36,121,219,0.18)]"
+                  : "rounded-bl-md border border-border bg-card text-foreground shadow-sm"
               }`}>
-                {message.quotedId && <div className="mb-2 border-l-2 border-current/40 pl-2 text-xs opacity-75">{conversation.messages.find(m => m.providerId === message.quotedId)?.text || 'Mensagem citada'}</div>}
-                <div className="whitespace-pre-wrap">{message.text}</div>
+                {message.quotedId && <div className="inbox-message-quote mb-2 border-l-2 border-current/40 pl-2 text-xs opacity-75">{conversation.messages.find(m => m.providerId === message.quotedId || m.id === message.quotedId)?.text || 'Mensagem citada'}</div>}
+                <div className="inbox-message-body">{message.text.split(/(https?:\/\/[^\s]+)/g).map((part, index) => /^https?:\/\//.test(part) ? <a key={index} href={part} target="_blank" rel="noopener noreferrer">{part}</a> : part)}</div>
                 {message.kind && message.kind !== 'text' && <button className="mt-2 block underline" onClick={() => void onDownload(message.id)}>{message.kind === 'audio' ? 'Abrir áudio' : 'Abrir anexo'}{message.mediaName ? ` · ${message.mediaName}` : ''}</button>}
-                <button className="mt-2 block text-[11px] underline opacity-70" onClick={() => setQuote(message)}>Responder</button>
                 <div className={`mt-2 text-xs ${message.fromMe ? "text-primary-foreground/75" : "text-muted-foreground"}`}>
                   {message.time} {message.fromMe && ` · ${['Pendente', 'Enviado', 'Entregue', 'Lido', 'Reproduzido'][message.statusRank ?? 0]}`}
                 </div>
-              </div>
+              </ReplyMessage>
             </div>
           ))}
           <div ref={messagesEnd} />
         </div>
       </div>
 
-      <WhatsAppComposer key={conversation.id} disabled={!connected} quoted={quote?.text} onClearQuote={() => setQuote(undefined)} onSend={(text, file) => onSend(conversation.id, text, file, quote?.id)} />
+      <WhatsAppComposer ref={composer} key={conversation.id} disabled={!connected} quoted={quote ? { id: quote.id, author: messageAuthor(quote), preview: messagePreview(quote) } : undefined} onClearQuote={() => setQuote(undefined)} onSend={(text, file) => onSend(conversation.id, text, file, quote?.id)} unavailableReason={!connected ? conversation.caseData?.case_id && !conversation.caseData.can_send ? "Assuma o atendimento para responder. O envio fica reservado ao responsável atual." : "Envio indisponível. Verifique o canal em Configurações." : undefined} />
     </section>
   );
 }
@@ -630,14 +685,18 @@ function SidePanelView({
   conversation,
   onClose,
   isClosing,
+  scope,
+  onChanged,
 }: {
   panel: Exclude<SidePanel, null>;
   conversation: Conversation;
   onClose: () => void;
   isClosing: boolean;
+  scope?: { workspaceId: string; sectorId: string };
+  onChanged: () => Promise<unknown>;
 }) {
   if (panel === "koa") return <KoaPanel conversation={conversation} onClose={onClose} isClosing={isClosing} />;
-  if (panel === "transfer") return <TransferPanel conversation={conversation} onClose={onClose} isClosing={isClosing} />;
+  if (panel === "transfer") return <TransferDialog conversation={conversation.caseData ?? { id: conversation.id, name: conversation.name, status: conversation.status } as WaConversation} scope={scope} onClose={onClose} onChanged={onChanged} />;
   return <FunnelPanel conversation={conversation} onClose={onClose} isClosing={isClosing} />;
 }
 
@@ -2429,24 +2488,6 @@ function KoaOperationAnimation({ className = "" }: { className?: string }) {
   return <KoaAnimatedLogo label="Koa está processando" processing className={className} />;
 }
 
-function TransferPanel({ conversation, onClose, isClosing }: { conversation: Conversation; onClose: () => void; isClosing: boolean }) {
-  return (
-    <PanelShell title="Transferir conversa" description="Setores reais ainda não estão conectados nesta tela." icon={Users} onClose={onClose} isClosing={isClosing}>
-      <div className="rounded-2xl border border-dashed border-border bg-background/70 p-4 text-sm text-muted-foreground">
-        Nenhum serviço de setores/departamentos foi encontrado no código atual. A interface está preparada, mas a confirmação fica indisponível para não simular transferência.
-      </div>
-      <div className="mt-5 rounded-2xl border border-border bg-background p-4">
-        <p className="text-sm font-semibold text-foreground">{conversation.name}</p>
-        <p className="mt-1 text-sm text-muted-foreground">{conversation.company}</p>
-        <p className="mt-3 text-xs text-muted-foreground">Status atual: {statusLabel(conversation.status)}</p>
-      </div>
-      <button type="button" disabled className="mt-5 h-11 w-full rounded-xl bg-muted text-sm font-semibold text-muted-foreground">
-        Confirmar transferência
-      </button>
-    </PanelShell>
-  );
-}
-
 function FunnelPanel({ conversation, onClose, isClosing }: { conversation: Conversation; onClose: () => void; isClosing: boolean }) {
   const stages = pipelines[0]?.stages ?? [];
   const [stage, setStage] = useState(stages[0] ?? "");
@@ -2494,18 +2535,27 @@ function FunnelPanel({ conversation, onClose, isClosing }: { conversation: Conve
 
 export default function InboxPage() {
   const sectors = useWhatsAppScope();
-  const inbox = useInbox(sectors.scope);
-  const activeId = inbox.activeId;
-  const [connectOpen, setConnectOpen] = useState(false);
-  const [actionError, setActionError] = useState('');
-  const conversations: Conversation[] = (inbox.conversations.isError || inbox.connection.isError || !sectors.scope ? [] : inbox.conversations.data ?? []).map(c => ({
-    id: c.id, name: c.name, company: '', preview: c.preview, time: c.last_message_at ? new Date(c.last_message_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '',
-    timestamp: Date.parse(c.last_message_at), initials: c.name.slice(0, 2).toUpperCase(), status: c.status, avatarColor: 'bg-primary', unreadCount: c.unread_count,
-    isGroup: c.remote_jid.endsWith('@g.us'), profile: { phone: c.remote_jid.split('@')[0], origin: 'WhatsApp' },
-    messages: c.id === activeId ? inbox.rows.map(m => ({ id: m.id, providerId: m.provider_id, text: m.body, time: new Date(m.sent_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }), fromMe: m.from_me, kind: m.kind, mediaName: m.media_name, quotedId: m.quoted_id, statusRank: m.status_rank })) : [],
-  }));
   const [tab, setTab] = useState<ConversationTab>("all");
   const [query, setQuery] = useState("");
+  const inbox = useInbox(sectors.scope, { phase: tab, search: query });
+  const [localConversations, setLocalConversations] = useState<Conversation[]>(() => localAuthBypass ? localPreviewConversations : []);
+  const [localActiveId, setLocalActiveId] = useState(() => localAuthBypass ? localPreviewConversations[0].id : '');
+  const localPreview = localAuthBypass;
+  const activeId = localPreview ? localActiveId : inbox.activeId;
+  const downloadContext = useRef('');
+  downloadContext.current = `${inbox.scopeKey}:${activeId}`;
+  const [actionFailure, setActionFailure] = useState({ scope: '', message: '' });
+  const [mobileConversation, setMobileConversation] = useState('');
+  const setActionError = (message: string) => setActionFailure({ scope: inbox.scopeKey, message });
+  const actionError = actionFailure.scope === inbox.scopeKey ? actionFailure.message : '';
+  const remoteConversations: Conversation[] = (!sectors.scope ? [] : inbox.conversations.data ?? []).map(c => ({
+    id: c.id, name: c.name, company: '', preview: c.preview, time: c.last_message_at ? new Date(c.last_message_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '',
+    timestamp: Date.parse(c.last_message_at), initials: c.name.slice(0, 2).toUpperCase(), status: c.status, caseData: c, avatarColor: 'bg-primary', unreadCount: c.unread_count,
+    isGroup: c.remote_jid.endsWith('@g.us'), profile: { phone: c.remote_jid.split('@')[0], origin: 'WhatsApp' },
+    messages: c.id === activeId ? inbox.rows.map(m => ({ id: m.id, providerId: m.provider_id, text: m.body, author: c.remote_jid.endsWith('@g.us') ? m.participant?.split('@')[0] : c.name, time: new Date(m.sent_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }), fromMe: m.from_me, kind: m.kind, mediaName: m.media_name, quotedId: m.quoted_id, statusRank: m.status_rank })) : [],
+  }));
+  const conversations = localPreview ? localConversations : remoteConversations;
+  const [requestedChange, setRequestedChange] = useState<{ id: string; action: CaseCommand; scope: string }>();
   const [sort, setSort] = useState<ConversationSort>("recent");
   const [panel, setPanel] = useState<SidePanel>(null);
   const [renderedPanel, setRenderedPanel] = useState<SidePanel>(null);
@@ -2566,27 +2616,33 @@ export default function InboxPage() {
   }, [panel, renderedPanel]);
 
   const moveStatus = (conversationId: string, status: ConversationStatus) => {
-    void waRequest('conversation-status', { scope: sectors.scope, body: { conversationId, status } }).then(inbox.refresh).catch(e => setActionError(e.message));
+    if (localPreview) {
+      setLocalConversations((current) => current.map((conversation) =>
+        conversation.id === conversationId ? { ...conversation, status } : conversation,
+      ));
+      return;
+    }
+    const row = remoteConversations.find(conversation => conversation.id === conversationId);
+    if (!row?.caseData?.case_id) { setActionError('Atualize o atendimento para carregar suas fases.'); return; }
+    const action: CaseCommand = status === 'active' ? 'claim' : status === 'pending' ? 'pending' : status === 'resolved' ? 'resolve' : row.status === 'resolved' ? 'reopen' : 'triage';
+    setRequestedChange({ id: conversationId, action, scope: inbox.scopeKey });
   };
-  const error = actionError || inbox.connection.error?.message || inbox.conversations.error?.message || sectors.error;
+  const sendMessage = async (conversationId: string, text: string, file?: File, quotedId?: string) => {
+    if (!localPreview) return inbox.send(conversationId, text, file, quotedId);
+    const body = text.trim() || (file ? `Arquivo: ${file.name}` : "");
+    if (!body) return;
+    const message: Message = { id: crypto.randomUUID(), text: body, time: formatNow(), fromMe: true, quotedId };
+    setLocalConversations((current) => current.map((conversation) =>
+      conversation.id === conversationId
+        ? { ...conversation, preview: body, time: message.time, messages: [...conversation.messages, message] }
+        : conversation,
+    ));
+  };
+  const error = actionError || (inbox.dataError instanceof Error ? inbox.dataError.message : inbox.dataError) || sectors.error;
+  const retry = () => { setActionError(''); sectors.retry(); void inbox.refresh(); };
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3 text-sm">
-        <label className="flex min-w-0 flex-wrap items-center gap-2">Chat · Setor
-          <select aria-label="Setor do Chat" className="task-select max-w-full" value={sectors.current ? `${sectors.current.workspace_id}:${sectors.current.sector_id}` : ''} onChange={e => sectors.select(e.target.value)}>
-            <option value="" disabled>Selecione o setor</option>
-            {sectors.options.map(c => <option key={`${c.workspace_id}:${c.sector_id}`} value={`${c.workspace_id}:${c.sector_id}`}>{c.workspace_name} · {c.sector_name}</option>)}
-          </select>
-        </label>
-        <button className="wa-secondary" disabled={!sectors.scope} onClick={() => setConnectOpen(true)}>{inbox.connection.data?.state === 'connected' ? 'WhatsApp conectado' : 'Conectar WhatsApp'}</button>
-        <a href="/settings/channels/whatsapp" className="text-xs text-primary underline">Gerenciar conexão</a>
-      </header>
-      {error && <div role="alert" className="flex items-center justify-between gap-3 bg-destructive/5 px-4 py-2 text-sm text-destructive"><span>{error}</span><button className="underline" onClick={() => { setActionError(''); sectors.retry(); void inbox.refresh(); }}>Tentar novamente</button></div>}
-      {inbox.connection.data?.id && <p className="px-4 py-2 text-xs text-muted-foreground">{connectionLabels[inbox.connection.data.state]} · {inbox.connection.data.syncState === 'syncing' ? 'Sincronizando conversas disponíveis' : 'Histórico disponível na integração. A importação pode não incluir mensagens antigas.'}</p>}
-      <p className="px-4 pt-2 text-xs text-muted-foreground">Busca e filtros nas últimas 250 conversas carregadas.</p>
-      <div className="min-h-0 flex-1">
-
-    <div className="flex h-full min-w-0 flex-col overflow-hidden bg-background font-sans text-foreground md:flex-row">
+    <div className="inbox-view bg-background font-sans text-foreground" data-conversation-open={mobileConversation === `${inbox.scopeKey}:${activeId}`}>
+    <div className="inbox-layout">
       <ConversationList
         conversations={conversations}
         activeId={activeId}
@@ -2597,37 +2653,65 @@ export default function InboxPage() {
         onSortChange={setSort}
         onTabChange={setTab}
         onSelect={(id) => {
-          inbox.select(id);
+          if (localPreview) setLocalActiveId(id);
+          else inbox.select(id);
+          setMobileConversation(`${inbox.scopeKey}:${id}`);
           setPanel(null);
         }}
         onMoveStatus={moveStatus}
+        serverCounts={inbox.counts}
         onRestoreProfiles={() => setProfilesCompact(false)}
         profilesCompact={profilesCompact}
+        loading={!localPreview && (sectors.loading || inbox.conversations.isLoading)}
+        error={localPreview ? undefined : error}
+        onRetry={retry}
       />
-      <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
+      <div className="inbox-chat-pane relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        {!localPreview && error && conversations.length > 0 && <div role="alert" className="inbox-context-note"><span>Não foi possível atualizar o atendimento.</span><button className="shrink-0 underline" onClick={retry}>Tentar novamente</button></div>}
+        <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
         {activeConversation ? <ChatArea
           key={`${inbox.scopeKey}:${activeId}`}
           conversation={activeConversation}
           panel={panel}
           onOpenPanel={setPanel}
-          onSend={inbox.send}
+          onSend={sendMessage}
           onResolve={(id) => moveStatus(id, "resolved")}
-          onLoadOlder={() => void inbox.messages.fetchNextPage()} hasOlder={Boolean(inbox.messages.hasNextPage)} loading={inbox.messages.isFetching} loadError={inbox.messages.error?.message}
-          connected={inbox.connection.data?.state === 'connected'}
-          onDownload={async id => { try { const result = await waRequest<{url:string}>('media', { scope: sectors.scope, query: { messageId: id } }); const a = document.createElement('a'); a.href = result.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.click(); } catch(e) { setActionError(e instanceof Error ? e.message : 'Arquivo indisponível.'); } }}
-        /> : <div className="grid min-h-0 flex-1 place-items-center p-8 text-center text-sm text-muted-foreground"><div><p>{sectors.loading || inbox.conversations.isLoading ? 'Carregando conversas...' : inbox.connection.data?.state === 'connected' ? 'Selecione uma conversa. As mensagens recebidas aparecerão aqui.' : 'Conecte seu WhatsApp para atender neste setor.'}</p><p className="mt-3">Tarefas e Pipeline continuam disponíveis no menu.</p></div></div>}
+          onMoveStatus={moveStatus}
+          onNewCase={id => setRequestedChange({ id, action: 'new', scope: inbox.scopeKey })}
+          onLoadOlder={() => void inbox.messages.fetchNextPage()} hasOlder={!localPreview && Boolean(inbox.messages.hasNextPage)} loading={!localPreview && inbox.messages.isFetching} loadError={localPreview ? undefined : inbox.messages.error?.message}
+          connected={localPreview || inbox.canSend}
+          onBack={() => setMobileConversation('')}
+          onDownload={async id => {
+            const requestedContext = downloadContext.current;
+            try {
+              const result = await waRequest<{url:string}>('media', { scope: sectors.scope, query: { messageId: id } });
+              if (downloadContext.current !== requestedContext) return;
+              const a = document.createElement('a'); a.href = result.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.click();
+            } catch {
+              if (downloadContext.current === requestedContext) setActionError('Não foi possível abrir o arquivo. Tente novamente.');
+            }
+          }}
+        /> : <div className="inbox-state" role={error ? 'alert' : 'status'}>
+          <p>{error ? 'Não foi possível carregar os atendimentos.' : sectors.loading || inbox.conversations.isLoading ? 'Carregando conversas...' : !sectors.scope && !localPreview ? 'Defina seu contexto de atendimento em Configurações.' : conversations.length ? 'Selecione uma conversa para começar.' : 'Nenhuma conversa disponível neste atendimento.'}</p>
+          {error && <button className="text-primary underline" onClick={retry}>Tentar novamente</button>}
+        </div>}
         {renderedPanel && activeConversation && (
           <SidePanelView
             panel={renderedPanel}
             conversation={activeConversation}
             onClose={() => setPanel(null)}
             isClosing={isPanelClosing}
+            scope={sectors.scope}
+            onChanged={inbox.refresh}
           />
         )}
       </div>
     </div>
-      </div>
-      <ConnectionModal key={inbox.scopeKey} open={connectOpen} onOpenChange={setConnectOpen} scope={sectors.scope} onContinue={() => { setConnectOpen(false); void inbox.refresh(); }} onConnected={() => void inbox.refresh()} />
+    </div>
+    {requestedChange?.scope === inbox.scopeKey && remoteConversations.find(row => row.id === requestedChange.id)?.caseData && <CaseActionDialog
+      key={`${inbox.scopeKey}:${requestedChange.id}:${requestedChange.action}`}
+      conversation={remoteConversations.find(row => row.id === requestedChange.id)!.caseData!}
+      action={requestedChange.action} scope={sectors.scope} onClose={() => setRequestedChange(undefined)} onChanged={inbox.refresh} />}
     </div>
   );
 }
