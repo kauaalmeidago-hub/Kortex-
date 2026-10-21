@@ -14,5 +14,5 @@ export function publicConnection(c, emailPending = false) {
   const qr = c.state === 'qr' && Date.parse(c.qr_expires_at) > Date.now() ? qrImage(c.qr_data) : null;
   const state = c.state === 'qr' && !qr ? 'expired' : c.state;
   return { id: c.id, state, qr, qrExpiresAt: qr ? c.qr_expires_at : null, emailPending,
-    syncState: c.sync_state, phone: c.phone_jid?.split('@')[0] ?? null };
+    syncState: c.sync_state, phone: c.phone_jid?.split('@')[0] ?? null, label: c.channel_label || null, role: c.channel_role || 'human' };
 }

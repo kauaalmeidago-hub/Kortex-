@@ -1,5 +1,7 @@
 # Etapas e transferência do atendimento
 
+Atualização posterior em 21/10/2026: o canal principal de suporte recebeu o fluxo **KOA · SDR Comercial**. A configuração atual e seus limites estão em [whatsapp-sdr.md](whatsapp-sdr.md). As seções abaixo registram a implantação inicial do atendimento humano.
+
 ## Escopo de homologação em 21/10/2026
 
 A branch `codex/whatsapp-phases-transfer` mantém o desenho atual do chat e acrescenta as abas **Todos, Triagem, Em atendimento, Pendentes e Resolvidos**. O atendimento tem fase, responsável, versão e histórico próprios; o histórico WhatsApp continua pertencendo ao canal que recebeu ou enviou cada mensagem.

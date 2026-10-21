@@ -9,6 +9,7 @@ const files = [
  '20261020210000_whatsapp_chat.sql', '20261020211000_whatsapp_read.sql', '20261020212000_whatsapp_onboarding.sql',
  '20261020213000_whatsapp_signup_proof.sql', '20261020214000_whatsapp_cleanup_guard.sql',
  '20261021201659_whatsapp_case_phases_transfer.sql', '20261021201821_whatsapp_case_security_review.sql',
+ '20261021212500_whatsapp_commercial_sdr.sql',
 ];
 const env = Object.fromEntries((await fs.readFile('automation-server/.env.local','utf8')).split(/\r?\n/).flatMap(l => {
  const m=l.match(/^(\w+)=(.*)$/);return m?[[m[1],m[2].trim().replace(/^["']|["']$/g,'')]]:[];

@@ -48,6 +48,12 @@ test('chat contexts require no task board and omit sectors outside an accessible
   const auth = { from: table => query({ data: table === 'task_sectors' ? [{ id: 'sales', workspace_id: 'team', name: 'Comercial' }, { id: 'foreign', workspace_id: 'denied', name: 'Outro' }] : [{ id: 'team', name: 'Equipe' }], error: null }) };
   assert.deepEqual(await whatsappContexts(auth), [{ workspace_id: 'team', sector_id: 'sales', sector_name: 'Comercial', workspace_name: 'Equipe' }]);
 });
+test('primary SDR metadata cannot introduce a sector outside the authenticated RLS list', async () => {
+  const auth = { from: table => query({ data: table === 'task_sectors' ? [{ id: 'sales', workspace_id: 'team', name: 'Comercial' }] : [{ id: 'team', name: 'Equipe' }], error: null }) };
+  const admin = { from: () => query({ data: [{ workspace_id: 'foreign', sector_id: 'hidden' }], error: null }) };
+  const rows = await whatsappContexts(auth, admin, 'real-user');
+  assert.equal(rows.length, 1); assert.equal(rows[0].sector_id, 'sales'); assert.equal(rows[0].primary, undefined);
+});
 test('an obfuscated duplicate signup never receives a cookie or accesses the existing instance', async () => {
   let wroteCookie = false, wroteDb = false;
   const admin = { rpc: () => query({ data: true, error: null }), from: () => { wroteDb = true; throw new Error('must not write'); }, auth: { admin: { getUserById: async () => ({ data: { user: { id: 'victim', email: 'existing@example.invalid', user_metadata: { wa_signup_nonce: 'old' }, created_at: new Date().toISOString() } } }) } } };

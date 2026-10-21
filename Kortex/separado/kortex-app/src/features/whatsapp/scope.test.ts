@@ -14,6 +14,12 @@ describe('WhatsApp context from authorized grants', () => {
   it('does not silently choose the first of multiple sectors', () => {
     expect(resolveWhatsAppContext([context('sales'), context('support')]).current).toBeNull();
   });
+  it('uses the authorized primary SDR sector while preserving an explicit settings choice', () => {
+    const sales = { ...context('sales'), primary: true }; const support = context('support');
+    expect(resolveWhatsAppContext([support, sales]).current).toBe(sales);
+    expect(resolveWhatsAppContext([support, sales], 'org', 'org:support').current).toBe(support);
+    expect(resolveWhatsAppContext([support, sales], 'other').current).toBeNull();
+  });
   it('respects the globally selected workspace and never falls into another one', () => {
     expect(resolveWhatsAppContext([context('sales'), context('support', 'other')], 'other').current?.workspace_id).toBe('other');
     expect(resolveWhatsAppContext([context('sales')], 'missing').current).toBeNull();

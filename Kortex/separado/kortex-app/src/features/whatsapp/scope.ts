@@ -1,5 +1,5 @@
 import type { BusinessContext } from '@/integrations/supabase/businessTypes';
-export type WhatsAppContext = Pick<BusinessContext, 'workspace_id' | 'sector_id' | 'workspace_name' | 'sector_name'> & { board_id?: string };
+export type WhatsAppContext = Pick<BusinessContext, 'workspace_id' | 'sector_id' | 'workspace_name' | 'sector_name'> & { board_id?: string; primary?: boolean };
 
 export const whatsappContextId = (context: Pick<BusinessContext, 'workspace_id' | 'sector_id'>) =>
   `${context.workspace_id}:${context.sector_id}`;
@@ -21,7 +21,8 @@ export function resolveWhatsAppContext(
       grant.workspace_id === context.workspace_id && grant.sector_id === context.sector_id))
     .filter(context => options.some(option => whatsappContextId(option) === whatsappContextId(context)));
   const globalIds = new Set(globals.map(whatsappContextId));
+  const primary = options.filter(option => option.primary);
   const current = preference ?? (options.length === 1 ? options[0] :
-    globalIds.size === 1 ? options.find(context => globalIds.has(whatsappContextId(context))) : null) ?? null;
+    primary.length === 1 ? primary[0] : globalIds.size === 1 ? options.find(context => globalIds.has(whatsappContextId(context))) : null) ?? null;
   return { options, current };
 }

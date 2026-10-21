@@ -19,7 +19,7 @@ async function denied(user, sql, params, code) {
 async function check(name, fn) { await fn(); evidence.push(name); console.log('PASS', name); }
 try {
   await db.exec('ALTER TABLE auth.users ADD COLUMN email_confirmed_at timestamptz;');
-  for (const file of ['20261020210000_whatsapp_chat.sql', '20261020211000_whatsapp_read.sql', '20261020212000_whatsapp_onboarding.sql', '20261020213000_whatsapp_signup_proof.sql', '20261020214000_whatsapp_cleanup_guard.sql', '20261021201659_whatsapp_case_phases_transfer.sql', '20261021201821_whatsapp_case_security_review.sql']) {
+  for (const file of ['20261020210000_whatsapp_chat.sql', '20261020211000_whatsapp_read.sql', '20261020212000_whatsapp_onboarding.sql', '20261020213000_whatsapp_signup_proof.sql', '20261020214000_whatsapp_cleanup_guard.sql', '20261021201659_whatsapp_case_phases_transfer.sql', '20261021201821_whatsapp_case_security_review.sql', '20261021212500_whatsapp_commercial_sdr.sql']) {
     await db.exec(await readFile('supabase/migrations/' + file, 'utf8'));
   }
   const users = {};
@@ -131,6 +131,59 @@ try {
     assert.equal(visible.items.length, 250); assert.ok(visible.counts.triage > 250);
     const filtered = (await as(users.Luisa, () => one('SELECT public.wa_case_inbox($1,$2,$3,$4) inbox', [ws, 'resolved', '', conv]))).inbox;
     assert.equal(filtered.items.length, 0); assert.equal(filtered.selected.id, conv); assert.equal(filtered.counts.all, visible.counts.all);
+  });
+  await q("UPDATE public.wa_connections SET channel_role='sdr',channel_label='KOA · SDR Comercial',sort_order=0 WHERE id=$1", [channels.Luisa]);
+  await q('INSERT INTO public.wa_sdr_settings(connection_id,actor_id,handoff_user_id) VALUES($1,$2,$3)', [channels.Luisa,users.Luisa,users.Fernando]);
+  const sdrConversation = async () => (await one('INSERT INTO public.wa_conversations(connection_id,remote_jid,name) VALUES($1,$2,$3) RETURNING id', [channels.Luisa,`5511${Math.floor(Math.random()*1e9)}@s.whatsapp.net`,'Lead sintético'])).id;
+  const incoming = async (cv, old=false) => (await one("INSERT INTO public.wa_messages(connection_id,conversation_id,provider_id,remote_jid,body,kind,sent_at) SELECT connection_id,id,$2,remote_jid,'Quero cotar um plano','text',now()-($3::int*interval '1 hour') FROM public.wa_conversations WHERE id=$1 RETURNING id", [cv,randomUUID(),old?1:0])).id;
+  const take = async () => one('SELECT public.wa_sdr_take($1) job',[randomUUID()]);
+  let lead,job;
+  const decision={action:'ask',reply:'Qual é o seu município?',summary:'Cliente quer cotar um plano.',request_type:'comercial',facts:{name:null,city:null,modality:null,lives:null},missing:['city']};
+  await check('SDR starts disabled, requires owner activation, and never queues historical imports', async()=>{
+    lead=await sdrConversation();await incoming(lead);assert.equal((await one('SELECT count(*)::int n FROM public.wa_sdr_jobs')).n,0);
+    await denied(users.Fernando,'SELECT public.wa_sdr_mode($1,true)',[channels.Luisa]);
+    await as(users.Luisa,()=>q('SELECT public.wa_sdr_mode($1,true)',[channels.Luisa]));
+    await incoming(lead,true);assert.equal((await one('SELECT count(*)::int n FROM public.wa_sdr_jobs')).n,0);
+  });
+  await check('message fragments coalesce into one delayed job and public settings identify the primary SDR',async()=>{
+    await incoming(lead);const latest=await incoming(lead);
+    job=await one('SELECT * FROM public.wa_sdr_jobs');assert.equal(job.generation,2);assert.equal(job.source_id,latest);
+    assert.equal((await take()).job,null);
+    const settings=(await as(users.Luisa,()=>one('SELECT public.wa_channel_settings() settings'))).settings;
+    assert.equal(settings[0].role,'sdr');assert.equal(settings[0].sortOrder,0);assert.equal(settings[0].sdrEnabled,true);
+    const targets=(await as(users.Luisa,()=>one('SELECT public.wa_case_destinations($1) targets',[job.case_id]))).targets;
+    assert.ok(targets.some(t=>t.channelOwner==='KOA · SDR Comercial'&&t.sortOrder===0));
+    await q("UPDATE public.wa_sdr_jobs SET available_at=now()-interval '1 second'");job=(await take()).job;assert.ok(job.token);
+  });
+  await check('a human claim fences an inference already in progress, before any outbound reservation',async()=>{
+    const kase=await one('SELECT * FROM public.wa_cases WHERE id=$1',[job.case_id]);
+    await change(users.Luisa,'claim',{caseId:kase.id,version:kase.version});
+    assert.equal((await one('SELECT public.wa_sdr_plan($1,$2,$3) ok',[job.id,job.token,decision])).ok,false);
+    assert.equal((await one('SELECT public.wa_sdr_reserve($1,$2,$3,$4) ok',[job.id,job.token,job.request_id,'hash'])).ok,false);
+    assert.equal((await one('SELECT count(*)::int n FROM public.wa_outbox WHERE conversation_id=$1',[lead])).n,0);
+  });
+  await check('SDR reservation is exclusive, blocks conflicting human moves, and requires confirmed delivery',async()=>{
+    lead=await sdrConversation();await incoming(lead);await q("UPDATE public.wa_sdr_jobs SET available_at=now()-interval '1 second' WHERE state='queued'");job=(await take()).job;
+    assert.equal((await one('SELECT public.wa_sdr_plan($1,$2,$3) ok',[job.id,job.token,decision])).ok,true);
+    assert.equal((await one('SELECT public.wa_sdr_reserve($1,$2,$3,$4) ok',[job.id,job.token,job.request_id,'hash'])).ok,true);
+    assert.equal((await one('SELECT public.wa_sdr_reserve($1,$2,$3,$4) ok',[job.id,job.token,job.request_id,'hash'])).ok,false);
+    await assert.rejects(q('SELECT public.wa_sdr_complete($1,$2,true)',[job.id,job.token]),/SEND_NOT_CONFIRMED/);
+    const kase=await one('SELECT * FROM public.wa_cases WHERE id=$1',[job.case_id]);
+    await denied(users.Fernando,actionSql,[kase.id,kase.version,'claim','',null,null,null,'',''],'SEND_UNCERTAIN');
+    await q("UPDATE public.wa_outbox SET state='sent',provider_id='synthetic-confirmation' WHERE request_id=$1",[job.request_id]);
+    await q('SELECT public.wa_sdr_complete($1,$2,true)',[job.id,job.token]);
+    assert.equal((await one('SELECT triage_state FROM public.wa_cases WHERE id=$1',[job.case_id])).triage_state,'waiting_customer');
+  });
+  await check('qualified leads reach the configured human in Triagem; automation stays stopped after assumption',async()=>{
+    await incoming(lead);await q("UPDATE public.wa_sdr_jobs SET available_at=now()-interval '1 second' WHERE state='queued'");job=(await take()).job;
+    assert.equal(job.replies,1);
+    await q('SELECT public.wa_sdr_plan($1,$2,$3)',[job.id,job.token,{...decision,action:'handoff',reply:''}]);
+    let kase=await one('SELECT * FROM public.wa_cases WHERE id=$1',[job.case_id]);
+    assert.equal(kase.phase,'triage');assert.equal(kase.triage_state,'ready');assert.equal(kase.assigned_to,users.Fernando);assert.equal(kase.claimed_by,null);
+    await change(users.Fernando,'claim',{caseId:kase.id,version:kase.version});await incoming(lead);
+    assert.equal((await one('SELECT state FROM public.wa_sdr_jobs WHERE id=$1',[job.id])).state,'done');
+    for(const table of ['wa_sdr_jobs','wa_sdr_settings'])await denied(users.Luisa,`SELECT * FROM public.${table}`,[]);
+    await denied(users.Luisa,'SELECT public.wa_sdr_take($1)',[randomUUID()]);
   });
   await mkdir('outputs/whatsapp-cases', { recursive: true });
   await writeFile('outputs/whatsapp-cases/database-verification.json', JSON.stringify({ isolated: true, checks: evidence }, null, 2));

@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/contexts/AuthContext';
 import { waRequest } from './api';
 
-type Channel = { id: string; label: string; state: string; members: { id: string; name: string; email: string; granted: boolean; canManage: boolean }[] };
+type Channel = { id: string; label: string; state: string; role?: string; sortOrder?: number; sdrEnabled?: boolean; members: { id: string; name: string; email: string; granted: boolean; canManage: boolean }[] };
 export default function ChannelAccess() {
   const { user } = useAuth();
   const [busy, setBusy] = useState(''), [error, setError] = useState('');
@@ -17,11 +17,12 @@ export default function ChannelAccess() {
   };
   return <section className="rounded-2xl border border-border bg-card p-5">
     <h2 className="text-base font-semibold">Atendimento · Canais e responsáveis</h2>
-    <p className="my-3 text-sm text-muted-foreground">O proprietário autoriza quem pode operar cada canal. A transferência continua limitada ao atendimento e aos destinos permitidos. O KOA de triagem automática ainda não está habilitado.</p>
+    <p className="my-3 text-sm text-muted-foreground">O proprietário autoriza quem pode operar cada canal. O KOA atua somente no canal SDR habilitado e para quando um humano assume o atendimento.</p>
     {query.isLoading && <p role="status" className="text-sm">Carregando canais...</p>}
     {!query.isLoading && !query.error && !query.data?.length && <p className="text-sm text-muted-foreground">Nenhum canal próprio disponível para configurar.</p>}
-    {query.data?.map(channel => <div key={channel.id} className="mt-4 border-t border-border pt-3">
+    {query.data?.slice().sort((a,b) => (a.sortOrder ?? 100) - (b.sortOrder ?? 100)).map(channel => <div key={channel.id} className="mt-4 border-t border-border pt-3">
       <h3 className="text-sm font-medium">{channel.label}</h3>
+      {channel.role === 'sdr' && <div className="my-3 flex flex-wrap items-center justify-between gap-3 text-sm"><span>Qualificação pelo KOA: {channel.sdrEnabled ? channel.state === 'connected' ? 'ativa' : 'habilitada, aguardando conexão do WhatsApp' : 'pausada'}</span><button className="underline text-primary" disabled={Boolean(busy)} onClick={async () => { setBusy(channel.id); setError(''); try { await waRequest('sdr-mode', { body: { channelId: channel.id, enabled: !channel.sdrEnabled } }); await query.refetch(); } catch(e) { setError(e instanceof Error ? e.message : 'Não foi possível alterar o SDR.'); } finally { setBusy(''); } }}>{channel.sdrEnabled ? 'Pausar KOA' : 'Ativar KOA'}</button></div>}
       {!channel.members.length && <p className="mt-2 text-sm text-muted-foreground">Nenhuma outra conta confirmada nesta organização. Vincule as contas à equipe antes de conceder acesso ao canal.</p>}
       {channel.members.map(member => <div key={member.id} className="mt-3 flex flex-wrap items-center justify-between gap-3 text-sm">
         <span>{member.name}<span className="block text-xs text-muted-foreground">{member.email}</span></span>

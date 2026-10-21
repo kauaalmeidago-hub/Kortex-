@@ -23,12 +23,13 @@ export default async function handler(req, res) {
     if (action === 'signup') return res.status(200).json(await signup(req, res, admin, auth));
     const who = await identity(req, admin, auth);
     await rateLimit(admin, 'connection:' + who.user.id, 300, 300);
-    const caseRoutes = ['contexts', 'conversations', 'messages', 'media', 'send', 'read', 'case-action', 'case-destinations', 'case-history', 'channel-settings', 'channel-access'];
+    const caseRoutes = ['contexts', 'conversations', 'messages', 'media', 'send', 'read', 'case-action', 'case-destinations', 'case-history', 'channel-settings', 'channel-access', 'sdr-mode'];
     if (caseRoutes.includes(action) && who.temporary) throw new HttpError(403, 'ONBOARDING_ONLY', 'Conclua a conexão para abrir os atendimentos.');
-    if (action === 'contexts') return res.status(200).json(await whatsappContexts(auth));
+    if (action === 'contexts') return res.status(200).json(await whatsappContexts(auth, admin, who.user.id));
     if (action === 'conversations') return res.status(200).json(await caseRpc(auth, 'wa_case_inbox', { p_workspace: req.query.workspaceId || null, p_phase: req.query.phase || null, p_query: String(req.query.search || '').slice(0, 200), p_selected: req.query.selectedId || null }));
     if (action === 'case-action') return res.status(200).json(await caseAction(req, auth));
     if (action === 'channel-settings') return res.status(200).json(await caseRpc(auth, 'wa_channel_settings', {}));
+    if (action === 'sdr-mode') { await caseRpc(auth, 'wa_sdr_mode', { p_channel: req.body?.channelId, p_enabled: req.body?.enabled === true }); return res.status(200).json({ saved: true }); }
     if (action === 'channel-access') {
       const b = req.body || {};
       await caseRpc(auth, 'wa_channel_config', { p_channel: b.channelId, p_user: b.userId, p_manage: b.canManage === true, p_remove: b.remove === true });

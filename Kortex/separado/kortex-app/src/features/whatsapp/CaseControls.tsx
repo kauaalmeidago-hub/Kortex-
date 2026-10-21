@@ -74,7 +74,7 @@ export function TransferDialog({ conversation, scope, onClose, onChanged }: { co
     setLoading(true); setError('');
     if (!conversation.case_id) { setLoading(false); setError('Este atendimento ainda não possui um caso persistido.'); return; }
     void waRequest<WaDestination[]>('case-destinations', { scope: workspaceId && sectorId ? { workspaceId, sectorId } : undefined, query: { caseId: conversation.case_id }, signal: controller.signal })
-      .then(rows => { if (!controller.signal.aborted) setDestinations(rows.filter(row => row.userId !== conversation.claimed_by || row.channelId !== conversation.connection_id)); })
+      .then(rows => { if (!controller.signal.aborted) setDestinations(rows.filter(row => row.userId !== conversation.claimed_by || row.channelId !== conversation.connection_id).sort((a,b) => (a.sortOrder ?? 100) - (b.sortOrder ?? 100))); })
       .catch(e => { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : 'Não foi possível carregar os destinos.'); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();

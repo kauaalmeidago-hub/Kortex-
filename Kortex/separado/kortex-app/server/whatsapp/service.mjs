@@ -70,15 +70,17 @@ export async function signup(req, res, admin, auth) {
   setOnboardingCookie(res, token);
   return { created: true, confirmationPending: !result.data.session, session: result.data.session };
 }
-export async function whatsappContexts(auth) {
+export async function whatsappContexts(auth, admin, userId) {
   // Membership RLS supplies chat sectors even when no Tasks/Pipeline board is shared.
   const [sectors, workspaces] = await Promise.all([
     checked(auth.from('task_sectors').select('id,workspace_id,name').eq('active', true)),
     checked(auth.from('workspaces').select('id,name')),
   ]);
+  const primary = admin && userId ? await checked(admin.from('wa_connections').select('workspace_id,sector_id').eq('owner_id',userId).eq('channel_role','sdr').not('activated_at','is',null)) : [];
   return sectors.filter(s => workspaces.some(w => w.id === s.workspace_id)).map(s => ({
     workspace_id: s.workspace_id, sector_id: s.id, sector_name: s.name,
     workspace_name: workspaces.find(w => w.id === s.workspace_id).name,
+    ...(primary.some(p => p.workspace_id===s.workspace_id && p.sector_id===s.id) ? { primary: true } : {}),
   }));
 }
 export async function resolveConnection(req, admin, auth, who, create = false) {
