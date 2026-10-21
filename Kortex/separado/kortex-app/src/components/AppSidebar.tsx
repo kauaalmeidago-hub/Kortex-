@@ -72,9 +72,14 @@ const bottomItems: MenuItem[] = [
     expandable: true,
     children: [
       { label: "Perfil", path: "/settings" },
+      { label: "Atendimento", path: "/settings/channels/whatsapp" },
       { label: "Automações", path: "/automations" },
     ],
   },
+];
+
+const productionSettings: MenuItem[] = [
+  { icon: Settings, label: "Atendimento", path: "/settings/channels/whatsapp" },
 ];
 
 const brandSymbol = "/brand/kortex-symbol.png";
@@ -325,7 +330,7 @@ export default function AppSidebar() {
       </nav>
 
       <div className={`mt-auto shrink-0 border-t border-sidebar-border ${compact ? "space-y-2.5 px-1.5 py-2.5" : "space-y-1 px-2 py-3"}`}>
-        {(fullModules?bottomItems:[]).map(item => {
+        {(fullModules ? bottomItems : productionSettings).map(item => {
           const Icon = item.icon;
           const active = isItemActive(item);
           return (

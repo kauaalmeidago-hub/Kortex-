@@ -1,11 +1,12 @@
 import type { BusinessContext } from '@/integrations/supabase/businessTypes';
+export type WhatsAppContext = Pick<BusinessContext, 'workspace_id' | 'sector_id' | 'workspace_name' | 'sector_name'> & { board_id?: string };
 
 export const whatsappContextId = (context: Pick<BusinessContext, 'workspace_id' | 'sector_id'>) =>
   `${context.workspace_id}:${context.sector_id}`;
 
 /** Preferences only choose among grants returned by business_contexts. */
 export function resolveWhatsAppContext(
-  contexts: BusinessContext[],
+  contexts: WhatsAppContext[],
   workspaceId?: string,
   preferred?: string,
   globalContexts: (BusinessContext | null)[] = [],

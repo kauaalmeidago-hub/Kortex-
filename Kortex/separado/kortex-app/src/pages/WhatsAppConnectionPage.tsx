@@ -8,7 +8,7 @@ import { WaConnection, waRequest } from '@/features/whatsapp/api';
 import ChannelAccess from '@/features/whatsapp/ChannelAccess';
 
 export default function WhatsAppConnectionPage() {
-  const { user } = useAuth();
+  const { user, workspace, workspaces, setWorkspace } = useAuth();
   const sectors = useWhatsAppScope();
   const [open, setOpen] = useState(false);
   const [error, setError] = useState('');
@@ -19,6 +19,7 @@ export default function WhatsAppConnectionPage() {
       <Link to="/inbox" className="text-sm text-primary underline">Voltar para o Chat</Link>
       <h1 className="text-xl font-semibold">Conexão do WhatsApp</h1>
       <p className="text-sm text-muted-foreground">Conecte sua conta para atender as conversas do setor autorizado.</p>
+      {workspaces.length > 1 && <label className="block text-sm">Organização<select className="task-select ml-3 max-w-full" aria-label="Organização do atendimento" value={workspace?.id || ''} onChange={event => { const next = workspaces.find(row => row.id === event.target.value); if (next) setWorkspace(next); }}><option value="">Selecione uma organização</option>{workspaces.map(row => <option key={row.id} value={row.id}>{row.name} · {row.owner_id === user?.id ? 'Pessoal' : 'Equipe'}</option>)}</select></label>}
       <label className="block text-sm">Setor<select className="task-select ml-3 max-w-full" aria-label="Setor do WhatsApp" value={sectors.current ? `${sectors.current.workspace_id}:${sectors.current.sector_id}` : ''} onChange={e => sectors.select(e.target.value)}><option value="">Selecione um setor</option>{sectors.options.map(c => <option key={`${c.workspace_id}:${c.sector_id}`} value={`${c.workspace_id}:${c.sector_id}`}>{c.workspace_name} · {c.sector_name}</option>)}</select></label>
       <section className="rounded-2xl border border-border bg-card p-5">
         <p role="status" className="text-sm">{connection.isFetching ? 'Consultando conexão...' : connection.data ? connectionLabels[connection.data.state] : 'Selecione um setor para continuar.'}</p>

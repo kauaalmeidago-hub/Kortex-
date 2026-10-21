@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { identity, resolveConnection, signup, onboardingCookie, locked } from './service.mjs';
+import { identity, resolveConnection, whatsappContexts, signup, onboardingCookie, locked } from './service.mjs';
 
 function query(result, inspect = () => {}) {
   return new Proxy({}, { get(_target, key) { if (key === 'then') return Promise.resolve(result).then.bind(Promise.resolve(result)); return (...args) => { inspect(key, args); return query(result, inspect); }; } });
@@ -40,9 +40,13 @@ test('temporary onboarding rejects messages, file access, sending and activation
     await assert.rejects(resolveConnection({ query: { action }, body: { userId: 'other', workspaceId: 'other' } }, {}, {}, { temporary: true, user: { id: 'own' } }), e => e.code === 'ONBOARDING_ONLY');
   }
 });
-test('workspace and sector parameters cannot override the authenticated membership RPC', async () => {
-  const auth = { rpc: () => query({ data: [{ workspace_id: 'allowed', sector_id: 'comercial' }], error: null }) };
+test('workspace and sector parameters cannot override authenticated sector membership RLS', async () => {
+  const auth = { from: table => query({ data: table === 'task_sectors' ? [{ id: 'comercial', workspace_id: 'allowed', name: 'Comercial' }] : [{ id: 'allowed', name: 'Equipe' }], error: null }) };
   await assert.rejects(resolveConnection({ query: {}, body: { workspaceId: 'allowed', sectorId: 'financeiro' } }, {}, auth, { temporary: false, user: { id: 'own' } }, true), e => e.code === 'SCOPE_FORBIDDEN');
+});
+test('chat contexts require no task board and omit sectors outside an accessible workspace', async () => {
+  const auth = { from: table => query({ data: table === 'task_sectors' ? [{ id: 'sales', workspace_id: 'team', name: 'Comercial' }, { id: 'foreign', workspace_id: 'denied', name: 'Outro' }] : [{ id: 'team', name: 'Equipe' }], error: null }) };
+  assert.deepEqual(await whatsappContexts(auth), [{ workspace_id: 'team', sector_id: 'sales', sector_name: 'Comercial', workspace_name: 'Equipe' }]);
 });
 test('an obfuscated duplicate signup never receives a cookie or accesses the existing instance', async () => {
   let wroteCookie = false, wroteDb = false;

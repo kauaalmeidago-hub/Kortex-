@@ -70,6 +70,17 @@ export async function signup(req, res, admin, auth) {
   setOnboardingCookie(res, token);
   return { created: true, confirmationPending: !result.data.session, session: result.data.session };
 }
+export async function whatsappContexts(auth) {
+  // Membership RLS supplies chat sectors even when no Tasks/Pipeline board is shared.
+  const [sectors, workspaces] = await Promise.all([
+    checked(auth.from('task_sectors').select('id,workspace_id,name').eq('active', true)),
+    checked(auth.from('workspaces').select('id,name')),
+  ]);
+  return sectors.filter(s => workspaces.some(w => w.id === s.workspace_id)).map(s => ({
+    workspace_id: s.workspace_id, sector_id: s.id, sector_name: s.name,
+    workspace_name: workspaces.find(w => w.id === s.workspace_id).name,
+  }));
+}
 export async function resolveConnection(req, admin, auth, who, create = false) {
   if (who.temporary) {
     if (!['status', 'prepare', 'renew', 'complete'].includes(req.query.action)) throw new HttpError(403, 'ONBOARDING_ONLY', 'Conecte seu WhatsApp para acessar o Chat.');
@@ -81,7 +92,7 @@ export async function resolveConnection(req, admin, auth, who, create = false) {
   const workspace = String(req.body?.workspaceId ?? req.query.workspaceId ?? '');
   const sector = String(req.body?.sectorId ?? req.query.sectorId ?? '');
   // The user-scoped RPC validates real memberships, never the editable profile sector.
-  const contexts = await checked(auth.rpc('business_contexts'));
+  const contexts = await whatsappContexts(auth);
   if (!contexts.some(c => c.workspace_id === workspace && c.sector_id === sector))
     throw new HttpError(403, 'SCOPE_FORBIDDEN', 'Selecione um setor ao qual sua conta tem acesso.');
   let c = await checked(admin.from('wa_connections').select('*').eq('owner_id', who.user.id).eq('workspace_id', workspace).eq('sector_id', sector).not('activated_at', 'is', null).maybeSingle());

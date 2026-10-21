@@ -52,3 +52,17 @@ A proteção de acesso da Vercel foi mantida, sem criar credencial de bypass. A 
 - A interação final no navegador foi interrompida porque o controle do navegador foi desativado nas configurações do Work. Não foi realizada transferência entre contas reais nem envio de mensagem a cliente como teste.
 
 O servidor visual isolado pode ser iniciado com `node scripts/inbox-case-preview.mjs`; ele usa apenas os fixtures de teste e não acessa Supabase/Evolution.
+
+## Lançamento em produção solicitado em 21/10/2026
+
+As contas confirmadas são `relacionamento@grupoejccorp.com.br` (Luísa, identidade confirmada pelo usuário) e `comercial04@grupoejccorp.com.br` (Fernando). O endereço anterior de Relacionamento, com apenas um “c”, não era o cadastro real.
+
+O provisionamento administrativo vincula Fernando como membro ao espaço da equipe já utilizado por Relacionamento, no setor Comercial, preservando seu espaço pessoal. Esse vínculo não recebe criação, despacho ou administração de quadros de tarefas. Fernando pode operar seu canal e o de Luísa; Luísa mantém apenas o próprio canal. As conexões são novas e precisam do pareamento humano dos números corretos. Nenhuma sessão antiga é atribuída automaticamente a essas pessoas.
+
+O Chat passa a consultar os vínculos de setor autorizados por RLS, sem depender de quadros de Tarefas/Pipeline. Em **Atendimento**, o usuário pode selecionar a organização da Equipe e seu setor, depois solicitar o QR Code. A escolha de organização permanece explícita quando existem vários espaços autorizados.
+
+As nove migrações WhatsApp desta branch foram aplicadas no Supabase de produção após backup verificado, preservando os IDs e as contagens dos registros anteriores. O ingress autenticado `whatsapp-events` foi publicado nesse projeto e o relay separado `evolution-production` atende a fila de produção. A homologação mantém seu próprio banco, credenciais e worker.
+
+O portal de destino é [Kortex dos usuários](https://kortex-usuarios.vercel.app/inbox). O build da Vercel executa TypeScript antes de publicar. O acesso ao pareamento fica no menu **Atendimento**, sem incluir credenciais no frontend ou criar bypass da Vercel. A triagem automática com OpenAI continua desabilitada nesta entrega; o lançamento cobre atendimento humano, etapas e transferência.
+
+O computador local, o Docker e a Evolution precisam permanecer ligados para disponibilizar QR e atendimento. O worker de produção usa reinício `unless-stopped`. Os relatórios locais de migração e provisionamento estão em `outputs/whatsapp-production/`; os backups e segredos permanecem ignorados pelo Git.

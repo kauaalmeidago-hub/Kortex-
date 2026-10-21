@@ -1,5 +1,5 @@
 import { HttpError } from '../server/whatsapp/core.mjs';
-import { clients, checked, signup, identity, resolveConnection, connectionState, completeOnboarding, publicConnection, setOnboardingCookie, rateLimit } from '../server/whatsapp/service.mjs';
+import { clients, checked, signup, identity, resolveConnection, whatsappContexts, connectionState, completeOnboarding, publicConnection, setOnboardingCookie, rateLimit } from '../server/whatsapp/service.mjs';
 import { conversation, send, markRead, media } from '../server/whatsapp/chat.mjs';
 import { evolution } from '../server/whatsapp/evolution.mjs';
 import { caseRpc, caseConnection, caseAction } from '../server/whatsapp/cases.mjs';
@@ -10,7 +10,7 @@ export default async function handler(req, res) {
   try {
     const action = String(req.query.action || 'status');
     if (!['GET', 'POST'].includes(req.method)) throw new HttpError(405, 'METHOD', 'Método não permitido.');
-    if (req.method === 'GET' && !['status', 'conversations', 'messages', 'media', 'case-destinations', 'case-history', 'channel-settings'].includes(action)) throw new HttpError(405, 'METHOD', 'Use POST para esta operação.');
+    if (req.method === 'GET' && !['status', 'contexts', 'conversations', 'messages', 'media', 'case-destinations', 'case-history', 'channel-settings'].includes(action)) throw new HttpError(405, 'METHOD', 'Use POST para esta operação.');
     // Same-origin HttpOnly onboarding cookie + explicit origin validation against configured deployment hosts.
     if (req.method === 'POST') {
       const origin = req.headers.origin;
@@ -23,8 +23,9 @@ export default async function handler(req, res) {
     if (action === 'signup') return res.status(200).json(await signup(req, res, admin, auth));
     const who = await identity(req, admin, auth);
     await rateLimit(admin, 'connection:' + who.user.id, 300, 300);
-    const caseRoutes = ['conversations', 'messages', 'media', 'send', 'read', 'case-action', 'case-destinations', 'case-history', 'channel-settings', 'channel-access'];
+    const caseRoutes = ['contexts', 'conversations', 'messages', 'media', 'send', 'read', 'case-action', 'case-destinations', 'case-history', 'channel-settings', 'channel-access'];
     if (caseRoutes.includes(action) && who.temporary) throw new HttpError(403, 'ONBOARDING_ONLY', 'Conclua a conexão para abrir os atendimentos.');
+    if (action === 'contexts') return res.status(200).json(await whatsappContexts(auth));
     if (action === 'conversations') return res.status(200).json(await caseRpc(auth, 'wa_case_inbox', { p_workspace: req.query.workspaceId || null, p_phase: req.query.phase || null, p_query: String(req.query.search || '').slice(0, 200), p_selected: req.query.selectedId || null }));
     if (action === 'case-action') return res.status(200).json(await caseAction(req, auth));
     if (action === 'channel-settings') return res.status(200).json(await caseRpc(auth, 'wa_channel_settings', {}));

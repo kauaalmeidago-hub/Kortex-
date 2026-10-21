@@ -5,7 +5,7 @@ import { useBusinessAccess } from '@/features/access/BusinessAccess';
 import { environmentKey } from '@/features/access/environment';
 import { supabase } from '@/integrations/supabase/client';
 import { WaConnection, WaConversation, WaCounts, WaError, WaMessage, WaScope, waRequest } from './api';
-import { resolveWhatsAppContext, whatsappContextId } from './scope';
+import { resolveWhatsAppContext, whatsappContextId, type WhatsAppContext } from './scope';
 
 const preferenceEvent = 'kortex:whatsapp-context';
 const memoryPreferences = new Map<string, string>();
@@ -25,12 +25,14 @@ function subscribePreference(notify: () => void) {
 export function useWhatsAppScope() {
   const auth = useAuth();
   const access = useBusinessAccess();
+  const contexts = useQuery({ queryKey: ['wa-contexts', environmentKey, auth.user?.id], enabled: Boolean(auth.user && !auth.loading), retry: false, refetchInterval: 15000,
+    queryFn: ({ signal }) => waRequest<WhatsAppContext[]>('contexts', { signal }) });
   const preferenceKey = `kortex:whatsapp-context:${environmentKey}:${auth.user?.id ?? ''}:${auth.workspace?.id ?? ''}`;
   const preferred = useSyncExternalStore(subscribePreference, () => readPreference(preferenceKey), () => '');
-  const loading = auth.loading || access.loading;
-  const error = auth.contextError || access.error;
+  const loading = auth.loading || contexts.isLoading;
+  const error = auth.contextError || contexts.error?.message;
   const { options, current: resolved } = resolveWhatsAppContext(
-    access.contexts, auth.workspace?.id, preferred, [access.selected('tasks'), access.selected('pipeline')],
+    contexts.data ?? [], auth.workspace?.id, preferred, [access.selected('tasks'), access.selected('pipeline')],
   );
   const current = auth.user && !loading && !error ? resolved : null;
   const select = (id: string) => {
@@ -41,7 +43,7 @@ export function useWhatsAppScope() {
   };
   const retry = () => {
     if (auth.contextError) auth.retryContext();
-    return access.retry();
+    return contexts.refetch();
   };
   return { options, current, select, loading, error, retry,
     needsSelection: !loading && !error && Boolean(auth.user) && options.length > 1 && !current,

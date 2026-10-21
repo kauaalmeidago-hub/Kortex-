@@ -28,6 +28,7 @@ beforeEach(() => {
   mocks.access = { contexts: [], loading: false, error: null, selected: vi.fn(() => null), retry: vi.fn() };
   mocks.upload.mockResolvedValue({ error: null });
   mocks.request.mockImplementation(async action => {
+    if (action === 'contexts') return mocks.access.contexts;
     if (action === 'status') return { id: 'connection', state: 'connected' };
     if (action === 'conversations') return [conversation];
     if (action === 'messages') return [originalMessage];
@@ -167,20 +168,22 @@ describe('authorized inbox cache and send boundaries', () => {
   });
 });
 
-it('keeps a settings choice on navigation, isolates preferences by user, and rejects revoked preferences', () => {
+it('keeps a settings choice on navigation, isolates preferences by user, and rejects revoked preferences', async () => {
   const sales = { board_id: 'sales-board', workspace_id: 'org', sector_id: 'sales' } as BusinessContext;
   const support = { board_id: 'support-board', workspace_id: 'org', sector_id: 'support' } as BusinessContext;
   mocks.access.contexts = [sales, support];
-  const settings = renderHook(useWhatsAppScope);
+  const settings = renderHook(useWhatsAppScope, { wrapper });
+  await waitFor(() => expect(settings.result.current.needsSelection).toBe(true));
   expect(settings.result.current.needsSelection).toBe(true);
   act(() => settings.result.current.select('org:support'));
   expect(settings.result.current.current).toBe(support);
   settings.unmount();
-  const inbox = renderHook(useWhatsAppScope);
+  const inbox = renderHook(useWhatsAppScope, { wrapper });
   expect(inbox.result.current.current).toBe(support);
   mocks.auth = { ...mocks.auth, user: { id: 'another-operator' } }; inbox.rerender();
   expect(inbox.result.current.current).toBeNull();
   mocks.auth = { ...mocks.auth, user: { id: 'operator' } };
   mocks.access.contexts = [sales]; inbox.rerender();
-  expect(inbox.result.current.current).toBe(sales);
+  await act(async () => { await inbox.result.current.retry(); });
+  await waitFor(() => expect(inbox.result.current.current?.sector_id).toBe('sales'));
 });
