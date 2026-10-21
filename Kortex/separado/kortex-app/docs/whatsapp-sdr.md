@@ -29,3 +29,11 @@ Os testes isolados cobrem transferência entre canais, origem e histórico, excl
 O teste do provedor usou mensagens sintéticas, incluindo solicitação incompleta, dados completos e pedido de pessoa. Relatórios locais: `outputs/whatsapp-production/all-accounts.json`, `transfer-checks.json` e `sdr-provider-checks.json`. Os segredos, dumps e configurações locais não são versionados.
 
 O worker SDR é separado do relay e usa somente a configuração privada necessária para Supabase e o ID da fila. O computador, Docker e Evolution precisam estar ligados. O container usa reinício `unless-stopped`; isso não liga o computador nem inicia o Docker desligado.
+
+## Publicação e pareamento
+
+Publicado em produção em 21/10/2026, com o código `6872840`. Deploy de produção `dpl_iDHPjKR16javiXCePMBrJtG91X5X`, disponível em [Kortex](https://kortex-usuarios.vercel.app). A homologação usa `dpl_E5GiezK2eZ2k8irqoEdh7Tm1X7HT`, com banco separado. Ambos passaram pelo build com verificação TypeScript.
+
+A geração do QR real foi validada para as cinco contas; isso não pareia seus celulares. O SDR foi habilitado em 21/10/2026 às 21:43 UTC e, na conferência das 22:18 UTC, ainda aguardava o pareamento do suporte. Relay e worker SDR estavam saudáveis. Relatórios locais: `outputs/whatsapp-production/all-pairing.json`, `sdr-activation.json` e `sdr-final-release.json`.
+
+Para iniciar, entre com `suportealaive@gmail.com`, abra **Atendimento · Conexão do WhatsApp**, selecione o Comercial e clique em **Conectar WhatsApp**. Leia o QR com o número do KOA. Cada outra conta deve parear seu número na mesma página. Transferir para outro número exige que o canal de destino esteja conectado; o operador de destino precisa assumir o atendimento. A entrega real entre números depende desse pareamento e ainda precisa ser verificada com os celulares.
