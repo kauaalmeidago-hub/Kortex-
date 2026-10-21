@@ -14,7 +14,7 @@ export function PhaseControl({ conversation, onMove, onNew }: { conversation: Wa
     {open && <><button className="inbox-menu-dismiss" aria-label="Fechar menu de fases" onClick={() => setOpen(false)} />
       <div className="inbox-phase-menu" role="menu" aria-label="Fases do atendimento">
         {(['triage', 'active', 'pending', 'resolved'] as const).map(phase => <button role="menuitem" key={phase}
-          disabled={!conversation.case_id || phase === conversation.status || (phase === 'active' ? !conversation.can_claim : !conversation.can_manage)}
+          disabled={!conversation.case_id || phase === conversation.status || (phase === 'active' ? !conversation.can_claim || !['triage', 'pending'].includes(conversation.status) : !conversation.can_manage || phase === 'pending' && conversation.status !== 'active')}
           onClick={() => { setOpen(false); onMove(phase); }}>{phase === 'active' ? 'Assumir atendimento' : phaseLabels[phase]}</button>)}
         {conversation.status === 'resolved' && onNew && <button role="menuitem" disabled={!conversation.can_manage} onClick={() => { setOpen(false); onNew(); }}>Novo pedido nesta conversa</button>}
       </div></>}

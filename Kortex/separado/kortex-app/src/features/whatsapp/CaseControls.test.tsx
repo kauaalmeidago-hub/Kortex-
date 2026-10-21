@@ -13,6 +13,17 @@ it('the compact phase menu exposes claim and keeps unauthorized actions disabled
   fireEvent.click(screen.getByRole('menuitem', { name: 'Assumir atendimento' }));
   expect(move).toHaveBeenCalledWith('active');
 });
+it('requires reopening resolved requests and does not offer pending before a human claim', () => {
+  const props = { onMove: vi.fn(), onNew: vi.fn() };
+  const view = render(<PhaseControl conversation={row} {...props} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Alterar fase: Triagem' }));
+  expect(screen.getByRole('menuitem', { name: 'Pendentes' })).toBeDisabled();
+  view.rerender(<PhaseControl conversation={{ ...row, status: 'resolved' }} {...props} />);
+  expect(screen.getByRole('menuitem', { name: 'Assumir atendimento' })).toBeDisabled();
+  expect(screen.getByRole('menuitem', { name: 'Pendentes' })).toBeDisabled();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Triagem' }));
+  expect(props.onMove).toHaveBeenCalledWith('triage');
+});
 it('failed phase changes stay contextual and do not announce success or close the dialog', async () => {
   vi.mocked(waRequest).mockRejectedValue(new Error('Outro atendente já assumiu.'));
   const close = vi.fn(), refresh = vi.fn().mockResolvedValue(undefined);
