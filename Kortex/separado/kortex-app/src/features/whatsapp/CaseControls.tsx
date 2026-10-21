@@ -62,7 +62,7 @@ export function CaseActionDialog({ conversation, action, scope, onClose, onChang
   </CaseDialog>;
 }
 
-export function TransferDialog({ conversation, scope, onClose, onChanged }: { conversation: WaConversation; scope?: WaScope; onClose: () => void; onChanged: () => Promise<unknown> }) {
+export function TransferDialog({ conversation, scope, onClose, onChanged }: { conversation: WaConversation; scope?: WaScope; onClose: () => void; onChanged: (conversationId?: string) => Promise<unknown> }) {
   const [destinations, setDestinations] = useState<WaDestination[]>([]), [loading, setLoading] = useState(true);
   const [choice, setChoice] = useState(''), [requestType, setRequestType] = useState(conversation.request_type || '');
   const [summary, setSummary] = useState(conversation.summary || ''), [reason, setReason] = useState('');
@@ -84,9 +84,9 @@ export function TransferDialog({ conversation, scope, onClose, onChanged }: { co
     event.preventDefault(); if (sending.current || !selected || choice === '') return;
     sending.current = true; setBusy(true); setError('');
     try {
-      await waRequest('case-action', { scope, body: { caseId: conversation.case_id, version: conversation.case_version, action: 'transfer',
+      const result = await waRequest<{ conversationId?: string }>('case-action', { scope, body: { caseId: conversation.case_id, version: conversation.case_version, action: 'transfer',
         userId: selected.userId, channelId: selected.channelId, sectorId: selected.sectorId, requestType, summary, reason } });
-      await onChanged(); onClose();
+      await onChanged(result.conversationId); onClose();
     } catch (e) { setError(e instanceof Error ? e.message : 'Não foi possível encaminhar o atendimento.'); await onChanged(); }
     finally { sending.current = false; setBusy(false); }
   };

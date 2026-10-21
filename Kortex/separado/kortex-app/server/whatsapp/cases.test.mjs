@@ -18,6 +18,13 @@ test('case actions require a version and a real case identifier before touching 
   for (const body of [{}, { caseId: 'invalid', version: 1 }, { caseId: '11111111-1111-4111-8111-111111111111', version: -1 }])
     await assert.rejects(caseAction({ body }, {}), e => e.code === 'INVALID_CASE');
 });
+test('a transfer returns only the authorized persisted continuation, never a browser supplied conversation', async () => {
+  const kase='11111111-1111-4111-8111-111111111111';
+  const q={select:()=>q,eq:(_field,id)=>{assert.equal(id,kase);return q;},maybeSingle:async()=>({data:{conversation_id:'authorized-continuation'}})};
+  const auth={rpc:async()=>({data:{saved:true,caseId:kase}}),from:table=>{assert.equal(table,'wa_cases');return q;}};
+  const result=await caseAction({body:{caseId:kase,version:1,action:'transfer',conversationId:'browser-forged'}},auth);
+  assert.equal(result.conversationId,'authorized-continuation');
+});
 test('a supplied connection ID cannot bypass conversation authorization', async () => {
   await assert.rejects(caseConnection({ query: { conversationId: 'foreign', connectionId: 'allowed' }, body: {} }, { from: () => { throw Error('must not access privileged data'); } }, { rpc: async () => ({ data: false }) }), e => e.code === 'SCOPE_FORBIDDEN');
 });

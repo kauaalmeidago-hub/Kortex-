@@ -42,14 +42,15 @@ it('pending submits its reason and current version, then refreshes authorized li
   expect(refresh).toHaveBeenCalledOnce();
 });
 it('transfer presents only server-authorized destinations and records context without sending any WhatsApp message', async () => {
-  vi.mocked(waRequest).mockImplementation(async action => action === 'case-destinations' ? [{ userId: 'fernando', name: 'Fernando', sectorId: 'sales', sector: 'Comercial', channelId: 'origin', channelOwner: 'Luísa', connected: true }] : { saved: true });
-  const close = vi.fn(); render(<TransferDialog conversation={row} onClose={close} onChanged={vi.fn().mockResolvedValue(undefined)} />);
+  vi.mocked(waRequest).mockImplementation(async action => action === 'case-destinations' ? [{ userId: 'fernando', name: 'Fernando', sectorId: 'sales', sector: 'Comercial', channelId: 'origin', channelOwner: 'Luísa', connected: true }] : { saved: true, conversationId: 'authorized-continuation' });
+  const close = vi.fn(), changed = vi.fn().mockResolvedValue(undefined); render(<TransferDialog conversation={row} onClose={close} onChanged={changed} />);
   fireEvent.change(await screen.findByLabelText('Setor, responsável e canal de continuidade'), { target: { value: '0' } });
   fireEvent.change(screen.getByLabelText('Tipo de pedido'), { target: { value: 'Cotação' } });
   fireEvent.change(screen.getByLabelText('Resumo e informações coletadas'), { target: { value: 'Plano para empresa com 12 pessoas' } });
   fireEvent.change(screen.getByLabelText('Motivo e pendências'), { target: { value: 'Avaliar proposta' } });
   fireEvent.click(screen.getByRole('button', { name: 'Confirmar transferência' }));
   await waitFor(() => expect(close).toHaveBeenCalledOnce());
+  expect(changed).toHaveBeenCalledWith('authorized-continuation');
   expect(waRequest).toHaveBeenLastCalledWith('case-action', expect.objectContaining({ body: expect.objectContaining({ action: 'transfer', userId: 'fernando', channelId: 'origin', caseId: 'case', version: 2 }) }));
   expect(vi.mocked(waRequest).mock.calls.map(call => call[0])).toEqual(['case-destinations', 'case-action']);
 });

@@ -40,9 +40,14 @@ export async function caseAction(req, auth) {
   const b = req.body || {};
   if (!/^[\da-f-]{36}$/i.test(b.caseId || '') || !Number.isSafeInteger(b.version) || b.version < 1)
     throw new HttpError(400, 'INVALID_CASE', 'Atualize o atendimento antes de continuar.');
-  return caseRpc(auth, 'wa_case_change', {
+  const result = await caseRpc(auth, 'wa_case_change', {
     p_case: b.caseId, p_version: b.version, p_action: String(b.action || ''), p_reason: String(b.reason || ''),
     p_target: b.userId || null, p_channel: b.channelId || null, p_sector: b.sectorId || null,
     p_summary: String(b.summary || ''), p_type: String(b.requestType || ''),
   });
+  if (b.action === 'transfer' && result?.saved && result.caseId) {
+    const { data, error } = await auth.from('wa_cases').select('conversation_id').eq('id', result.caseId).maybeSingle();
+    if (!error && data) return { ...result, conversationId: data.conversation_id };
+  }
+  return result;
 }

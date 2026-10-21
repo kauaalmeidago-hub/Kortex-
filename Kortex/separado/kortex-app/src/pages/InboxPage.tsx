@@ -693,7 +693,7 @@ function SidePanelView({
   onClose: () => void;
   isClosing: boolean;
   scope?: { workspaceId: string; sectorId: string };
-  onChanged: () => Promise<unknown>;
+  onChanged: (conversationId?: string) => Promise<unknown>;
 }) {
   if (panel === "koa") return <KoaPanel conversation={conversation} onClose={onClose} isClosing={isClosing} />;
   if (panel === "transfer") return <TransferDialog conversation={conversation.caseData ?? { id: conversation.id, name: conversation.name, status: conversation.status } as WaConversation} scope={scope} onClose={onClose} onChanged={onChanged} />;
@@ -2702,7 +2702,10 @@ export default function InboxPage() {
             onClose={() => setPanel(null)}
             isClosing={isPanelClosing}
             scope={sectors.scope}
-            onChanged={inbox.refresh}
+            onChanged={async nextId => {
+              if (nextId && nextId !== activeId) { inbox.select(nextId); setMobileConversation(`${inbox.scopeKey}:${nextId}`); }
+              await inbox.refresh();
+            }}
           />
         )}
       </div>

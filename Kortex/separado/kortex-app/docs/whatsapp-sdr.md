@@ -22,6 +22,8 @@ Não há reprocessamento do histórico antigo nem resposta automática nos outro
 
 Os operadores do Comercial receberam acessos explícitos aos canais comerciais da mesma equipe. O suporte supervisiona os canais dessa equipe. Luísa continua sem acesso geral aos canais comerciais e atende Relacionamento pelo próprio número. O espaço pessoal de Kauã permanece separado.
 
+Depois de uma transferência entre números, a interface seleciona a conversa de continuidade retornada pelo servidor e mantém o chat aberto mesmo fora do filtro atual. As mensagens antigas continuam pertencendo ao canal original; elas não são copiadas para o novo número. A nova conversa também cria um contexto separado de composição e citação.
+
 Os testes isolados cobrem transferência entre canais, origem e histórico, exclusividade, destinos proibidos/desconectados, RLS, fila de SDR, fragmentos, tomada humana durante inferência e confirmação de envio. A verificação com as contas reais de produção ocorreu numa transação revertida: o estado conectado do destino foi simulado apenas dentro dela, sem enviar mensagem, parear telefone ou deixar contato de teste. Ela valida as permissões e a persistência, sem comprovar entrega entre números reais ainda não pareados.
 
 O teste do provedor usou mensagens sintéticas, incluindo solicitação incompleta, dados completos e pedido de pessoa. Relatórios locais: `outputs/whatsapp-production/all-accounts.json`, `transfer-checks.json` e `sdr-provider-checks.json`. Os segredos, dumps e configurações locais não são versionados.
