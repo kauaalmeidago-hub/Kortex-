@@ -56,7 +56,7 @@ const menuItems: MenuItem[] = [
     icon: BarChart3, label: "Pipelines", expandable: true,
     children: pipelines.map((pipeline) => ({ label: pipeline.name, path: `/pipeline/${pipeline.id}` })),
   },
-  { icon: KoaIcon, label: "Koa", path: "/movimentacoes/inclusao" },
+  { icon: KoaIcon, label: "Koa", path: "/inbox?koa=1" },
 ];
 
 const bottomItems: MenuItem[] = [
@@ -137,13 +137,18 @@ export default function AppSidebar() {
   const isItemActive = (item: MenuItem) => {
     if (isActive(item.path)) return true;
     if (item.label === "Pipelines" && location.pathname.startsWith("/pipeline/")) return true;
-    if (item.label === "Koa" && location.pathname.startsWith("/movimentacoes")) return true;
+    if (item.label === "Koa" && location.pathname === "/inbox" && location.search.includes("koa=1")) return true;
     if (item.label === "Operacional" && location.pathname.startsWith("/files")) return true;
     if (item.expandable && isChildActive(item.children)) return true;
     return false;
   };
 
   const handleMainItemClick = (item: MenuItem) => {
+    if (item.label === "Koa") {
+      navigate("/inbox?koa=1");
+      window.dispatchEvent(new Event("kortex:open-koa"));
+      return;
+    }
     if (item.expandable) {
       const firstEnabledChild = item.children?.find((child) => !child.disabled);
       if (compact && firstEnabledChild) {

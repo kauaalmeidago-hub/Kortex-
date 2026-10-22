@@ -1,1 +1,4 @@
 project_id = "vlacojrryjazwrljysqx"
+
+[functions.koa-sales-assistant]
+verify_jwt = true
