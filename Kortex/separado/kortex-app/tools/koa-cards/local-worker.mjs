@@ -3,6 +3,11 @@ import path from 'node:path';
 import {createRequire} from 'node:module';
 import {createHash,generateKeyPairSync,createPrivateKey,createPublicKey,randomUUID} from 'node:crypto';
 import {cardInput,openCardEnvelope,cardMedia} from './core.mjs';
+import {prepareSavedDialog} from './saved-dialog.mjs';
+import {loadSavedCompanyAccess,resolveSavedCompany} from './saved-access.mjs';
+import {LocalCardProfiles} from './local-profiles.mjs';
+import {CardIdentityRegistry} from './identity-registry.mjs';
+import {sealCardPayload} from '../koa-whatsapp/card-seal.mjs';
 const runtime=new URL('../../automation-server/tmp/whatsapp-card-runtime/dist/',import.meta.url);
 const {loadConfig}=await import(new URL('config.js',runtime));
 const {BrowserManager}=await import(new URL('browser/BrowserManager.js',runtime));
@@ -25,6 +30,15 @@ const provider={createContext:async(_operation,_signal,options)=>{
  }catch(error){await browser.close();throw error;}
 }};
 const manager=new PrivateBrowser({...config,downloadsDir:path.join(stateDir,'downloads')},provider);
+const profiles=new LocalCardProfiles({directory:path.join(stateDir,'beneficiaries'),protect:protectWithDpapi,unprotect:unprotectWithDpapi});
+const registry=new CardIdentityRegistry({directory:path.join(stateDir,'registries'),unprotect:unprotectWithDpapi});
+const savedSecrets={get:async ref=>{
+ const row=(await query(`SELECT c.id,v.name,v.decrypted_secret FROM public.automation_credentials c
+  JOIN koa_private.automation_credential_secrets s ON s.credential_id=c.id JOIN vault.decrypted_secrets v ON v.id=s.vault_secret_id
+  WHERE c.credential_ref=$1 AND c.status='active' AND c.last_verified_at IS NOT NULL`,[ref])).rows[0];
+ if(!row||row.name!=='koa-portal:'+row.id)throw Error('SAVED_ACCESS_NOT_AVAILABLE');
+ const credential=JSON.parse(row.decrypted_secret);row.decrypted_secret='';return credential;
+}};
 let privateKey,publicKey,keyId;
 async function heartbeat(){
  await query(`INSERT INTO public.koa_whatsapp_card_workers(id,ready,version,public_key,key_id,last_seen_at) VALUES($1,$2,'self-card-1',$3::jsonb,$4,now())
@@ -35,9 +49,10 @@ async function currentAllowed(job,states){return Boolean((await query(`SELECT 1 
  JOIN public.business_boards b ON b.id=c.board_id AND b.workspace_id=c.workspace_id AND NOT b.archived
  WHERE r.id=$1 AND r.state=ANY($2) AND r.peer_jid=$3 AND r.instance=$4 AND r.expires_at>now() AND c.conversations_enabled
  AND r.instance=c.instance AND app_private.task_admin_actor(c.workspace_id,c.actor_id)`,[job.id,states,job.peer_jid,job.instance])).rows.length);}
-async function sendResult(job,bytes,errorCode){
+async function sendResult(job,bytes,errorCode,continuation){
  if(!await currentAllowed(job,['processing']))return;
- const payload=bytes?cardMedia(job.peer_jid,bytes):{number:job.peer_jid,text:'Não foi possível concluir sua carteirinha ou confirmar sua identidade. Confira os dados com a equipe de atendimento e solicite um novo pedido ao KOA. Não envie senhas por mensagem.',linkPreview:false};
+ if(job.savedCompany)await resolveSavedCompany(query,{channelId:job.channel_id,companyName:job.savedCompany.companyName});
+ const payload=bytes?cardMedia(job.peer_jid,bytes):{number:job.peer_jid,text:continuation?.prompt||'Não foi possível concluir sua carteirinha ou confirmar sua identidade. Confira os dados com a equipe de atendimento e solicite um novo pedido ao KOA. Não envie senhas por mensagem.',linkPreview:false};
  const reserved=await query(`UPDATE public.koa_whatsapp_card_requests r SET state='sending',sealed_payload=NULL,identity_verified=$2,error_code=$3,lease_expires_at=now()+interval '90 seconds',updated_at=now()
   FROM public.koa_whatsapp_channels c JOIN public.business_boards b ON b.id=c.board_id AND b.workspace_id=c.workspace_id AND NOT b.archived
   WHERE r.id=$1 AND r.state='processing' AND r.channel_id=c.id AND r.expires_at>now()
@@ -48,28 +63,39 @@ async function sendResult(job,bytes,errorCode){
   const response=await fetch((process.env.EVOLUTION_API_URL||'http://127.0.0.1:8081')+(bytes?'/message/sendMedia/':'/message/sendText/')+encodeURIComponent(job.instance),{
    method:'POST',headers:{apikey:process.env.EVOLUTION_API_KEY,Origin:'http://localhost:8080','Content-Type':'application/json'},body:JSON.stringify(payload),signal:AbortSignal.timeout(45000)});
   const data=await response.json();if(!response.ok||!data.key?.id)throw Error('SEND_UNKNOWN');
-  await query("UPDATE public.koa_whatsapp_card_requests SET state=$2,provider_message_id=$3,lease_expires_at=NULL,updated_at=now() WHERE id=$1 AND state='sending'",[job.id,bytes?'sent':'failed',data.key.id]);
+  const nextPacket=continuation?{mode:'saved_company',continuation:sealCardPayload(continuation.state,publicKey,keyId,job.id)}:null;
+  await query("UPDATE public.koa_whatsapp_card_requests SET state=$2,provider_message_id=$3,lease_expires_at=NULL,sealed_payload=$4::jsonb,expires_at=CASE WHEN $2='awaiting_access' THEN now()+interval '20 minutes' ELSE expires_at END,updated_at=now() WHERE id=$1 AND state='sending'",[job.id,continuation?'awaiting_access':bytes?'sent':'failed',data.key.id,nextPacket?JSON.stringify(nextPacket):null]);
  }catch{await query("UPDATE public.koa_whatsapp_card_requests SET state='uncertain',sealed_payload=NULL,error_code='SEND_RESULT_UNKNOWN',lease_expires_at=NULL,updated_at=now() WHERE id=$1 AND state='sending'",[job.id]);}
 }
 async function processJob(job){
- let decoded,parsed,pdf;currentId=job.id;currentAbort=new AbortController();
+ let decoded,parsed,pdf,savedIdentity,savedCredential;currentId=job.id;currentAbort=new AbortController();
  const timer=setInterval(()=>void currentAllowed(job,['processing']).then(ok=>{if(!ok)currentAbort?.abort();}).catch(()=>currentAbort?.abort()),5000);
  const signal=AbortSignal.any([currentAbort.signal,AbortSignal.timeout(5*60000)]);
  try{
-  if(job.key_id!==keyId)throw Error('CARD_KEY_CHANGED');decoded=openCardEnvelope(job.sealed_payload,privateKey,job.id);parsed=cardInput(decoded);
-  const operation={id:job.id,type:'CARD_ISSUE',status:'starting',companyId:job.id,portal:parsed.operator,credentialRef:'self-card:'+job.id,input:parsed.input,artifacts:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
+  if(job.key_id!==keyId)throw Error('CARD_KEY_CHANGED');
+  if(job.sealed_payload?.mode==='saved_company'){
+   const dialog=await prepareSavedDialog({query,job,privateKey,readProfile:company=>profiles.get(job,company)});
+   if(dialog.prompt){await sendResult(job,null,null,dialog);return;}
+   const access=await loadSavedCompanyAccess(query,savedSecrets,{channelId:job.channel_id,companyName:dialog.company.companyName});
+   job.savedCompany=access.company;savedIdentity=dialog.identity;savedCredential=access.credential;
+   parsed=cardInput({...dialog.identity,companyCode:access.company.companyCode,operator:access.company.operator,password:savedCredential.password});
+  }else{decoded=openCardEnvelope(job.sealed_payload,privateKey,job.id);parsed=cardInput(decoded);}
+  if(job.savedCompany)parsed.input.expectedCompanyName=job.savedCompany.companyName;
+  const operation={id:job.id,type:'CARD_ISSUE',status:'starting',companyId:job.savedCompany?.companyId||job.id,workspaceId:job.savedCompany?.workspaceId,portal:parsed.operator,credentialRef:'self-card:'+job.id,input:parsed.input,artifacts:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
   const repository={get:async()=>operation,update:async(_id,patch)=>{Object.assign(operation,patch);return operation;}};
   const storage={save:async input=>{if(input.type!=='card_pdf'||input.operationId!==job.id||input.metadata?.identityVerified!==true)throw Error('CARD_ARTIFACT_INVALID');pdf=Buffer.from(input.bytes);
    return {storageProvider:'memory',bucket:'memory',storagePath:job.id+'/carteirinha.pdf',fileName:'carteirinha.pdf',mimeType:'application/pdf',sizeBytes:pdf.length,checksum:createHash('sha256').update(pdf).digest('hex')};}};
   await emitSelfServiceCard(operation,signal,{config,repository,browserManager:manager,secretProvider:{get:async ref=>{if(ref!==operation.credentialRef)throw Error('CARD_CREDENTIAL_SCOPE');return parsed.credential;}},artifactStorage:storage,
+   ...(job.savedCompany?{verifySavedBeneficiary:identity=>registry.verify(job.savedCompany,identity)}:{}),
    updateStatus:async(status,currentStep)=>repository.update(job.id,{status,currentStep}),emitEvent:async()=>undefined});
   if(operation.status!=='success'||operation.result?.selfServiceIdentity?.verified!==true||!pdf||operation.artifacts.length!==1)throw Error('CARD_IDENTITY_NOT_VERIFIED');
+  if(job.savedCompany)await profiles.put(job,job.savedCompany,savedIdentity,operation.result.selfServiceIdentity);
   signal.throwIfAborted();await sendResult(job,pdf);
  }catch(error){
   const code=/^[A-Z_]+$/.test(error?.code??error?.message??'')?(error.code||error.message):'CARD_ISSUE_FAILED';
   if(!stopping)await sendResult(job,null,code).catch(()=>{});
  }finally{
-  clearInterval(timer);if(decoded)decoded.password='';if(parsed)parsed.credential.password='';pdf?.fill(0);
+  clearInterval(timer);if(decoded)decoded.password='';if(parsed)parsed.credential.password='';if(savedCredential)savedCredential.password='';pdf?.fill(0);
   await query("UPDATE public.koa_whatsapp_card_requests SET sealed_payload=NULL,state=CASE WHEN state='processing' THEN 'failed' ELSE state END,updated_at=now() WHERE id=$1 AND state NOT IN ('queued','awaiting_access')",[job.id]).catch(()=>{});
   currentId=null;currentAbort=null;
  }

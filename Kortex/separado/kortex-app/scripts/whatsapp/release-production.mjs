@@ -11,6 +11,7 @@ const files = [
  '20261021201659_whatsapp_case_phases_transfer.sql', '20261021201821_whatsapp_case_security_review.sql',
  '20261021212500_whatsapp_commercial_sdr.sql',
  '20261022140000_whatsapp_self_service_cards.sql',
+ '20261022163525_whatsapp_card_saved_company_links.sql',
 ];
 const env = Object.fromEntries((await fs.readFile('automation-server/.env.local','utf8')).split(/\r?\n/).flatMap(l => {
  const m=l.match(/^(\w+)=(.*)$/);return m?[[m[1],m[2].trim().replace(/^["']|["']$/g,'')]]:[];
@@ -52,8 +53,8 @@ try {
    has_table_privilege('anon',c.oid,'SELECT,INSERT,UPDATE,DELETE') AS anon_access,
    has_table_privilege('authenticated',c.oid,'SELECT,INSERT,UPDATE,DELETE') AS user_access
    FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-   WHERE n.nspname='public' AND c.relname IN ('koa_whatsapp_card_requests','koa_whatsapp_card_workers')`)).rows;
-  if(cardAccess.length!==2||cardAccess.some(r=>!r.relrowsecurity||r.anon_access||r.user_access))throw Error('CARD_SERVICE_ONLY_REQUIRED');
+   WHERE n.nspname='public' AND c.relname IN ('koa_whatsapp_card_requests','koa_whatsapp_card_workers','koa_whatsapp_card_company_links')`)).rows;
+  if(cardAccess.length!==3||cardAccess.some(r=>!r.relrowsecurity||r.anon_access||r.user_access))throw Error('CARD_SERVICE_ONLY_REQUIRED');
   await client.query("NOTIFY pgrst,'reload schema';COMMIT");
   const report={project:ref,at:new Date().toISOString(),backupSha256:backup.sha256,migrations:pending,existingRecordIdsAndCountsPreserved:true,users:after.users,rlsEnabled:true};
   await fs.mkdir('outputs/whatsapp-production',{recursive:true});

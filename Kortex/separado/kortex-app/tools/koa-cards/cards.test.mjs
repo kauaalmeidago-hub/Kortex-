@@ -4,7 +4,7 @@ import {generateKeyPairSync,createHash} from 'node:crypto';
 import {sealCardData} from '../../src/features/whatsapp/cardCrypto.ts';
 import {cardInput,validCpf,openCardEnvelope,cardMedia} from './core.mjs';
 import {cardAccess,validEnvelope} from '../../server/whatsapp/card-access.mjs';
-import {verifiedSelfCardRow} from '../../automation-server/tmp/whatsapp-card-runtime/dist/workflows/SelfServiceCard.js';
+import {verifiedSelfCardRow,verifySelfCardCompany} from '../../automation-server/tmp/whatsapp-card-runtime/dist/workflows/SelfServiceCard.js';
 
 const now=Date.now(),token='T'.repeat(43),keyId='a'.repeat(64);
 const input={beneficiaryName:'Pessoa Exemplo',cpf:'52998224725',birthDate:'1990-04-12',companyCode:'12345',operator:'ndi',password:' fixture secret '};
@@ -63,4 +63,8 @@ test('document delivery is private, bounded PDF bytes with no public download UR
  const pdf=Buffer.concat([Buffer.from('%PDF-1.7\n'),Buffer.alloc(150)]),payload=cardMedia('551100000001@s.whatsapp.net',pdf);
  assert.equal(payload.media,pdf.toString('base64'));assert.equal(payload.fileName,'carteirinha.pdf');assert.equal(payload.number,'551100000001@s.whatsapp.net');
  for(const [peer,bytes] of [['123@g.us',pdf],['https://other.test',pdf],['10001@lid',Buffer.from('not a pdf')]])assert.throws(()=>cardMedia(peer,bytes));
+});
+test('saved-company document must contain the requested legal company name',()=>{
+ verifySelfCardCompany('Empresa: ERC LOGISTICA E TRANSPORTE LTDA\nPlano ativo','ERC LOGISTICA E TRANSPORTE LTDA');
+ assert.throws(()=>verifySelfCardCompany('Empresa: OUTRA EMPRESA LTDA','ERC LOGISTICA E TRANSPORTE LTDA'),e=>e.code==='SELF_COMPANY_NOT_VERIFIED');
 });

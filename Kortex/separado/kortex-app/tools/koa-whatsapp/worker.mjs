@@ -19,7 +19,7 @@ const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,max:Math.min(c
 const inbox=new Inbox(process.env.KOA_SQLITE_PATH||'conversations.sqlite');
 const base=process.env.EVOLUTION_API_URL||'http://evolution-api:8080';
 const headers={apikey:process.env.EVOLUTION_API_KEY,Origin:'http://localhost:8080','Content-Type':'application/json'};
-const cardIntake=process.env.KOA_CARDS_ENABLED==='true'?new CardIntake({query:(sql,params)=>pool.query(sql,params),secret:process.env.KOA_WEBHOOK_SECRET,origin:process.env.KOA_PORTAL_ORIGIN||'https://kortex-usuarios.vercel.app'}):null;
+const cardIntake=process.env.KOA_CARDS_ENABLED==='true'?new CardIntake({query:(sql,params)=>pool.query(sql,params),secret:process.env.KOA_WEBHOOK_SECRET,origin:process.env.KOA_PORTAL_ORIGIN||'https://kortex-usuarios.vercel.app',accessMode:process.env.KOA_CARDS_ACCESS_MODE||'form'}):null;
 const runtime=new WhatsAppRuntime({inbox,concurrency,privateMessages:process.env.KOA_PRIVATE_MESSAGES==='true',privateActivatedAt:process.env.KOA_PRIVATE_ACTIVATED_AT??null,
  privatePolicy:process.env.KOA_PRIVATE_POLICY??'group_members',groupMessages:process.env.KOA_GROUP_MESSAGES!=='false',cardIntake,query:(sql,params)=>pool.query(sql,params),loadChannels:async()=>{
  const result=await pool.query(`SELECT c.* FROM public.koa_whatsapp_channels c
