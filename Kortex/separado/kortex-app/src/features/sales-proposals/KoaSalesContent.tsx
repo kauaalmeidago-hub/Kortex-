@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronRight, FileText, Loader2, Plus, Send, Sparkles, Trash2, X } from "lucide-react";
+import { ArrowLeft, Check, ChevronRight, FileText, Loader2, Plus, Send, Sparkles, Trash2 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { askSalesAssistant, listSalesOpportunities, type SalesOpportunity } from "./salesAssistantApi";
 import { buildProposalText, createSalesQuote, productLabels, proposalIssues,
@@ -27,16 +26,14 @@ function AnalysisSection({ label, children }: { label: string; children: React.R
   </section>;
 }
 
-export function SalesProposalPanel({ client, session, onChange, onInsertMessage, onClose, isClosing = false }: {
+export function KoaSalesContent({ client, session, onChange, onInsertMessage }: {
   client: SalesClient;
   session: SalesProposalSession;
   onChange: (session: SalesProposalSession) => void;
   onInsertMessage: (text: string) => void;
-  onClose: () => void;
-  isClosing?: boolean;
 }) {
   const { user, workspace } = useAuth();
-  const [tab, setTab] = useState("assistant");
+  const [view, setView] = useState<"home" | "proposal">("home");
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -48,7 +45,6 @@ export function SalesProposalPanel({ client, session, onChange, onInsertMessage,
   const [inserted, setInserted] = useState(false);
   const request = useRef<AbortController | null>(null);
   const requestNumber = useRef(0);
-  const closeButton = useRef<HTMLButtonElement>(null);
   const latestContext = useRef("");
   const draft = session.draft;
   const contextKey = JSON.stringify({ client, draft });
@@ -58,12 +54,9 @@ export function SalesProposalPanel({ client, session, onChange, onInsertMessage,
   const selectedOpportunity = opportunities.find(item => item.id === draft.leadId);
 
   useEffect(() => {
-    const previous = document.activeElement;
-    closeButton.current?.focus();
     return () => {
       requestNumber.current += 1;
       request.current?.abort();
-      if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
     };
   }, []);
 
@@ -111,7 +104,7 @@ export function SalesProposalPanel({ client, session, onChange, onInsertMessage,
       }
       onChange({ ...session, analysis, analysisContext: sentContext });
       setQuestion("");
-      setTab("assistant");
+      setView("home");
     } catch (failure) {
       if (currentRequest === requestNumber.current && !controller.signal.aborted) {
         setError(failure instanceof Error ? failure.message : "Não foi possível analisar este cliente.");
@@ -132,51 +125,19 @@ export function SalesProposalPanel({ client, session, onChange, onInsertMessage,
   </Field>;
 
   return (
-    <aside aria-label={`Elaboração de proposta para ${client.name}`}
-      onKeyDown={event => { if (event.key === "Escape" && !preview) { event.stopPropagation(); onClose(); } }}
-      className={`absolute inset-y-0 right-0 z-20 flex w-full max-w-[460px] flex-col border-l border-border bg-card shadow-2xl xl:relative xl:z-0 xl:w-[420px] xl:min-w-[420px] xl:shadow-none ${isClosing ? "koa-panel-exit" : "koa-panel-enter"}`}>
-      <header className="shrink-0 border-b border-border p-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <img src="/brand/koa-ghost-static.png" alt="" className="h-10 w-10 shrink-0 object-contain" />
-            <div className="min-w-0">
-              <h2 className="text-base font-semibold text-foreground">KOA Comercial</h2>
-              <p className="text-xs text-muted-foreground">Elaboração de proposta</p>
-            </div>
-          </div>
-          <button ref={closeButton} type="button" onClick={onClose} aria-label="Fechar elaboração de proposta"
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-        <div className="mt-4 min-w-0 border-l-2 border-primary pl-3">
-          <p className="break-words text-sm font-medium text-foreground">{client.name}</p>
-          {client.company && <p className="break-words text-xs text-muted-foreground">{client.company}</p>}
-          <p className="mt-1 text-xs text-muted-foreground">{user?.user_metadata?.full_name || "Vendedor"} · Rascunho da sessão</p>
-        </div>
-      </header>
-
-      <Tabs value={tab} onValueChange={setTab} className="flex min-h-0 flex-1 flex-col">
-        <TabsList aria-label="Ferramentas comerciais" className="mx-4 mt-3 grid shrink-0 grid-cols-2 rounded-xl">
-          <TabsTrigger value="assistant" className="gap-2 rounded-lg"><Sparkles className="h-4 w-4" />Assistente</TabsTrigger>
-          <TabsTrigger value="proposal" className="gap-2 rounded-lg"><FileText className="h-4 w-4" />Proposta</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="assistant" className="m-0 min-h-0 flex-1 overflow-y-auto p-4 scrollbar-thin">
+    <div className="flex min-h-0 flex-1 flex-col">
+        <div hidden={view !== "home"} className="min-h-0 flex-1 overflow-y-auto p-4 scrollbar-thin">
           <div className="space-y-5">
-            <p className="text-sm leading-relaxed text-muted-foreground">Use a conversa de {client.name} para preparar a abordagem e organizar a proposta.</p>
-            <div className="flex flex-wrap gap-2">
-              <Button size="sm" variant="outline" disabled={busy} onClick={() => ask("analyze")}><Sparkles className="mr-2 h-3.5 w-3.5" />Analisar cliente</Button>
-              <Button size="sm" variant="outline" disabled={busy} onClick={() => ask("message")}>Sugerir abordagem</Button>
-              <Button size="sm" variant="outline" disabled={busy} onClick={() => ask("proposal")}>Estruturar proposta</Button>
+            <div className="space-y-3 py-3 text-center">
+              <img src="/brand/koa-ghost-static.png" alt="" className="mx-auto h-20 w-20 object-contain" />
+              <h3 className="text-lg font-medium text-foreground">Como posso ajudar neste atendimento?</h3>
+              <p className="text-sm leading-relaxed text-muted-foreground">Vamos preparar a próxima etapa da negociação com {client.name}.</p>
             </div>
-            <form onSubmit={event => { event.preventDefault(); if (question.trim() && !busy) ask("question"); }} className="space-y-2">
-              <Field label="Como o KOA pode ajudar neste atendimento?">
-                <textarea value={question} onChange={event => setQuestion(event.target.value)} maxLength={2000} rows={3}
-                  className={`${control} resize-y`} placeholder="Ex.: Como abordar a preocupação deste cliente com o custo?" />
-              </Field>
-              <Button size="sm" type="submit" disabled={busy || !question.trim()}><Send className="mr-2 h-3.5 w-3.5" />Perguntar ao KOA</Button>
-            </form>
+            <div className="grid grid-cols-3 gap-2" aria-label="Atalhos do Comercial">
+              <button type="button" onClick={() => setView("proposal")} className="flex min-h-[84px] flex-col items-center justify-center gap-2 rounded-2xl border border-border bg-background px-2 py-3 text-xs font-medium text-foreground transition hover:border-primary/40 hover:bg-primary/5 hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30"><FileText className="h-5 w-5" />Elaborar proposta</button>
+              <button type="button" disabled={busy} onClick={() => ask("analyze")} className="flex min-h-[84px] flex-col items-center justify-center gap-2 rounded-2xl border border-border bg-background px-2 py-3 text-xs font-medium text-foreground transition hover:border-primary/40 hover:bg-primary/5 hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-50"><Sparkles className="h-5 w-5" />Analisar cliente</button>
+              <button type="button" disabled={busy} onClick={() => ask("message")} className="flex min-h-[84px] flex-col items-center justify-center gap-2 rounded-2xl border border-border bg-background px-2 py-3 text-xs font-medium text-foreground transition hover:border-primary/40 hover:bg-primary/5 hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-50"><Send className="h-5 w-5" />Sugerir abordagem</button>
+            </div>
             {busy && <p role="status" className="flex items-center gap-2 text-sm text-primary"><Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />Analisando este atendimento…</p>}
             {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
             {stale && <p role="status" className="text-xs text-muted-foreground">O contexto foi atualizado. Analise novamente antes de usar a sugestão.</p>}
@@ -195,12 +156,16 @@ export function SalesProposalPanel({ client, session, onChange, onInsertMessage,
               </AnalysisSection>
               <AnalysisSection label="Estrutura da proposta">{session.analysis.proposalOutline}</AnalysisSection>
             </div>}
-            <Button variant="ghost" className="w-full justify-between" onClick={() => setTab("proposal")}>Preencher proposta<ChevronRight className="h-4 w-4" /></Button>
           </div>
-        </TabsContent>
+        </div>
 
-        <TabsContent value="proposal" className="m-0 min-h-0 flex-1 overflow-y-auto p-4 scrollbar-thin">
+        <div hidden={view !== "proposal"} className="min-h-0 flex-1 overflow-y-auto p-4 scrollbar-thin">
           <div className="space-y-5">
+            <div className="space-y-3">
+              <Button size="sm" variant="ghost" onClick={() => setView("home")}><ArrowLeft className="mr-2 h-4 w-4" />Voltar à conversa com o KOA</Button>
+              <h3 className="text-base font-medium text-foreground">Vamos elaborar a proposta</h3>
+              <p className="text-xs leading-relaxed text-muted-foreground">Confirme os dados de {client.name} e inclua as opções cotadas. O rascunho continua neste atendimento do KOA.</p>
+            </div>
             <Field label="Oportunidade do seu funil">
               <select className={control} value={draft.leadId} disabled={!user || !workspace || loadingOpportunities}
                 onChange={event => updateDraft({ leadId: event.target.value })}>
@@ -254,8 +219,22 @@ export function SalesProposalPanel({ client, session, onChange, onInsertMessage,
               if (!issues.length) setPreview(buildProposalText(client, draft));
             }}><FileText className="mr-2 h-4 w-4" />Revisar apresentação</Button>
           </div>
-        </TabsContent>
-      </Tabs>
+        </div>
+      <form onSubmit={event => {
+        event.preventDefault();
+        if (!question.trim() || busy) return;
+        if (/^(?:quero\s+)?(?:elaborar|criar|montar|preparar)\s+(?:uma?\s+)?proposta\b/i.test(question.trim())) {
+          setView("proposal"); setQuestion("");
+        } else { ask("question"); }
+      }} className="shrink-0 border-t border-border px-4 py-3">
+        <div className="flex items-end gap-2 rounded-2xl bg-secondary/70 px-3 py-2">
+          <textarea aria-label="Mensagem para o KOA" value={question} onChange={event => setQuestion(event.target.value)}
+            maxLength={2000} rows={2} className="min-w-0 flex-1 resize-none bg-transparent px-1 py-1 text-sm text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-primary/30"
+            placeholder="Peça ajuda ao KOA sobre este cliente…" />
+          <button type="submit" aria-label="Enviar ao KOA" disabled={busy || !question.trim()}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-50"><Send className="h-4 w-4" /></button>
+        </div>
+      </form>
       <footer className="shrink-0 border-t border-border px-4 py-3">
         {inserted ? <p role="status" className="flex items-center gap-2 text-xs text-primary"><Check className="h-3.5 w-3.5" />Texto inserido para revisão. Envie pelo chat quando estiver pronto.</p> :
           <p className="text-xs leading-relaxed text-muted-foreground">Rascunho mantido enquanto esta página estiver aberta. As sugestões são internas; o vendedor revisa o envio.</p>}
@@ -268,6 +247,6 @@ export function SalesProposalPanel({ client, session, onChange, onInsertMessage,
           <Button onClick={() => { insert(preview); setPreview(""); }}>Inserir no campo de mensagem</Button>
         </DialogContent>
       </Dialog>
-    </aside>
+    </div>
   );
 }

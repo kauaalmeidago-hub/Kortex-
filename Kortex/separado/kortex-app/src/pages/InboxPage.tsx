@@ -50,12 +50,13 @@ import { useAuth } from "@/contexts/AuthContext";
 import { validateKoaPeriod } from "@/utils/koaDate";
 import { KoaArtifactDownload } from "@/components/KoaArtifactDownload";
 import { isAllCardBeneficiaries } from "@/utils/cardIssueScope";
-import { SalesProposalPanel, type SalesProposalSession } from "@/features/sales-proposals/SalesProposalPanel";
+import { KoaSalesContent, type SalesProposalSession } from "@/features/sales-proposals/KoaSalesContent";
 import { createSalesDraft, createSalesId, type SalesClient } from "@/features/sales-proposals/salesProposal";
+import { getKoaDepartment, type KoaDepartment } from "../../supabase/functions/_shared/koaDepartment";
 
 type ConversationStatus = "active" | "pending" | "resolved";
 type ConversationTab = "all" | ConversationStatus;
-type SidePanel = "koa" | "proposal" | "transfer" | "funnel" | null;
+type SidePanel = "koa" | "transfer" | "funnel" | null;
 type KoaFlow = "inclusao" | "exclusao" | "carteirinha";
 type InclusionMode = "holder" | "holder_dependents";
 type ExclusionMode = "holder" | "dependent";
@@ -491,7 +492,6 @@ function ChatArea({
           {showMenu && (
             <div className="absolute right-0 top-12 z-30 w-64 rounded-2xl border border-border bg-popover p-2 text-popover-foreground shadow-2xl">
               <MenuAction imageSrc={koaLogo} label="Koa" onClick={() => { onOpenPanel("koa"); setShowMenu(false); }} />
-              <MenuAction icon={FileText} label="Elaborar proposta" onClick={() => { onOpenPanel("proposal"); setShowMenu(false); }} />
               <MenuAction icon={Filter} label="Transferir para funil" onClick={() => { onOpenPanel("funnel"); setShowMenu(false); }} />
               <MenuAction icon={CheckCircle2} label="Finalizar conversa" onClick={() => { onResolve(conversation.id); setShowMenu(false); }} />
             </div>
@@ -500,12 +500,12 @@ function ChatArea({
       </header>
 
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-card/60 px-4 py-2">
-        <button type="button" onClick={() => onOpenPanel(panel === "proposal" ? null : "proposal")}
-          aria-expanded={panel === "proposal"}
-          className={`inline-flex min-h-9 items-center gap-2 rounded-xl border px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${panel === "proposal" ? "border-primary/40 bg-primary/10 text-primary" : "border-border text-muted-foreground hover:border-primary/30 hover:bg-primary/5 hover:text-primary"}`}>
-          <FileText className="h-4 w-4" strokeWidth={1.5} />Elaborar proposta
+        <button type="button" onClick={() => onOpenPanel(panel === "koa" ? null : "koa")}
+          aria-expanded={panel === "koa"}
+          className={`inline-flex min-h-9 items-center gap-2 rounded-xl border px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${panel === "koa" ? "border-primary/40 bg-primary/10 text-primary" : "border-border text-muted-foreground hover:border-primary/30 hover:bg-primary/5 hover:text-primary"}`}>
+          <img src={koaLogo} alt="" className="h-4 w-4 object-contain" />KOA
         </button>
-        <span className="text-xs text-muted-foreground">Com apoio do KOA Comercial</span>
+        <span className="text-xs text-muted-foreground">Assistente do atendimento</span>
       </div>
 
       {showProfile && <ProfilePanel conversation={conversation} />}
@@ -612,6 +612,7 @@ function SidePanelView({
   salesSession,
   onSalesChange,
   onInsertMessage,
+  department,
 }: {
   panel: Exclude<SidePanel, null>;
   conversation: Conversation;
@@ -621,10 +622,10 @@ function SidePanelView({
   salesSession: SalesProposalSession;
   onSalesChange: (session: SalesProposalSession) => void;
   onInsertMessage: (text: string) => void;
+  department: KoaDepartment | null;
 }) {
-  if (panel === "proposal") return <SalesProposalPanel key={conversation.id} client={salesClient} session={salesSession}
-    onChange={onSalesChange} onInsertMessage={onInsertMessage} onClose={onClose} isClosing={isClosing} />;
-  if (panel === "koa") return <KoaPanel conversation={conversation} onClose={onClose} isClosing={isClosing} />;
+  if (panel === "koa") return <KoaPanel conversation={conversation} department={department} salesClient={salesClient}
+    salesSession={salesSession} onSalesChange={onSalesChange} onInsertMessage={onInsertMessage} onClose={onClose} isClosing={isClosing} />;
   if (panel === "transfer") return <TransferPanel conversation={conversation} onClose={onClose} isClosing={isClosing} />;
   return <FunnelPanel conversation={conversation} onClose={onClose} isClosing={isClosing} />;
 }
@@ -1040,14 +1041,48 @@ function buildSubmittedSummary(flow: KoaFlow, values: KoaFormValues): KoaSubmitt
   };
 }
 
-function KoaPanel({
-  conversation,
-  onClose,
-  isClosing,
-}: {
+function KoaPanel({ conversation, department, salesClient, salesSession, onSalesChange, onInsertMessage, onClose, isClosing }: {
   conversation: Conversation;
+  department: KoaDepartment | null;
+  salesClient: SalesClient;
+  salesSession: SalesProposalSession;
+  onSalesChange: (session: SalesProposalSession) => void;
+  onInsertMessage: (text: string) => void;
   onClose: () => void;
   isClosing: boolean;
+}) {
+  const closeButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement;
+    closeButton.current?.focus();
+    return () => { if (previous instanceof HTMLElement && previous.isConnected) previous.focus(); };
+  }, []);
+  const departmentLabel = department ? { comercial: "Comercial", relacionamento: "Relacionamento", financeiro: "Financeiro" }[department] : "Setor não configurado";
+  return <aside aria-label={`KOA — ${conversation.name}`}
+    onKeyDown={event => {
+      if (event.key === "Escape" && !(event.target instanceof Element && event.target.closest('[role="dialog"]'))) {
+        event.stopPropagation(); onClose();
+      }
+    }}
+    className={`absolute inset-y-0 right-0 z-20 flex w-full max-w-[460px] flex-col border-l border-border bg-card shadow-2xl xl:relative xl:z-0 xl:w-[420px] xl:min-w-[420px] xl:shadow-none ${isClosing ? "koa-panel-exit" : "koa-panel-enter"}`}>
+    <header className="shrink-0 border-b border-border p-4">
+      <div className="flex items-center gap-2.5">
+        <img src={koaLogo} alt="" className="h-10 w-10 shrink-0 object-contain" />
+        <div className="min-w-0 flex-1"><h2 className="text-base font-semibold text-foreground">KOA</h2><p className="text-xs text-muted-foreground">{departmentLabel}</p></div>
+        <button ref={closeButton} type="button" onClick={onClose} aria-label="Fechar KOA" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary focus-visible:ring-2 focus-visible:ring-primary/30"><X className="h-4 w-4" /></button>
+      </div>
+      <div className="mt-4 border-l-2 border-primary pl-3"><p className="break-words text-sm font-medium text-foreground">{conversation.name}</p><p className="break-words text-xs text-muted-foreground">{conversation.company}</p></div>
+    </header>
+    {department === "comercial" ? <KoaSalesContent client={salesClient} session={salesSession} onChange={onSalesChange} onInsertMessage={onInsertMessage} /> :
+      department === "relacionamento" ? <RelationshipKoaContent conversation={conversation} /> :
+      <div className="flex min-h-0 flex-1 items-center justify-center p-6 text-center text-sm text-muted-foreground">{department ? "Os atalhos deste setor ainda não foram configurados." : "Peça à administração para vincular seu usuário a um setor e disponibilizar os atalhos do KOA."}</div>}
+  </aside>;
+}
+
+function RelationshipKoaContent({
+  conversation,
+}: {
+  conversation: Conversation;
 }) {
   const { user, workspace } = useAuth();
   const [selectedFlow, setSelectedFlow] = useState<KoaFlow | null>(null);
@@ -1511,10 +1546,7 @@ function KoaPanel({
   };
 
   return (
-    <aside className={`absolute inset-y-0 right-0 z-20 flex w-full max-w-[390px] flex-col border-l border-border bg-card shadow-2xl md:relative md:z-0 md:w-[360px] md:min-w-[360px] md:max-w-none md:shadow-none ${isClosing ? "koa-panel-exit" : "koa-panel-enter"}`}>
-      <button type="button" onClick={onClose} className="absolute right-5 top-5 z-10 flex h-9 w-9 items-center justify-center rounded-lg text-primary transition hover:bg-primary/10" aria-label="Fechar Koa">
-        <X className="h-5 w-5" strokeWidth={1.5} />
-      </button>
+    <>
       <div className="flex min-h-0 flex-1 flex-col">
         <div className={`min-h-0 flex-1 overflow-y-auto px-5 scrollbar-thin ${selectedFlow ? "pb-5 pt-14" : "flex flex-col items-center justify-center gap-8 py-14 text-center"}`}>
           {!selectedFlow ? (
@@ -1553,7 +1585,7 @@ function KoaPanel({
           onCancelOperation={handleCancelOperation}
         />
       </div>
-    </aside>
+    </>
   );
 }
 
@@ -2433,13 +2465,16 @@ function FunnelPanel({ conversation, onClose, isClosing }: { conversation: Conve
   );
 }
 
-export default function InboxPage() {
+export default function InboxPage({ initialKoaOpen = false }: { initialKoaOpen?: boolean } = {}) {
   const { user, workspace } = useAuth();
+  // Anonymous access is the commercial demonstration. Signed-in users use backend-managed sector data.
+  const department = user ? getKoaDepartment(user) : "comercial";
+  const shouldOpenKoa = initialKoaOpen || new URLSearchParams(window.location.search).get("koa") === "1";
   const [conversations, setConversations] = useState(initialConversations);
   const [activeId, setActiveId] = useState(initialConversations[0].id);
   const [tab, setTab] = useState<ConversationTab>("all");
   const [query, setQuery] = useState("");
-  const [panel, setPanel] = useState<SidePanel>(null);
+  const [panel, setPanel] = useState<SidePanel>(shouldOpenKoa ? "koa" : null);
   const [renderedPanel, setRenderedPanel] = useState<SidePanel>(null);
   const [isPanelClosing, setIsPanelClosing] = useState(false);
   const previousPanelRef = useRef<SidePanel>(null);
@@ -2447,7 +2482,7 @@ export default function InboxPage() {
   const [composerInsertion, setComposerInsertion] = useState<{ scope: string; conversationId: string; text: string; id: string } | null>(null);
 
   const activeConversation = conversations.find((conversation) => conversation.id === activeId) ?? conversations[0];
-  const salesScope = `${user?.id ?? "guest"}:${workspace?.id ?? "session"}:${activeConversation.id}`;
+  const salesScope = `${user?.id ?? "guest"}:${workspace?.id ?? "session"}:${department ?? "unset"}:${activeConversation.id}`;
   const salesClient = useMemo<SalesClient>(() => ({
     conversationId: activeConversation.id, name: activeConversation.name.slice(0, 300),
     company: activeConversation.company.slice(0, 300), city: activeConversation.profile.city ?? "", state: activeConversation.profile.state ?? "",
@@ -2459,19 +2494,25 @@ export default function InboxPage() {
   useEffect(() => {
     setSalesSessions({});
     setComposerInsertion(null);
-    setPanel(null);
-  }, [user?.id, workspace?.id]);
+    setPanel(shouldOpenKoa ? "koa" : null);
+  }, [user?.id, workspace?.id, department, shouldOpenKoa]);
 
   const openPanel = (nextPanel: SidePanel) => {
-    if (nextPanel === "proposal") setSalesSessions(current => current[salesScope] ? current : { ...current, [salesScope]: salesSession });
+    if (nextPanel === "koa") setSalesSessions(current => current[salesScope] ? current : { ...current, [salesScope]: salesSession });
     setPanel(nextPanel);
   };
 
   useEffect(() => {
+    const handleOpen = () => setPanel("koa");
+    window.addEventListener("kortex:open-koa", handleOpen);
+    return () => window.removeEventListener("kortex:open-koa", handleOpen);
+  }, []);
+
+  useEffect(() => {
     const previousPanel = previousPanelRef.current;
 
-    const wasAssistant = previousPanel === "koa" || previousPanel === "proposal";
-    const isAssistant = panel === "koa" || panel === "proposal";
+    const wasAssistant = previousPanel === "koa";
+    const isAssistant = panel === "koa";
     if (!wasAssistant && isAssistant) {
       window.dispatchEvent(new Event("kortex:koa-panel-open"));
     }
@@ -2485,7 +2526,7 @@ export default function InboxPage() {
 
   useEffect(() => {
     return () => {
-      if (previousPanelRef.current === "koa" || previousPanelRef.current === "proposal") {
+      if (previousPanelRef.current === "koa") {
         window.dispatchEvent(new Event("kortex:koa-panel-close"));
       }
     };
@@ -2570,6 +2611,7 @@ export default function InboxPage() {
             salesSession={salesSession}
             onSalesChange={next => setSalesSessions(current => ({ ...current, [salesScope]: next }))}
             onInsertMessage={text => setComposerInsertion({ scope: salesScope, conversationId: activeConversation.id, text, id: createSalesId() })}
+            department={department}
           />
         )}
       </div>

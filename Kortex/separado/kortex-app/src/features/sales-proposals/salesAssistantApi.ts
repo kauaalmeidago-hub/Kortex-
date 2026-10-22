@@ -16,6 +16,7 @@ export async function listSalesOpportunities(workspaceId: string, userId: string
 
 const errorMessages: Record<string, string> = {
   SESSION_REQUIRED: "Entre na sua conta para usar a IA comercial.",
+  COMMERCIAL_DEPARTMENT_REQUIRED: "Seu usuário precisa estar vinculado ao setor Comercial pela administração.",
   WORKSPACE_FORBIDDEN: "Você não tem acesso a esta equipe.",
   OPPORTUNITY_FORBIDDEN: "Esta oportunidade não está disponível para o seu usuário.",
   AI_NOT_CONFIGURED: "A IA comercial ainda precisa ser ativada pela administração.",

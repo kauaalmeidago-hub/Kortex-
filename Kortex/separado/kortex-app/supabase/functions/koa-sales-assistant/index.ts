@@ -1,4 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2.117.2";
+import { getKoaDepartment } from "../_shared/koaDepartment.ts";
 import {
   createSalesAssistantHandler, SalesAssistantError, SALES_ANALYSIS_SCHEMA, SALES_SYSTEM_PROMPT,
 } from "../_shared/salesAssistant.ts";
@@ -15,6 +16,7 @@ Deno.serve(createSalesAssistantHandler({
     });
     const { data: identity, error: authError } = await db.auth.getUser(authorization.replace(/^Bearer\s+/i, ""));
     if (authError || !identity.user) throw new SalesAssistantError(401, "SESSION_REQUIRED");
+    if (getKoaDepartment(identity.user) !== "comercial") throw new SalesAssistantError(403, "COMMERCIAL_DEPARTMENT_REQUIRED");
     const { data: membership, error } = await db.from("workspace_members").select("role")
       .eq("workspace_id", input.workspaceId).eq("user_id", identity.user.id).maybeSingle();
     if (error || !membership) throw new SalesAssistantError(403, "WORKSPACE_FORBIDDEN");
