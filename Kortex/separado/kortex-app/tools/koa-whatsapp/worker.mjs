@@ -5,6 +5,7 @@ import {Inbox,validSecret} from './core.mjs';
 import {WhatsAppRuntime} from './runtime.mjs';
 import {readLimitedJson} from './files.mjs';
 import {parseGroupRoutes,expandGroupRoutes} from './routes.mjs';
+import {CardIntake} from './card-intake.mjs';
 
 for(const name of ['DATABASE_URL','EVOLUTION_API_KEY','KOA_WEBHOOK_SECRET'])if(!process.env[name])throw Error('MISSING_'+name);
 const channelIds=[...new Set((process.env.KOA_CHANNEL_IDS||process.env.KOA_CHANNEL_ID||'').split(',').map(x=>x.trim()).filter(Boolean))];
@@ -18,8 +19,9 @@ const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,max:Math.min(c
 const inbox=new Inbox(process.env.KOA_SQLITE_PATH||'conversations.sqlite');
 const base=process.env.EVOLUTION_API_URL||'http://evolution-api:8080';
 const headers={apikey:process.env.EVOLUTION_API_KEY,Origin:'http://localhost:8080','Content-Type':'application/json'};
+const cardIntake=process.env.KOA_CARDS_ENABLED==='true'?new CardIntake({query:(sql,params)=>pool.query(sql,params),secret:process.env.KOA_WEBHOOK_SECRET,origin:process.env.KOA_PORTAL_ORIGIN||'https://kortex-usuarios.vercel.app'}):null;
 const runtime=new WhatsAppRuntime({inbox,concurrency,privateMessages:process.env.KOA_PRIVATE_MESSAGES==='true',privateActivatedAt:process.env.KOA_PRIVATE_ACTIVATED_AT??null,
- privatePolicy:process.env.KOA_PRIVATE_POLICY??'group_members',groupMessages:process.env.KOA_GROUP_MESSAGES!=='false',query:(sql,params)=>pool.query(sql,params),loadChannels:async()=>{
+ privatePolicy:process.env.KOA_PRIVATE_POLICY??'group_members',groupMessages:process.env.KOA_GROUP_MESSAGES!=='false',cardIntake,query:(sql,params)=>pool.query(sql,params),loadChannels:async()=>{
  const result=await pool.query(`SELECT c.* FROM public.koa_whatsapp_channels c
   JOIN public.business_boards b ON b.id=c.board_id AND b.workspace_id=c.workspace_id
   WHERE c.id=ANY($1::uuid[]) AND NOT b.archived AND app_private.task_admin_actor(c.workspace_id,c.actor_id)`,[channelIds]);

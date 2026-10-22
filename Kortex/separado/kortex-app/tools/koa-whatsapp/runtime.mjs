@@ -7,10 +7,11 @@ import {loadMessageFile,withMessageFiles,responseFileReviews} from './files.mjs'
 import {withPrivateConversation} from './private.mjs';
 
 export class WhatsAppRuntime {
- constructor({inbox,loadChannels,query,evolution,fetchAI=fetch,concurrency=8,now=Date.now,privateMessages=false,privateActivatedAt=null,privatePolicy='group_members',groupMessages=true}) {
+ constructor({inbox,loadChannels,query,evolution,fetchAI=fetch,concurrency=8,now=Date.now,privateMessages=false,privateActivatedAt=null,privatePolicy='group_members',groupMessages=true,cardIntake=null}) {
   if(privateMessages&&(!privateActivatedAt||!Number.isFinite(Date.parse(privateActivatedAt))))throw Error('PRIVATE_ACTIVATION_REQUIRED');
   if(!['group_members','koa_call'].includes(privatePolicy))throw Error('PRIVATE_POLICY_INVALID');
-  Object.assign(this,{inbox,loadChannels,query,evolution,fetchAI,now,privateMessages,privateActivatedAt,privatePolicy,groupMessages});
+  Object.assign(this,{inbox,loadChannels,query,evolution,fetchAI,now,privateMessages,privateActivatedAt,privatePolicy,groupMessages,cardIntake});
+  this.cardReady=false;
   this.channels=[];this.instances=new Map();this.errors=new Map();this.heartbeats=new Map();
   this.privateDirectories=new Map();this.privateLoads=new Map();
   this.loadedAt=null;this.loading=null;this.beating=null;
@@ -68,7 +69,8 @@ export class WhatsAppRuntime {
      if(at<Date.parse(channel.activated_at))continue;
      if(referencesKoa(message.text))this.inbox.activatePrivateCall(channel.id,channel.instance,message.group,at,Date.parse(this.privateActivatedAt));
      if(!this.inbox.privateCallAllowed(channel.id,channel.instance,message.group,at,Date.parse(this.privateActivatedAt),this.now()))continue;
-     accepted+=this.inbox.ingest({...payload,data:raw},{...channel,group_jid:message.group,
+     const safeRaw=this.cardIntake?await this.cardIntake.sanitize(raw,channel.id,message.group):raw;
+     accepted+=this.inbox.ingest({...payload,data:safeRaw},{...channel,group_jid:message.group,
       activated_at:new Date(Math.max(Date.parse(channel.activated_at),Date.parse(this.privateActivatedAt))).toISOString(),
       private_peer:{aliases:[message.group],name:null,origin_group:channel.group_jid,policy:'koa_call'}},this.now());
      continue;
@@ -85,7 +87,8 @@ export class WhatsAppRuntime {
     const parents=new Map(matches.map(match=>[match.channel.id,match]));
     if(parents.size!==1)continue;
     const {channel,member}=matches[0];
-    accepted+=this.inbox.ingest({...payload,data:raw},{...channel,group_jid:member.jid,
+    const safeRaw=this.cardIntake?await this.cardIntake.sanitize(raw,channel.id,member.jid):raw;
+    accepted+=this.inbox.ingest({...payload,data:safeRaw},{...channel,group_jid:member.jid,
      activated_at:new Date(Math.max(Date.parse(channel.activated_at),Date.parse(this.privateActivatedAt))).toISOString(),
      private_peer:{aliases:member.aliases,name:member.names[0]??null,origin_group:channel.group_jid}},this.now());
    }
@@ -145,9 +148,13 @@ export class WhatsAppRuntime {
    try{if(!await this.privateAllowed(message,channel,instance.botJid)){inbox.finish(row.id,'ignored','PRIVATE_ACCESS_REVOKED');return;}}
    catch{inbox.defer(row.id,'PRIVATE_MEMBERS_UNAVAILABLE',this.now(),5000);return;}
   }
+  if(!row.answer&&!inbox.nextPart(row.id)&&this.cardIntake){
+   try{const replies=await this.cardIntake.handle({inbox,channel,message});if(replies)inbox.plan(row.id,replies);}
+   catch{inbox.defer(row.id,'CARD_SERVICE_UNAVAILABLE',this.now(),5000);return;}
+  }
   const reason=inbox.reason(message,instance.botJid,this.now());
   if(!reason){inbox.finish(row.id,'ignored');return;}
-  if(!row.answer) {
+  if(!row.answer&&!inbox.nextPart(row.id)) {
    try {
     if(reason==='resposta de participante chamado pelo KOA'&&addressedToOtherMember(message,await this.directory(channel,instance.botJid))){inbox.finish(row.id,'ignored');return;}
     const context=inbox.context(message),greeting=greetingReplies(message,context);
@@ -199,7 +206,7 @@ export class WhatsAppRuntime {
     else{const code=/^AI_[A-Z0-9_]+$/.test(error.message)?error.message:'AI_UNAVAILABLE';
      this.errors.set(channel.id,code);inbox.retry(row,code);return;}
    }
-  }else inbox.plan(row.id,[row.answer]);
+  }else if(row.answer)inbox.plan(row.id,[row.answer]);
   const part=inbox.nextPart(row.id);
   if(!part){inbox.finish(row.id,'failed','OUTBOX_INVALID');return;}
   let payload;
@@ -238,6 +245,7 @@ export class WhatsAppRuntime {
  async updateHeartbeat() {
   try {
    const channels=await this.refresh(true);
+   this.cardReady=this.cardIntake?await this.cardIntake.ready():false;
    const results=await Promise.allSettled([...new Set(channels.map(c=>c.instance))].map(async name=>{
     let state=this.instances.get(name)??{connection:'unknown',botJid:''};
     try {
@@ -281,7 +289,7 @@ export class WhatsAppRuntime {
    conversations:this.channels.some(c=>c.conversations_enabled),tasks:this.channels.some(c=>c.tasks_enabled),
    tasksMode:this.channels.some(c=>c.tasks_enabled)?'on_request':'disabled',channels:this.channels.length,
    groupConversations:this.groupMessages,privateConversations:this.privateMessages,privatePolicy:this.privateMessages?this.privatePolicy:'disabled',privateReady,
-   concurrency:this.scheduler.concurrency,active:this.scheduler.active.size,pending:stats.pending_count,
+   cardEmission:this.cardReady,concurrency:this.scheduler.concurrency,active:this.scheduler.active.size,pending:stats.pending_count,
    oldestPendingMs:stats.oldest_pending_at===null?0:Math.max(0,this.now()-stats.oldest_pending_at)};
  }
  async stop() {await this.scheduler.stop();if(this.beating)await this.beating;}

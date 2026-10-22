@@ -143,6 +143,7 @@ export class Inbox {
    UPDATE inbox SET state='uncertain',error_code='SEND_RESULT_UNKNOWN' WHERE state='sending';`);
   if(!this.db.prepare('PRAGMA table_info(inbox)').all().some(x=>x.name==='presentation'))this.db.exec('ALTER TABLE inbox ADD COLUMN presentation INTEGER NOT NULL DEFAULT 0');
   if(!this.db.prepare('PRAGMA table_info(inbox)').all().some(x=>x.name==='file_reviews'))this.db.exec("ALTER TABLE inbox ADD COLUMN file_reviews TEXT NOT NULL DEFAULT '[]'");
+  if(!this.db.prepare('PRAGMA table_info(inbox)').all().some(x=>x.name==='integration'))this.db.exec('ALTER TABLE inbox ADD COLUMN integration TEXT');
   for(const column of ['mentioned','recipients'])if(!this.db.prepare('PRAGMA table_info(outbox_parts)').all().some(x=>x.name===column))this.db.exec(`ALTER TABLE outbox_parts ADD COLUMN ${column} TEXT NOT NULL DEFAULT '[]'`);
   // Keep first-contact memory outside the seven-day inbox retention. Migrate
   // successful replies too, including a partially delivered opening or legacy reply.
@@ -212,8 +213,8 @@ export class Inbox {
   return null;
  }
  context(m) {
-  const own=this.db.prepare("SELECT text,answer,file_reviews FROM inbox WHERE group_jid=? AND participant=? AND id<>? AND state='sent' ORDER BY ts DESC LIMIT 6").all(m.group,m.participant,m.id).reverse();
-  const quoted=m.quoted?(this.db.prepare("SELECT p.text AS answer FROM outbox_parts p JOIN inbox i ON i.id=p.inbox_id WHERE i.group_jid=? AND p.outgoing_id=? AND p.state='sent'").get(m.group,m.quoted)??this.db.prepare('SELECT answer FROM inbox WHERE group_jid=? AND outgoing_id=?').get(m.group,m.quoted)):null;
+  const own=this.db.prepare("SELECT text,answer,file_reviews FROM inbox WHERE group_jid=? AND participant=? AND id<>? AND state='sent' AND coalesce(integration,'')<>'card' ORDER BY ts DESC LIMIT 6").all(m.group,m.participant,m.id).reverse();
+  const quoted=m.quoted?(this.db.prepare("SELECT p.text AS answer FROM outbox_parts p JOIN inbox i ON i.id=p.inbox_id WHERE i.group_jid=? AND p.outgoing_id=? AND p.state='sent' AND coalesce(i.integration,'')<>'card'").get(m.group,m.quoted)??this.db.prepare("SELECT answer FROM inbox WHERE group_jid=? AND outgoing_id=? AND coalesce(integration,'')<>'card'").get(m.group,m.quoted)):null;
   const profile=this.profile(m);
   const participant=profile?.canonical_participant??m.participant;
   const presented=Boolean(this.db.prepare(`SELECT 1 FROM participant_contacts c WHERE c.group_jid=? AND

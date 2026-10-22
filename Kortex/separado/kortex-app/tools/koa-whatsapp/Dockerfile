@@ -4,6 +4,7 @@ WORKDIR /app/tools/koa-whatsapp
 COPY tools/koa-whatsapp/package.json tools/koa-whatsapp/package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts && mkdir -p /data && chown node:node /data
 COPY tools/koa-whatsapp/core.mjs tools/koa-whatsapp/tasks.mjs tools/koa-whatsapp/groups.mjs tools/koa-whatsapp/private.mjs tools/koa-whatsapp/routes.mjs tools/koa-whatsapp/scheduler.mjs tools/koa-whatsapp/runtime.mjs tools/koa-whatsapp/files.mjs tools/koa-whatsapp/worker.mjs tools/koa-whatsapp/announce.mjs tools/koa-whatsapp/supabase-root.crt ./
+COPY tools/koa-whatsapp/card-intake.mjs ./
 COPY supabase/functions/_shared/file-inputs.mjs /app/supabase/functions/_shared/file-inputs.mjs
 USER node
 ENV KOA_SQLITE_PATH=/data/conversations.sqlite

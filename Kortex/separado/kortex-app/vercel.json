@@ -8,6 +8,12 @@
     "api/whatsapp.ts": { "maxDuration": 180 },
     "api/whatsapp-webhook.ts": { "maxDuration": 60 }
   },
+  "headers": [
+    { "source": "/koa/carteirinha", "headers": [
+      { "key": "Referrer-Policy", "value": "no-referrer" },
+      { "key": "Cache-Control", "value": "no-store" }
+    ] }
+  ],
   "rewrites": [
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]
