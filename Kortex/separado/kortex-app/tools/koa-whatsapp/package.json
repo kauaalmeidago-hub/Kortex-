@@ -1,0 +1,1 @@
+{"name":"kortex-koa-whatsapp","version":"0.1.0","private":true,"type":"module","scripts":{"start":"node worker.mjs","test":"node --test core.test.mjs requested-tasks.test.mjs groups.test.mjs concurrency.test.mjs runtime.test.mjs files.test.mjs private.test.mjs private-call.test.mjs routes.test.mjs"},"dependencies":{"pg":"8.23.1"}}

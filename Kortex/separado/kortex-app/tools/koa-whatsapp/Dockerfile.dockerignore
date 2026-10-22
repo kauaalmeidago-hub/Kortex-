@@ -1,0 +1,11 @@
+**
+!tools/
+!tools/koa-whatsapp/
+!tools/koa-whatsapp/*.mjs
+!tools/koa-whatsapp/package.json
+!tools/koa-whatsapp/package-lock.json
+!tools/koa-whatsapp/supabase-root.crt
+!supabase/
+!supabase/functions/
+!supabase/functions/_shared/
+!supabase/functions/_shared/file-inputs.mjs
