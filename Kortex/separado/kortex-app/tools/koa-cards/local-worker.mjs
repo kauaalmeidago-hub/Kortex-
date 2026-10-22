@@ -32,13 +32,15 @@ async function heartbeat(){
  if(currentId)await query("UPDATE public.koa_whatsapp_card_requests SET lease_expires_at=now()+interval '90 seconds' WHERE id=$1 AND state='processing'",[currentId]);
 }
 async function currentAllowed(job,states){return Boolean((await query(`SELECT 1 FROM public.koa_whatsapp_card_requests r JOIN public.koa_whatsapp_channels c ON c.id=r.channel_id
+ JOIN public.business_boards b ON b.id=c.board_id AND b.workspace_id=c.workspace_id AND NOT b.archived
  WHERE r.id=$1 AND r.state=ANY($2) AND r.peer_jid=$3 AND r.instance=$4 AND r.expires_at>now() AND c.conversations_enabled
  AND r.instance=c.instance AND app_private.task_admin_actor(c.workspace_id,c.actor_id)`,[job.id,states,job.peer_jid,job.instance])).rows.length);}
 async function sendResult(job,bytes,errorCode){
  if(!await currentAllowed(job,['processing']))return;
  const payload=bytes?cardMedia(job.peer_jid,bytes):{number:job.peer_jid,text:'Não foi possível concluir sua carteirinha ou confirmar sua identidade. Confira os dados com a equipe de atendimento e solicite um novo pedido ao KOA. Não envie senhas por mensagem.',linkPreview:false};
  const reserved=await query(`UPDATE public.koa_whatsapp_card_requests r SET state='sending',sealed_payload=NULL,identity_verified=$2,error_code=$3,lease_expires_at=now()+interval '90 seconds',updated_at=now()
-  FROM public.koa_whatsapp_channels c WHERE r.id=$1 AND r.state='processing' AND r.channel_id=c.id AND r.expires_at>now()
+  FROM public.koa_whatsapp_channels c JOIN public.business_boards b ON b.id=c.board_id AND b.workspace_id=c.workspace_id AND NOT b.archived
+  WHERE r.id=$1 AND r.state='processing' AND r.channel_id=c.id AND r.expires_at>now()
   AND r.peer_jid=$4 AND r.instance=$5 AND c.instance=r.instance AND c.conversations_enabled
   AND app_private.task_admin_actor(c.workspace_id,c.actor_id) RETURNING r.id`,[job.id,Boolean(bytes),errorCode??null,job.peer_jid,job.instance]);
  if(!reserved.rows.length)return;
@@ -87,6 +89,7 @@ async function run(){
   await query("UPDATE public.koa_whatsapp_card_requests SET state=CASE WHEN state='sending' THEN 'uncertain' ELSE 'failed' END,sealed_payload=NULL,error_code='WORKER_INTERRUPTED',updated_at=now() WHERE worker_id=$1 AND state IN ('processing','sending') AND lease_expires_at<now()",[workerId]);
   await query("UPDATE public.koa_whatsapp_card_requests SET state='expired',sealed_payload=NULL,updated_at=now() WHERE state IN ('awaiting_access','queued') AND expires_at<now()");
   const job=(await query(`WITH selected AS (SELECT r.id FROM public.koa_whatsapp_card_requests r JOIN public.koa_whatsapp_channels c ON c.id=r.channel_id
+   JOIN public.business_boards b ON b.id=c.board_id AND b.workspace_id=c.workspace_id AND NOT b.archived
    WHERE r.worker_id=$1 AND r.state='queued' AND r.expires_at>now() AND c.conversations_enabled AND c.instance=r.instance
     AND app_private.task_admin_actor(c.workspace_id,c.actor_id) ORDER BY r.created_at FOR UPDATE OF r SKIP LOCKED LIMIT 1)
    UPDATE public.koa_whatsapp_card_requests r SET state='processing',lease_expires_at=now()+interval '90 seconds',updated_at=now() FROM selected s WHERE r.id=s.id RETURNING r.*`,[workerId])).rows[0];

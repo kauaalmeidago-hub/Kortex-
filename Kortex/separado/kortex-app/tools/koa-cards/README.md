@@ -52,3 +52,9 @@ WebCrypto do formulário e Node, a API, a identidade e o transporte PDF.
 `npm --prefix tools/koa-whatsapp test` inclui o fluxo real do runtime com SQLite,
 transporte simulado, isolamento de dados sensíveis e as regressões de tarefas.
 Nenhuma dessas verificações manda mensagens para beneficiários reais.
+
+`node --test tools/koa-cards/browser.test.mjs` exercita o login e a emissão
+com páginas fictícias, usando as páginas e o renderizador reais da ferramenta
+local. `node --test tools/koa-cards/form.test.mjs` carrega os arquivos publicados
+e confere a criptografia e a confirmação no Chrome com a API de emissão
+simulada. Os dados dessas verificações são fictícios.
