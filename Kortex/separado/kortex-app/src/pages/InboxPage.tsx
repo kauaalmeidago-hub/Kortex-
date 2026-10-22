@@ -50,10 +50,12 @@ import { useAuth } from "@/contexts/AuthContext";
 import { validateKoaPeriod } from "@/utils/koaDate";
 import { KoaArtifactDownload } from "@/components/KoaArtifactDownload";
 import { isAllCardBeneficiaries } from "@/utils/cardIssueScope";
+import { SalesProposalPanel, type SalesProposalSession } from "@/features/sales-proposals/SalesProposalPanel";
+import { createSalesDraft, createSalesId, type SalesClient } from "@/features/sales-proposals/salesProposal";
 
 type ConversationStatus = "active" | "pending" | "resolved";
 type ConversationTab = "all" | ConversationStatus;
-type SidePanel = "koa" | "transfer" | "funnel" | null;
+type SidePanel = "koa" | "proposal" | "transfer" | "funnel" | null;
 type KoaFlow = "inclusao" | "exclusao" | "carteirinha";
 type InclusionMode = "holder" | "holder_dependents";
 type ExclusionMode = "holder" | "dependent";
@@ -394,17 +396,21 @@ function ChatArea({
   onOpenPanel,
   onSend,
   onResolve,
+  insertion,
 }: {
   conversation: Conversation;
   panel: SidePanel;
   onOpenPanel: (panel: SidePanel) => void;
   onSend: (conversationId: string, message: string) => void;
   onResolve: (conversationId: string) => void;
+  insertion: { conversationId: string; text: string; id: string } | null;
 }) {
   const [input, setInput] = useState("");
   const [showMenu, setShowMenu] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const messagesEnd = useRef<HTMLDivElement>(null);
+  const messageInput = useRef<HTMLTextAreaElement>(null);
+  const consumedInsertion = useRef<string | null>(null);
 
   useEffect(() => {
     messagesEnd.current?.scrollIntoView({ behavior: "smooth" });
@@ -412,7 +418,15 @@ function ChatArea({
 
   useEffect(() => {
     setShowMenu(false);
+    setInput("");
   }, [conversation.id]);
+
+  useEffect(() => {
+    if (insertion?.conversationId !== conversation.id || consumedInsertion.current === insertion.id) return;
+    consumedInsertion.current = insertion.id;
+    setInput(current => current.trim() ? `${current}\n\n${insertion.text}` : insertion.text);
+    messageInput.current?.focus();
+  }, [insertion, conversation.id]);
 
   const handleSend = () => {
     const value = input.trim();
@@ -477,12 +491,22 @@ function ChatArea({
           {showMenu && (
             <div className="absolute right-0 top-12 z-30 w-64 rounded-2xl border border-border bg-popover p-2 text-popover-foreground shadow-2xl">
               <MenuAction imageSrc={koaLogo} label="Koa" onClick={() => { onOpenPanel("koa"); setShowMenu(false); }} />
+              <MenuAction icon={FileText} label="Elaborar proposta" onClick={() => { onOpenPanel("proposal"); setShowMenu(false); }} />
               <MenuAction icon={Filter} label="Transferir para funil" onClick={() => { onOpenPanel("funnel"); setShowMenu(false); }} />
               <MenuAction icon={CheckCircle2} label="Finalizar conversa" onClick={() => { onResolve(conversation.id); setShowMenu(false); }} />
             </div>
           )}
         </div>
       </header>
+
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-card/60 px-4 py-2">
+        <button type="button" onClick={() => onOpenPanel(panel === "proposal" ? null : "proposal")}
+          aria-expanded={panel === "proposal"}
+          className={`inline-flex min-h-9 items-center gap-2 rounded-xl border px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${panel === "proposal" ? "border-primary/40 bg-primary/10 text-primary" : "border-border text-muted-foreground hover:border-primary/30 hover:bg-primary/5 hover:text-primary"}`}>
+          <FileText className="h-4 w-4" strokeWidth={1.5} />Elaborar proposta
+        </button>
+        <span className="text-xs text-muted-foreground">Com apoio do KOA Comercial</span>
+      </div>
 
       {showProfile && <ProfilePanel conversation={conversation} />}
 
@@ -522,21 +546,25 @@ function ChatArea({
           <button type="button" className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-border text-primary transition hover:bg-primary/10" aria-label="Inserir emoji">
             <Smile className="h-5 w-5" strokeWidth={1.5} />
           </button>
-          <input
+          <textarea
+            ref={messageInput}
+            aria-label="Mensagem ao cliente"
+            rows={Math.min(5, input.split("\n").length)}
             value={input}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === "Enter") {
+              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
                 handleSend();
               }
             }}
-            className="h-12 min-w-[120px] flex-1 rounded-xl border border-input bg-background px-4 text-sm font-normal outline-none transition-colors placeholder:text-muted-foreground focus:border-primary/50 focus:ring-2 focus:ring-primary/15"
+            className="min-h-12 max-h-40 min-w-0 flex-1 resize-none rounded-xl border border-input bg-background px-4 py-3 text-sm font-normal outline-none transition-colors placeholder:text-muted-foreground focus:border-primary/50 focus:ring-2 focus:ring-primary/15"
             placeholder="Digite uma mensagem..."
           />
           <button
             type="button"
             onClick={handleSend}
+            aria-label="Enviar mensagem"
             className="inbox-message-send flex h-12 w-12 shrink-0 items-center justify-center gap-2 rounded-xl bg-primary px-0 text-sm font-semibold text-primary-foreground shadow-sm transition hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25"
           >
             <Send className="h-5 w-5" strokeWidth={1.5} />
@@ -580,12 +608,22 @@ function SidePanelView({
   conversation,
   onClose,
   isClosing,
+  salesClient,
+  salesSession,
+  onSalesChange,
+  onInsertMessage,
 }: {
   panel: Exclude<SidePanel, null>;
   conversation: Conversation;
   onClose: () => void;
   isClosing: boolean;
+  salesClient: SalesClient;
+  salesSession: SalesProposalSession;
+  onSalesChange: (session: SalesProposalSession) => void;
+  onInsertMessage: (text: string) => void;
 }) {
+  if (panel === "proposal") return <SalesProposalPanel key={conversation.id} client={salesClient} session={salesSession}
+    onChange={onSalesChange} onInsertMessage={onInsertMessage} onClose={onClose} isClosing={isClosing} />;
   if (panel === "koa") return <KoaPanel conversation={conversation} onClose={onClose} isClosing={isClosing} />;
   if (panel === "transfer") return <TransferPanel conversation={conversation} onClose={onClose} isClosing={isClosing} />;
   return <FunnelPanel conversation={conversation} onClose={onClose} isClosing={isClosing} />;
@@ -2396,6 +2434,7 @@ function FunnelPanel({ conversation, onClose, isClosing }: { conversation: Conve
 }
 
 export default function InboxPage() {
+  const { user, workspace } = useAuth();
   const [conversations, setConversations] = useState(initialConversations);
   const [activeId, setActiveId] = useState(initialConversations[0].id);
   const [tab, setTab] = useState<ConversationTab>("all");
@@ -2404,17 +2443,40 @@ export default function InboxPage() {
   const [renderedPanel, setRenderedPanel] = useState<SidePanel>(null);
   const [isPanelClosing, setIsPanelClosing] = useState(false);
   const previousPanelRef = useRef<SidePanel>(null);
+  const [salesSessions, setSalesSessions] = useState<Record<string, SalesProposalSession>>({});
+  const [composerInsertion, setComposerInsertion] = useState<{ scope: string; conversationId: string; text: string; id: string } | null>(null);
 
   const activeConversation = conversations.find((conversation) => conversation.id === activeId) ?? conversations[0];
+  const salesScope = `${user?.id ?? "guest"}:${workspace?.id ?? "session"}:${activeConversation.id}`;
+  const salesClient = useMemo<SalesClient>(() => ({
+    conversationId: activeConversation.id, name: activeConversation.name.slice(0, 300),
+    company: activeConversation.company.slice(0, 300), city: activeConversation.profile.city ?? "", state: activeConversation.profile.state ?? "",
+    messages: activeConversation.messages.slice(-30).map(message => ({ id: message.id, text: message.text.slice(0, 1500), fromMe: Boolean(message.fromMe) })),
+  }), [activeConversation]);
+  const initialSalesSession = useMemo<SalesProposalSession>(() => ({ draft: createSalesDraft(salesClient), analysis: null, analysisContext: "" }), [salesClient]);
+  const salesSession = salesSessions[salesScope] ?? initialSalesSession;
+
+  useEffect(() => {
+    setSalesSessions({});
+    setComposerInsertion(null);
+    setPanel(null);
+  }, [user?.id, workspace?.id]);
+
+  const openPanel = (nextPanel: SidePanel) => {
+    if (nextPanel === "proposal") setSalesSessions(current => current[salesScope] ? current : { ...current, [salesScope]: salesSession });
+    setPanel(nextPanel);
+  };
 
   useEffect(() => {
     const previousPanel = previousPanelRef.current;
 
-    if (previousPanel !== "koa" && panel === "koa") {
+    const wasAssistant = previousPanel === "koa" || previousPanel === "proposal";
+    const isAssistant = panel === "koa" || panel === "proposal";
+    if (!wasAssistant && isAssistant) {
       window.dispatchEvent(new Event("kortex:koa-panel-open"));
     }
 
-    if (previousPanel === "koa" && panel !== "koa") {
+    if (wasAssistant && !isAssistant) {
       window.dispatchEvent(new Event("kortex:koa-panel-close"));
     }
 
@@ -2423,7 +2485,7 @@ export default function InboxPage() {
 
   useEffect(() => {
     return () => {
-      if (previousPanelRef.current === "koa") {
+      if (previousPanelRef.current === "koa" || previousPanelRef.current === "proposal") {
         window.dispatchEvent(new Event("kortex:koa-panel-close"));
       }
     };
@@ -2482,24 +2544,32 @@ export default function InboxPage() {
         onTabChange={setTab}
         onSelect={(id) => {
           setActiveId(id);
+          setComposerInsertion(null);
           setPanel(null);
         }}
         onMoveStatus={moveStatus}
       />
       <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
         <ChatArea
+          key={`chat:${salesScope}`}
           conversation={activeConversation}
           panel={panel}
-          onOpenPanel={setPanel}
+          onOpenPanel={openPanel}
           onSend={handleSend}
           onResolve={(id) => moveStatus(id, "resolved")}
+          insertion={composerInsertion?.scope === salesScope ? composerInsertion : null}
         />
         {renderedPanel && (
           <SidePanelView
+            key={`panel:${salesScope}`}
             panel={renderedPanel}
             conversation={activeConversation}
             onClose={() => setPanel(null)}
             isClosing={isPanelClosing}
+            salesClient={salesClient}
+            salesSession={salesSession}
+            onSalesChange={next => setSalesSessions(current => ({ ...current, [salesScope]: next }))}
+            onInsertMessage={text => setComposerInsertion({ scope: salesScope, conversationId: activeConversation.id, text, id: createSalesId() })}
           />
         )}
       </div>
