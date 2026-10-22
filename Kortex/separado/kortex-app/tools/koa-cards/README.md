@@ -1,5 +1,22 @@
 # Carteirinha pelo WhatsApp
 
+## Acesso já cadastrado — preparação
+
+`saved-access.mjs` prepara a busca pelo nome exato da empresa, desconsiderando
+acentos e diferenças de maiúsculas. O worker só poderá abrir um acesso ativo
+e validado dentro das permissões atuais da conta do KOA. Nomes repetidos,
+empresas com vários acessos e cadastros de outro workspace exigem um vínculo
+explícito; o código não escolhe automaticamente o acesso mais recente.
+
+A busca passou em três testes em `saved-access.test.mjs`. Ela ainda não está
+ligada ao fluxo de produção: o cadastro de teste precisa ser identificado e
+vinculado à conta do KOA, com o beneficiário correto. Um nome de empresa sozinho
+não identifica qual beneficiário deve receber o documento. Quando o acesso
+e a identificação já estiverem vinculados, o pedido não precisará repetir
+login e senha nem abrir o formulário.
+
+## Fluxo atualmente publicado
+
 O número do KOA recebe o pedido no privado depois da palavra **KOA**. O bot envia
 um link HTTPS de uso único, válido por dez minutos, em `/koa/carteirinha#token`.
 O token fica no fragmento e não é enviado nos logs de URL do servidor.
