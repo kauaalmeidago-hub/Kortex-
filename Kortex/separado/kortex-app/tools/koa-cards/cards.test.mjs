@@ -32,6 +32,8 @@ test('identity input rejects invalid CPF, impossible dates, extra destinations a
  assert.equal(validCpf(input.cpf),true);assert.equal(validCpf('11111111111'),false);
  const parsed=cardInput(input);assert.equal(parsed.credential.password,input.password);assert.equal(parsed.input.beneficiaryScope,'single');assert.equal('password' in parsed.input,false);
  for(const patch of [{cpf:'52998224726'},{birthDate:'2026-02-30'},{birthDate:'2090-01-01'},{recipient:'other'},{beneficiaryScope:'all'},{periodStart:'2026-04-01',periodEnd:'2026-01-01'}])assert.throws(()=>cardInput({...input,...patch}));
+ assert.equal(cardInput({...input,cpf:''},new Date(),{allowMissingCpf:true}).input.cpf,'');
+ assert.throws(()=>cardInput({...input,cpf:''}));
 });
 test('public endpoint accepts encrypted data only and makes exact retries idempotent',async()=>{
  const {rows,admin}=database();const envelope=await seal();
@@ -58,6 +60,11 @@ test('operator match requires unique exact full name, CPF and birth date before 
  const row={beneficiaryName:input.beneficiaryName,cpf:input.cpf,text:'Pessoa Exemplo 12/04/1990',kind:'beneficiary',visible:true,selectable:true};
  assert.equal(verifiedSelfCardRow([row],input),row);
  for(const rows of [[],[row,row],[{...row,cpf:'12345678900'}],[{...row,text:'Pessoa Exemplo'}],[{...row,beneficiaryName:'Outra Pessoa'}],[{...row,visible:false}]])assert.throws(()=>verifiedSelfCardRow(rows,input),e=>e.code==='SELF_IDENTITY_NOT_VERIFIED');
+});
+test('saved registry path may omit CPF only after its independent identity proof',()=>{
+ const row={beneficiaryName:input.beneficiaryName,cpf:input.cpf,cardIdentifiers:['card-1'],text:'Pessoa Exemplo',kind:'beneficiary',visible:true,selectable:true};
+ assert.equal(verifiedSelfCardRow([row],{...input,cpf:''},true),row);
+ assert.throws(()=>verifiedSelfCardRow([row],{...input,cpf:''}),e=>e.code==='SELF_IDENTITY_NOT_VERIFIED');
 });
 test('document delivery is private, bounded PDF bytes with no public download URL',()=>{
  const pdf=Buffer.concat([Buffer.from('%PDF-1.7\n'),Buffer.alloc(150)]),payload=cardMedia('551100000001@s.whatsapp.net',pdf);

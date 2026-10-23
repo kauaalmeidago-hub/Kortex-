@@ -7,10 +7,10 @@ const date=value=>{
  if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value))throw Error('CARD_DATE_INVALID');
  const d=new Date(value+'T12:00:00Z');if(!Number.isFinite(d.getTime())||d.toISOString().slice(0,10)!==value)throw Error('CARD_DATE_INVALID');return value;
 };
-export function cardInput(value,now=new Date()){
+export function cardInput(value,now=new Date(),{allowMissingCpf=false}={}){
  if(!value||Object.keys(value).some(k=>!['beneficiaryName','cpf','birthDate','companyCode','operator','password','periodStart','periodEnd'].includes(k)))throw Error('CARD_INPUT_INVALID');
  const beneficiaryName=String(value.beneficiaryName??'').trim().replace(/\s+/g,' '),cpf=String(value.cpf??'').replace(/\D/g,'');
- if(!/^[\p{L}][\p{L}\s.'-]{3,159}$/u.test(beneficiaryName)||beneficiaryName.split(' ').length<2||!validCpf(cpf))throw Error('CARD_IDENTITY_INPUT_INVALID');
+ if(!/^[\p{L}][\p{L}\s.'-]{3,159}$/u.test(beneficiaryName)||beneficiaryName.split(' ').length<2||(!allowMissingCpf&&!validCpf(cpf))||(cpf&&!validCpf(cpf)))throw Error('CARD_IDENTITY_INPUT_INVALID');
  const birthDate=date(value.birthDate);if(birthDate<'1900-01-01'||new Date(birthDate+'T12:00:00Z')>now)throw Error('CARD_IDENTITY_INPUT_INVALID');
  const companyCode=String(value.companyCode??'').replace(/[^a-zA-Z0-9]/g,'').toUpperCase();
  if(!/^[A-Z0-9]{1,40}$/.test(companyCode)||!['ndi','hapvida'].includes(value.operator)||typeof value.password!=='string'||!value.password||value.password.length>200)throw Error('CARD_ACCESS_INPUT_INVALID');

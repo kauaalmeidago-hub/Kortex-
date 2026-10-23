@@ -16,6 +16,10 @@ test('encrypted continuation collects identity and never requires a portal passw
  assert.equal(result.company.companyId,'erc');assert.deepEqual(result.identity,identity);assert.equal('password' in result,false);
  assert.deepEqual(identityFromText('Nome: Pessoa Exemplo\nCPF: 52998224725\nNascimento: 1990-04-12'),identity);
 });
+test('CPF is optional only while the saved-company registry remains the identity authority',async()=>{
+ const result=await prepareSavedDialog({query,job:job('Nome completo: Pessoa Exemplo\nNascimento: 12/04/1990',{companyName:company}),privateKey:keys.privateKey});
+ assert.deepEqual(result.identity,{beneficiaryName:'Pessoa Exemplo',birthDate:'1990-04-12'});assert.match((await prepareSavedDialog({query,job:job('KOA carteirinha da '+company),privateKey:keys.privateKey})).prompt,/CPF:.*opcional/);
+});
 test('verified profile is reused only through the worker caller binding; company revocation blocks reuse',async()=>{
  const source=job('KOA carteirinha da '+company),result=await prepareSavedDialog({query,job:source,privateKey:keys.privateKey,readProfile:async()=>identity});
  assert.deepEqual(result.identity,identity);

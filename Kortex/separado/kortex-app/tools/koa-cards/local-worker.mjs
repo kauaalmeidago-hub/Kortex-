@@ -78,7 +78,7 @@ async function processJob(job){
    if(dialog.prompt){await sendResult(job,null,null,dialog);return;}
    const access=await loadSavedCompanyAccess(query,savedSecrets,{channelId:job.channel_id,companyName:dialog.company.companyName});
    job.savedCompany=access.company;savedIdentity=dialog.identity;savedCredential=access.credential;
-   parsed=cardInput({...dialog.identity,companyCode:access.company.companyCode,operator:access.company.operator,password:savedCredential.password});
+   parsed=cardInput({...dialog.identity,companyCode:access.company.companyCode,operator:access.company.operator,password:savedCredential.password},new Date(),{allowMissingCpf:true});
   }else{decoded=openCardEnvelope(job.sealed_payload,privateKey,job.id);parsed=cardInput(decoded);}
   if(job.savedCompany)parsed.input.expectedCompanyName=job.savedCompany.companyName;
   const operation={id:job.id,type:'CARD_ISSUE',status:'starting',companyId:job.savedCompany?.companyId||job.id,workspaceId:job.savedCompany?.workspaceId,portal:parsed.operator,credentialRef:'self-card:'+job.id,input:parsed.input,artifacts:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};

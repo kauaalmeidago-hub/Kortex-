@@ -17,11 +17,11 @@ export function verifySelfCardCompany(text:string,expected:string){
  if(!pattern||!new RegExp('(?:^|[^a-z0-9])'+pattern+'(?:$|[^a-z0-9])').test(nameKey(text)))throw new AutomationError('SELF_COMPANY_NOT_VERIFIED','A empresa do documento nao corresponde ao pedido.');
 }
 export function verifiedSelfCardRow(rows:CardListRow[],input:{beneficiaryName:string;cpf:string;birthDate:string},registryVerified=false) {
- if(!/^\d{11}$/.test(digits(input.cpf))||!/^\d{4}-\d{2}-\d{2}$/.test(input.birthDate))throw new AutomationError('SELF_IDENTITY_NOT_VERIFIED','Nao foi possivel validar a identidade do beneficiario.');
+ if((!registryVerified&&!/^\d{11}$/.test(digits(input.cpf)))||!/^\d{4}-\d{2}-\d{2}$/.test(input.birthDate))throw new AutomationError('SELF_IDENTITY_NOT_VERIFIED','Nao foi possivel validar a identidade do beneficiario.');
  const dob=input.birthDate.replace(/^(\d{4})-(\d{2})-(\d{2})$/,'$3/$2/$1');
  if(registryVerified){
   const named=rows.filter(row=>row.visible&&row.selectable&&row.kind==='beneficiary'&&nameKey(row.beneficiaryName)===nameKey(input.beneficiaryName));
-  if(named.length!==1||!named[0]!.cardIdentifiers?.length||(named[0]!.cpf&&digits(named[0]!.cpf)!==digits(input.cpf)))throw new AutomationError('SELF_IDENTITY_NOT_VERIFIED','Nao foi possivel validar a identidade do beneficiario.');
+  if(named.length!==1||!named[0]!.cardIdentifiers?.length||(input.cpf&&named[0]!.cpf&&digits(named[0]!.cpf)!==digits(input.cpf)))throw new AutomationError('SELF_IDENTITY_NOT_VERIFIED','Nao foi possivel validar a identidade do beneficiario.');
   return named[0]!;
  }
  const candidates=rows.filter(row=>row.visible&&row.selectable&&row.kind==='beneficiary'
@@ -38,7 +38,7 @@ export async function emitSelfServiceCard(operation:OperationRecord,signal:Abort
  verifySavedBeneficiary?:(identity:{beneficiaryName:string;cpf:string;birthDate:string})=>Promise<{verified:boolean;sourceSha256?:string}>
 }) {
  const {beneficiaryName,cpf,birthDate,contractCode,periodStart,periodEnd}=operation.input;
- if([beneficiaryName,cpf,birthDate,contractCode,periodStart,periodEnd].some(v=>typeof v!=='string'||!v.trim())
+ if([beneficiaryName,birthDate,contractCode,periodStart,periodEnd].some(v=>typeof v!=='string'||!v.trim())||typeof cpf!=='string'
   ||operation.type!=='CARD_ISSUE'||operation.input.beneficiaryScope!=='single')throw new AutomationError('SELF_CARD_INPUT_INVALID','Dados de emissao incompletos.');
  const input={beneficiaryName:beneficiaryName as string,cpf:cpf as string,birthDate:birthDate as string};
  const registryProof=typeof operation.input.expectedCompanyName==='string'&&context.verifySavedBeneficiary?await context.verifySavedBeneficiary(input):{verified:false};

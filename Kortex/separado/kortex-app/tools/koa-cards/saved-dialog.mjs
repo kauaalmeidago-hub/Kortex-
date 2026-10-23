@@ -9,7 +9,7 @@ export function identityFromText(text){
  if(birth)fields.birthDate=birth[1].replace(/^(\d{2})\/(\d{2})\/(\d{4})$/,'$3-$2-$1');
  return fields;
 }
-const prompt='Localizei o acesso salvo da empresa. Para enviar somente a sua carteirinha, confirme neste privado:\nNome completo: seu nome\nCPF: seu CPF\nNascimento: DD/MM/AAAA\nNão precisa informar login ou senha.';
+const prompt='Localizei o acesso salvo da empresa. Para enviar somente a sua carteirinha, confirme neste privado:\nNome completo: seu nome\nNascimento: DD/MM/AAAA\nCPF: seu CPF (opcional)\nNão precisa informar login ou senha.';
 export async function prepareSavedDialog({query,job,privateKey,readProfile=async()=>null}){
  const packet=job.sealed_payload;
  if(packet?.mode!=='saved_company'||typeof packet.incomingId!=='string'||packet.incomingId.length>200)throw Error('SAVED_CARD_PACKET_INVALID');
@@ -23,7 +23,7 @@ export async function prepareSavedDialog({query,job,privateKey,readProfile=async
   throw error;
  }
  const identity={...await readProfile(company),...state.identity,...identityFromText(incoming.text)};
- try{cardInput({...identity,companyCode:company.companyCode,operator:company.operator,password:'$saved-access$'});}
+ try{cardInput({...identity,companyCode:company.companyCode,operator:company.operator,password:'$saved-access$'},new Date(),{allowMissingCpf:true});}
  catch{return {prompt,state:{companyName:company.companyName,identity}};}
  return {company,identity};
 }
